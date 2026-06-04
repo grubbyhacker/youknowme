@@ -1,0 +1,35 @@
+services:
+  roger-knowledge-mcp:
+    image: roger-knowledge-mcp:phase0
+    build:
+      context: .
+    container_name: roger-knowledge-mcp-phase0
+    restart: unless-stopped
+    environment:
+      MCP_PATH: /mcp
+      PUBLIC_HOSTNAME: ${PUBLIC_HOSTNAME:-mcp.fleiglabs.cc}
+      ORIGIN_HOSTNAME: ${ORIGIN_HOSTNAME:-origin-mcp.fleiglabs.cc}
+      REQUIRE_CLOUDFLARE_ACCESS_JWT: ${REQUIRE_CLOUDFLARE_ACCESS_JWT:-false}
+      CLOUDFLARE_ACCESS_TEAM_DOMAIN: ${CLOUDFLARE_ACCESS_TEAM_DOMAIN:-}
+      CLOUDFLARE_ACCESS_AUD: ${CLOUDFLARE_ACCESS_AUD:-}
+    networks:
+      - roger-knowledge-private
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: roger-knowledge-cloudflared-phase0
+    restart: unless-stopped
+    command:
+      - tunnel
+      - --no-autoupdate
+      - run
+      - --token
+      - ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env.cloudflare}
+    depends_on:
+      - roger-knowledge-mcp
+    networks:
+      - roger-knowledge-private
+
+networks:
+  roger-knowledge-private:
+    name: roger-knowledge-private
