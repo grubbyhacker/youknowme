@@ -1,0 +1,47 @@
+services:
+  youknowme:
+    build:
+      context: .
+    image: youknowme:local
+    ports:
+      - "${YKM_CONTAINER_PORT:-8765}:8765"
+    environment:
+      YKM_AUTH_MODE: "${YKM_AUTH_MODE:-local}"
+      YKM_EMBEDDING_PROVIDER: "${YKM_EMBEDDING_PROVIDER:-fake}"
+      YKM_EMBEDDING_MODEL: "${YKM_EMBEDDING_MODEL:-openai/text-embedding-3-small}"
+      YKM_EMBEDDING_DIMENSIONS: "${YKM_EMBEDDING_DIMENSIONS:-1536}"
+      YKM_INDEX_PATH: /data/index
+      YKM_LOCAL_AUTH_SECRET: "${YKM_LOCAL_AUTH_SECRET:?YKM_LOCAL_AUTH_SECRET is required}"
+      YKM_LOG_PATH: /data/logs/query-log.jsonl
+      YKM_LOG_RETENTION_DAYS: "${YKM_LOG_RETENTION_DAYS:-90}"
+      YKM_OWNER_EMAIL: "${YKM_OWNER_EMAIL:-}"
+      YKM_CLOUDFLARE_TEAM_DOMAIN: "${YKM_CLOUDFLARE_TEAM_DOMAIN:-}"
+      YKM_CLOUDFLARE_AUD: "${YKM_CLOUDFLARE_AUD:-}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+    volumes:
+      - type: bind
+        source: ${YKM_CONTAINER_INDEX_PATH:-.ykm/real-index}
+        target: /data/index
+        read_only: true
+      - type: bind
+        source: ${YKM_CONTAINER_LOG_DIR:-.ykm/container-smoke/logs}
+        target: /data/logs
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "from urllib.request import urlopen; urlopen('http://127.0.0.1:8765/livez', timeout=3).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

@@ -17,6 +17,8 @@ Phase 1 currently implements a local-first RAG path over markdown:
 - `src/ykm/auth.py` separates public Cloudflare JWT auth from local/Hermes shared-secret auth.
 - `src/ykm/logging.py` writes protected JSONL query logs that record returned source IDs, not query
   text or returned content.
+- `Dockerfile` and `compose.yaml` package the serving path with a read-only mounted index artifact
+  and writable protected query-log directory.
 - `fixtures/corpus/` is synthetic-only and exercises ambiguous same-kind subjects, preferences,
   writing, projects, bare markdown, and secret quarantine.
 - `src/ykm/eval.py` and `ykm eval` provide a local retrieval eval harness with top 1 / top 3 /
@@ -34,6 +36,7 @@ mise run demo
 mise run eval
 mise run real-smoke
 YKM_EMBEDDING_PROVIDER=openrouter mise run local-mcp-smoke
+mise run container-smoke
 YKM_EMBEDDING_PROVIDER=fake uv run ykm build --corpus fixtures/corpus --out .ykm/demo-index
 YKM_EMBEDDING_PROVIDER=fake uv run ykm query "weekly spa maintenance" --index .ykm/demo-index --tag spa
 YKM_EMBEDDING_PROVIDER=openrouter mise run real-smoke
@@ -42,7 +45,7 @@ YKM_EMBEDDING_PROVIDER=openrouter uv run ykm eval --index .ykm/real-index --case
 
 ## Verification Completed
 
-- `mise run test`: 22 tests passing.
+- `mise run test`: 25 tests passing.
 - `mise run lint`: Ruff passing.
 - `mise run eval`: committed synthetic eval passes 6/6; last observed top 1 = 5/6, top 3 = 6/6,
   top 5 = 6/6 with fake embeddings.
@@ -59,6 +62,11 @@ YKM_EMBEDDING_PROVIDER=openrouter uv run ykm eval --index .ykm/real-index --case
   `health` returned provenance, `query` returned a real source pointer, `retrieve` resolved it, and
   the query log recorded source IDs without raw query/content. This is now repeatable with
   `YKM_EMBEDDING_PROVIDER=openrouter mise run local-mcp-smoke`.
+- Container smoke against `.ykm/real-index`: Docker image built, Compose mounted `.ykm/real-index`
+  read-only, `/livez` passed, unauthenticated `/mcp` returned 403, authenticated local MCP listed
+  `query`/`retrieve`/`health`, `health` returned provenance, `query` returned
+  `interview-prep-cisco-sbg-ai-eng`, `retrieve` resolved it, and the container query log recorded
+  source IDs without raw query/content. This is repeatable with `mise run container-smoke`.
 
 ## Important Lessons
 
@@ -70,6 +78,8 @@ YKM_EMBEDDING_PROVIDER=openrouter uv run ykm eval --index .ykm/real-index --case
   because future Curator work needs that signal, but logs are a protected asset.
 - Do not relax public Cloudflare JWT auth to support local Hermes. The local path has a separate
   shared-secret mechanism.
+- Container serving should load an existing artifact, not rebuild inside the serve container. Keep
+  the index mount read-only and write only protected logs.
 - LanceDB is a pragmatic embedded vector store choice for now. Keep vector access behind `YkmIndex`
   so it can be replaced if evidence points to sqlite-vec, FAISS, Chroma, pgvector, or a service.
 - The current fake embedding rankings are good enough for contract/eval testing, not a quality proxy
@@ -93,8 +103,8 @@ YKM_EMBEDDING_PROVIDER=openrouter uv run ykm eval --index .ykm/real-index --case
 
 ## Restart Instructions
 
-After restart, continue from local Phase 1 hardening. Stay in this repo and do not work on VPS
-deployment unless explicitly asked.
+After restart, continue with Phase 1D Cloudflare contract discovery and cutover planning. Stay in
+this repo and do not work on VPS deployment unless explicitly asked.
 
 1. Run `git status --short --branch` and confirm the branch is clean except ignored `.env`, `.ykm/`,
    caches, and POC runtime files. The expected `ykmcorpus` source commit for the latest local real
@@ -119,5 +129,7 @@ deployment unless explicitly asked.
    structure first. See `docs/ykm-corpus-authoring.md`.
 6. Add more private eval cases as real usage appears. Do not paste sensitive corpus content into
    commits or docs; summarize by aggregate results and source IDs/paths.
-7. `mise run local-mcp-smoke` completes Phase 1B local serving hardening. Next phase is container
-   packaging; see `docs/ykm-phased-plan.md`.
+7. Run `mise run container-smoke` to verify the Phase 1C container packaging against
+   `.ykm/real-index`.
+8. Next phase is Phase 1D: inspect `POC/` as reference only and document the existing Cloudflare
+   Tunnel / Access contract and cutover plan. Do not modify or restart the running POC.

@@ -29,6 +29,7 @@ mise run lint
 mise run demo
 mise run eval
 YKM_EMBEDDING_PROVIDER=openrouter mise run local-mcp-smoke
+mise run container-smoke
 ```
 
 Manual equivalent:
@@ -48,3 +49,15 @@ YKM_EMBEDDING_PROVIDER=openrouter uv run ykm build --corpus /path/to/content-rep
 Private eval cases can live outside this repo and be passed with `--cases /path/to/private-cases.json`.
 
 Generated indexes and logs live under `.ykm/` and are ignored.
+
+## Container Packaging
+
+Phase 1C runs the same local serving path in a container:
+
+```bash
+mise run container-smoke
+```
+
+The compose path mounts `.ykm/real-index` read-only and writes protected query logs under
+`.ykm/container-smoke/logs`. See `docs/ykm-container-packaging.md` for the packaging contract and
+manual `docker compose` commands.

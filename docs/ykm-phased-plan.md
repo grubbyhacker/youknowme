@@ -34,18 +34,25 @@ Completed:
 
 ## Phase 1C: Container Packaging
 
-Status: next phase.
+Status: done.
 
 Goal: run the validated local serving path in a container without changing product scope.
 
-- Add Dockerfile and local compose/dev run path.
-- Mount or copy an existing official index artifact.
-- Ensure the serve container has no repo-write credential.
+Completed:
+
+- Added `Dockerfile` and `compose.yaml` for the local container run path.
+- Mounted the existing official index artifact at `/data/index` read-only.
+- Kept corpus content, generated indexes, secrets, `.git/`, and `POC/` out of the image build
+  context.
+- Runs as an unprivileged `ykm` user with a read-only root filesystem in Compose.
 - Container healthcheck uses `/livez`.
-- Run container locally against `.ykm/real-index`.
-- Keep build provenance light: manifest-backed, no signing yet.
+- `mise run container-smoke` builds/runs the container locally against `.ykm/real-index`, verifies
+  local MCP auth, `health`, `query`, `retrieve`, and protected query-log shape.
+- Build provenance remains manifest-backed; no signing yet.
 
 ## Phase 1D: Existing Cloudflare Path Discovery And Cutover Plan
+
+Status: next phase.
 
 Goal: make production YKM ready for the existing Cloudflare Tunnel / Access contract without
 disrupting the running POC.

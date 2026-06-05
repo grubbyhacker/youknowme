@@ -29,3 +29,7 @@ run = "scripts/real-corpus-smoke.sh"
 [tasks.local-mcp-smoke]
 description = "Run local MCP server smoke against an existing index"
 run = "scripts/local-mcp-smoke.sh"
+
+[tasks.container-smoke]
+description = "Run containerized local MCP smoke against an existing index"
+run = "scripts/container-smoke.sh"

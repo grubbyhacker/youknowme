@@ -1,0 +1,12 @@
+.git/
+.venv/
+.ykm/
+.env
+.env.*
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+.DS_Store
+artifacts/
+POC/
