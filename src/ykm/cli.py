@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import uvicorn
+from dotenv import load_dotenv
 
 from ykm.build import build_index
 from ykm.contracts import QueryRequest, RetrieveRequest
@@ -14,6 +15,8 @@ from ykm.server import create_app
 
 
 def main() -> None:
+    load_dotenv()
+
     parser = argparse.ArgumentParser(prog="ykm")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -75,4 +78,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

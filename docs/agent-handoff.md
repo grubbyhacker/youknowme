@@ -26,6 +26,7 @@ Useful commands:
 mise run test
 mise run lint
 mise run demo
+mise run real-smoke
 YKM_EMBEDDING_PROVIDER=fake uv run ykm build --corpus fixtures/corpus --out .ykm/demo-index
 YKM_EMBEDDING_PROVIDER=fake uv run ykm query "weekly spa maintenance" --index .ykm/demo-index --tag spa
 ```
@@ -35,6 +36,10 @@ YKM_EMBEDDING_PROVIDER=fake uv run ykm query "weekly spa maintenance" --index .y
 - `mise run test`: 17 tests passing.
 - `mise run lint`: Ruff passing.
 - `mise run demo`: builds the synthetic corpus and returns distinct spa maintenance results.
+- `mise run real-smoke`: builds the private local corpus checkout at `~/src/ykmcorpus` into
+  `.ykm/real-index` and prints aggregate build metadata only. Last observed real-corpus smoke:
+  18 markdown files, 268 chunks, 0 quarantined files, 39 structural/frontmatter warnings, fake
+  embeddings.
 - Local server smoke: `/livez` returned process liveness, unauthenticated `/mcp` returned 403.
 
 ## Important Lessons
@@ -51,16 +56,35 @@ YKM_EMBEDDING_PROVIDER=fake uv run ykm query "weekly spa maintenance" --index .y
   so it can be replaced if evidence points to sqlite-vec, FAISS, Chroma, pgvector, or a service.
 - The current fake embedding rankings are good enough for contract/eval testing, not a quality proxy
   for real retrieval. Use OpenRouter before judging retrieval quality.
+- The private corpus repo exists at `git@github.com:grubbyhacker/ykmcorpus.git` with a local clone at
+  `~/src/ykmcorpus`. Treat it as sensitive input. Do not copy corpus content into this service repo.
+- `.env` exists locally and contains the OpenRouter API key. It is ignored by Git. Never commit it.
+- The agreed first real embedding model is `openai/text-embedding-3-small` through OpenRouter at
+  1536 dimensions. Do not add a reranker until an eval shows embedding-only retrieval has a specific
+  failure pattern.
 
-## Next Work
+## Restart Instructions
 
-1. Point the build at the new private content repo using a local checkout path.
-2. Load `.env` automatically or document a preferred `mise`/shell flow for runtime env loading.
-3. Build a real OpenRouter index using `OPENROUTER_API_KEY` from local `.env`; never commit `.env`.
-4. Run smoke queries against the real corpus and record retrieval quality gaps.
-5. Expand the eval harness with private, uncommitted golden cases or committed synthetic cases that
-   mirror observed real-corpus failures.
-6. Improve retrieval quality only after observing real OpenRouter behavior.
-7. Add container packaging later, after local RAG behavior is complete and tested. Do not move to the
-   VPS yet.
+After restart, continue from local real-corpus evaluation. Stay in this repo and do not work on VPS
+deployment.
 
+1. Run `git status --short --branch` and confirm the branch is clean except ignored `.env`, `.ykm/`,
+   caches, and POC runtime files.
+2. Run `mise run test` and `mise run lint`.
+3. Run `mise run real-smoke` to confirm the private corpus still builds.
+4. Build a real OpenRouter index:
+
+   ```bash
+   YKM_EMBEDDING_PROVIDER=openrouter mise run real-smoke
+   ```
+
+   This reads `OPENROUTER_API_KEY` from local `.env` and writes ignored artifacts under
+   `.ykm/real-index`.
+5. Run a few manual private-corpus queries with OpenRouter embeddings. Do not paste sensitive
+   content into commits or docs; summarize retrieval behavior by source IDs/paths and aggregate
+   observations.
+6. Create a local eval command/harness next. It should support private uncommitted golden cases and
+   committed synthetic regression cases. Measure expected source/section in top 1, top 3, and top 5.
+7. Improve chunking/frontmatter guidance before adding model complexity. Only consider a reranker if
+   the correct section often appears in top 5 but not top 1/top 3.
+8. Add container packaging later, after local RAG behavior is complete and tested.
