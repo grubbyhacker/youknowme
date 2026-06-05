@@ -19,9 +19,9 @@ Current evidence does not justify a reranker.
 
 ## Phase 1B: Local Serving Hardening
 
-Status: current phase.
+Status: done.
 
-Done:
+Completed:
 
 - Local server runs against `.ykm/real-index`.
 - `/livez` exposes process liveness only.
@@ -29,13 +29,12 @@ Done:
 - Public MCP path fails closed without Cloudflare Access JWT.
 - Authenticated local MCP smoke verified `health`, `query`, and `retrieve`.
 - Query logs record returned source IDs but not raw query text or returned content.
-
-Remaining to finish:
-
-- Add a repeatable one-command local MCP smoke task.
-- Keep the smoke output aggregate and source-pointer-only.
+- `mise run local-mcp-smoke` provides a repeatable one-command local MCP smoke.
+- Smoke output stays aggregate and source-pointer-only.
 
 ## Phase 1C: Container Packaging
+
+Status: next phase.
 
 Goal: run the validated local serving path in a container without changing product scope.
 
