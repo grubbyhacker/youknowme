@@ -52,7 +52,7 @@ Completed:
 
 ## Phase 1D: Existing Cloudflare Path Discovery And Cutover Plan
 
-Status: next phase.
+Status: done.
 
 Goal: make production YKM ready for the existing Cloudflare Tunnel / Access contract without
 disrupting the running POC.
@@ -90,7 +90,17 @@ Work in this phase:
 Remote live verification through ChatGPT/Claude likely happens during Phase 1E, because the existing
 tunnel is currently attached to the running POC.
 
+Completed:
+
+- Documented the existing contract and cutover/rollback plan in `docs/ykm-cloudflare-cutover.md`.
+- Confirmed public YouKnowMe serves the same `/mcp` path and validates Cloudflare Access JWTs through
+  JWKS with issuer, audience, expiry, and owner-email checks.
+- Added fail-closed tests for wrong audience, wrong issuer, expired tokens, and public-mode rejection
+  of the local shared-secret header.
+
 ## Phase 1E: VPS Deployment
+
+Status: done.
 
 Goal: run the containerized read-only YKM service on the VPS and cut over the existing Cloudflare
 route from the POC to production YKM.
@@ -104,6 +114,34 @@ route from the POC to production YKM.
 - Verify remote MCP through the existing Cloudflare Access app with ChatGPT and Claude.
 - Verify missing/wrong Access JWT still fails closed.
 - Keep the POC available as rollback/reference until the production path is stable.
+
+Completed so far:
+
+- Built and loaded `youknowme:phase1e` for `linux/amd64` on `hermes-vps`.
+- Deployed `.ykm/real-index` to `/opt/youknowme/index` read-only.
+- Wrote root-only runtime env on the VPS using the existing POC Cloudflare Access app values.
+- Started production `youknowme-phase1e` on the existing `roger-knowledge-private` network.
+- Cut over the existing tunnel origin alias `roger-knowledge-mcp` from the stopped POC container to
+  production YouKnowMe without restarting or duplicating `cloudflared`.
+- Verified private `/livez` succeeds and private `/mcp` fails closed without
+  `Cf-Access-Jwt-Assertion`.
+- Verified public unauthenticated `https://mcp.fleiglabs.cc/mcp` receives Cloudflare `401`.
+- Found the existing Cloudflare AI Controls path authenticates at the edge but does not forward
+  `Cf-Access-Jwt-Assertion` to the origin; production uses explicit
+  `YKM_CLOUDFLARE_TRUST_EDGE_AUTH=true` for that compatibility path while preserving strict JWT
+  validation when an assertion is present.
+- Added `search` and `fetch` compatibility aliases backed by the Phase 1 index so the existing
+  Phase 0 ChatGPT tool registration can call production successfully while native `query`,
+  `retrieve`, and `health` remain available.
+- Optimized Docker build and transfer time: dependency installation is cached before source copy, the
+  runtime image no longer includes `uv` or uv cache, and the VPS image measured about 194 MB.
+- Rebuilt and deployed the production index from `~/src/ykmcorpus`, including the owner's
+  uncommitted thermostat markdown file.
+- Current deployed build ID is `4f07762808ea41e981ff2437fdf0bcb1` with 312 chunks and source
+  provenance `07c85a4113a11b98f2a27200b5822a8e2539b8ce+dirty.b09de997c23ce964`.
+- Verified ChatGPT and Claude can retrieve new production data through the live remote MCP route.
+- Documented the rebuild, restart, smoke-test, logging, and rollback runbook in
+  `docs/ykm-vps-runbook.md`.
 
 ## Phase 2: Retrieval Quality And Corpus Loop
 

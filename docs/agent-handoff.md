@@ -2,134 +2,166 @@
 
 ## Current State
 
-YouKnowMe is now a greenfield production codebase outside `POC/`. The `POC/` directory is preserved
-as reference-only for the working Cloudflare Tunnel / Cloudflare Access / MCP prototype and should
-not receive new production code.
+YouKnowMe is live in production on `hermes-vps` behind the existing Cloudflare Tunnel / Access route:
 
-Phase 1 currently implements a local-first RAG path over markdown:
+```text
+https://mcp.fleiglabs.cc/mcp
+-> roger-knowledge-cloudflared-phase0
+-> youknowme-phase1e
+```
 
-- `src/ykm/build.py` loads markdown, parses simple frontmatter, performs structural chunking, emits
-  warnings, quarantines high-confidence secrets, embeds chunks, and writes a LanceDB-backed artifact.
+`POC/` remains reference-only and is still the rollback target. Do not create new production content
+inside `POC/`, and do not start another `cloudflared` with the existing tunnel token.
+
+Production container state:
+
+- `youknowme-phase1e` is the live origin container.
+- `roger-knowledge-cloudflared-phase0` remains the existing tunnel container and was not replaced.
+- `roger-knowledge-mcp-phase0` is stopped and retained for rollback.
+- Runtime directory on the VPS: `/opt/youknowme`.
+- Runtime env on the VPS: `/opt/youknowme/runtime.env` with mode `0600`; do not print or commit it.
+- Index mount: `/opt/youknowme/index:/data/index:ro`.
+- Protected log mount: `/opt/youknowme/logs:/data/logs`.
+
+Current deployed index:
+
+- Build ID: `4f07762808ea41e981ff2437fdf0bcb1`.
+- Chunk count: `312`.
+- Embedding model: `openai/text-embedding-3-small`.
+- Source commit: `07c85a4113a11b98f2a27200b5822a8e2539b8ce+dirty.b09de997c23ce964`.
+- The `+dirty` suffix is expected because the deployed corpus includes the owner's uncommitted
+  `~/src/ykmcorpus/homemaint/san_jose_house_thermostat.md`.
+
+## Code Surface
+
+- `src/ykm/build.py` loads markdown, parses frontmatter including simple block lists, performs
+  structural chunking, quarantines high-confidence secrets, embeds chunks, writes LanceDB artifacts,
+  and marks dirty Git corpus builds with a markdown content digest.
 - `src/ykm/index.py` loads the artifact and supports semantic `query`, deterministic `retrieve`, and
   health provenance.
-- `src/ykm/server.py` exposes FastMCP tools for `query`, `retrieve`, and authenticated `health`, plus
-  a private `/livez` endpoint.
-- `src/ykm/auth.py` separates public Cloudflare JWT auth from local/Hermes shared-secret auth.
+- `src/ykm/server.py` exposes native FastMCP tools `query`, `retrieve`, and `health`.
+- `src/ykm/server.py` also exposes `search` and `fetch` compatibility aliases for the existing
+  Phase 0 ChatGPT tool registration; both are backed by the Phase 1 index.
+- `src/ykm/auth.py` separates local shared-secret auth from public Cloudflare auth. Strict public
+  mode still validates a forwarded `Cf-Access-Jwt-Assertion`; the live AI Controls route currently
+  uses `YKM_CLOUDFLARE_TRUST_EDGE_AUTH=true` because Cloudflare authenticates at the edge but does
+  not forward that JWT to the origin.
 - `src/ykm/logging.py` writes protected JSONL query logs that record returned source IDs, not query
   text or returned content.
-- `Dockerfile` and `compose.yaml` package the serving path with a read-only mounted index artifact
-  and writable protected query-log directory.
-- `fixtures/corpus/` is synthetic-only and exercises ambiguous same-kind subjects, preferences,
-  writing, projects, bare markdown, and secret quarantine.
-- `src/ykm/eval.py` and `ykm eval` provide a local retrieval eval harness with top 1 / top 3 /
-  top 5 measurement over committed synthetic cases and ignored private cases.
-- `docs/ykm-corpus-authoring.md` captures current frontmatter and markdown authoring guidance for
-  `ykmcorpus`.
-- `docs/ykm-phased-plan.md` captures the high-level project phases and current status.
+- `Dockerfile` is minimized with a builder stage. Dependency installation is cached before app source
+  copy; runtime contains the installed virtualenv but not `uv`, source tree, or uv cache.
 
-Useful commands:
+## Useful Commands
 
 ```bash
 mise run test
 mise run lint
-mise run demo
 mise run eval
-mise run real-smoke
-YKM_EMBEDDING_PROVIDER=openrouter mise run local-mcp-smoke
-mise run container-smoke
-YKM_EMBEDDING_PROVIDER=fake uv run ykm build --corpus fixtures/corpus --out .ykm/demo-index
-YKM_EMBEDDING_PROVIDER=fake uv run ykm query "weekly spa maintenance" --index .ykm/demo-index --tag spa
 YKM_EMBEDDING_PROVIDER=openrouter mise run real-smoke
-YKM_EMBEDDING_PROVIDER=openrouter uv run ykm eval --index .ykm/real-index --cases .ykm/private-eval/ykmcorpus.json
+YKM_EMBEDDING_PROVIDER=openrouter mise run local-mcp-smoke
+YKM_EMBEDDING_PROVIDER=openrouter mise run container-smoke
+```
+
+Build and deploy the production image from the development machine:
+
+```bash
+docker build --platform linux/amd64 -t youknowme:phase1e .
+docker save youknowme:phase1e | ssh hermes-vps 'docker load'
+COPYFILE_DISABLE=1 tar -C .ykm/real-index -cf - . | ssh hermes-vps 'mkdir -p /opt/youknowme/index && tar -C /opt/youknowme/index -xf - && chmod -R a+rX /opt/youknowme/index && find /opt/youknowme/index -name "._*" -delete'
+```
+
+Restart production on the VPS:
+
+```bash
+ssh hermes-vps '
+docker rm -f youknowme-phase1e >/dev/null 2>&1 || true
+docker run -d \
+  --name youknowme-phase1e \
+  --restart unless-stopped \
+  --network roger-knowledge-private \
+  --network-alias roger-knowledge-mcp \
+  --network-alias youknowme \
+  --env-file /opt/youknowme/runtime.env \
+  -v /opt/youknowme/index:/data/index:ro \
+  -v /opt/youknowme/logs:/data/logs \
+  --read-only \
+  --tmpfs /tmp \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  youknowme:phase1e
+'
 ```
 
 ## Verification Completed
 
-- `mise run test`: 25 tests passing.
 - `mise run lint`: Ruff passing.
-- `mise run eval`: committed synthetic eval passes 6/6; last observed top 1 = 5/6, top 3 = 6/6,
-  top 5 = 6/6 with fake embeddings.
-- `mise run demo`: builds the synthetic corpus and returns distinct spa maintenance results.
-- `mise run real-smoke`: builds the private local corpus checkout at `~/src/ykmcorpus` into
-  `.ykm/real-index` and prints aggregate build metadata only. Last observed real-corpus smoke:
-  18 markdown files, 287 chunks, 0 quarantined files, 14 structural warnings, OpenRouter
-  embeddings.
-- Private real-corpus eval in ignored `.ykm/private-eval/ykmcorpus.json`: last observed 16/16
-  passing, top 1 = 16/16, top 3 = 16/16, top 5 = 16/16 with
-  `openai/text-embedding-3-small`.
-- Local server smoke against `.ykm/real-index`: `/livez` returned process liveness,
-  unauthenticated `/mcp` returned 403, authenticated local MCP listed `query`/`retrieve`/`health`,
-  `health` returned provenance, `query` returned a real source pointer, `retrieve` resolved it, and
-  the query log recorded source IDs without raw query/content. This is now repeatable with
-  `YKM_EMBEDDING_PROVIDER=openrouter mise run local-mcp-smoke`.
-- Container smoke against `.ykm/real-index`: Docker image built, Compose mounted `.ykm/real-index`
-  read-only, `/livez` passed, unauthenticated `/mcp` returned 403, authenticated local MCP listed
-  `query`/`retrieve`/`health`, `health` returned provenance, `query` returned
-  `interview-prep-cisco-sbg-ai-eng`, `retrieve` resolved it, and the container query log recorded
-  source IDs without raw query/content. This is repeatable with `mise run container-smoke`.
+- `mise run test`: `33` tests passing.
+- `YKM_EMBEDDING_PROVIDER=openrouter mise run real-smoke`: rebuilt `.ykm/real-index` from
+  `~/src/ykmcorpus` with 312 chunks, 0 quarantines, and 14 warnings.
+- `YKM_EMBEDDING_PROVIDER=openrouter mise run container-smoke`: passed against the rebuilt real
+  index and listed `fetch`, `health`, `query`, `retrieve`, and `search`.
+- VPS `/livez`: healthy.
+- VPS MCP `health`: reports build ID `4f07762808ea41e981ff2437fdf0bcb1`.
+- VPS MCP `search` for thermostat content returns
+  `thermostat-bryant-ksacn1401aaa-heat-pump`.
+- ChatGPT and Claude have both verified that new production data is serving through the live remote
+  MCP route.
+- Query/search logs remain source-pointer-only. They include event, latency, build ID, result count,
+  result source IDs, and errors, not raw query text or returned content.
+- Minimized image size on the VPS measured about `194 MB`; previous image was about `354 MB`.
+- Recent measured image transfer to `hermes-vps` was about `10.5s`.
 
 ## Important Lessons
 
-- Keep milestones demonstrable. Every implementation slice should end with a CLI command, test, or
-  local server behavior that proves it works without the VPS.
+- The live Cloudflare AI Controls path does not currently forward `Cf-Access-Jwt-Assertion` to the
+  origin. `YKM_CLOUDFLARE_TRUST_EDGE_AUTH=true` is a compatibility fallback, not true defense in
+  depth. If Cloudflare can be configured to forward the Access JWT on all calls, turn this fallback
+  off and restore strict owner-email verification for missing-JWT requests.
+- Do not trust unverified email headers. Service-side owner email authorization is valid only when a
+  signed Access JWT is present and verified.
+- The Phase 0 ChatGPT registration still expects `search` and `fetch`; keep those compatibility
+  aliases until the remote tool registry is updated to native `query` and `retrieve`.
 - Tests must stay offline by default. Fake deterministic embeddings are the default for unit tests
   and demos; OpenRouter is optional runtime configuration.
-- Do not log raw query text or returned content by default. Logs intentionally record source IDs
-  because future Curator work needs that signal, but logs are a protected asset.
-- Do not relax public Cloudflare JWT auth to support local Hermes. The local path has a separate
-  shared-secret mechanism.
 - Container serving should load an existing artifact, not rebuild inside the serve container. Keep
   the index mount read-only and write only protected logs.
-- LanceDB is a pragmatic embedded vector store choice for now. Keep vector access behind `YkmIndex`
-  so it can be replaced if evidence points to sqlite-vec, FAISS, Chroma, pgvector, or a service.
-- The current fake embedding rankings are good enough for contract/eval testing, not a quality proxy
-  for real retrieval. Use OpenRouter before judging retrieval quality.
 - The private corpus repo exists at `git@github.com:grubbyhacker/ykmcorpus.git` with a local clone at
   `~/src/ykmcorpus`. Treat it as sensitive input. Do not copy corpus content into this service repo.
-- `ykmcorpus` now has frontmatter IDs/types/tags and allowed `homemaint/` + `workhistory/`
-  structure cleanup committed and pushed at `07c85a4` (`chore:more cleanup for better indexing`).
-  Rebuild the index after pulling.
+- The currently deployed corpus includes an uncommitted owner-approved thermostat markdown file. If
+  the corpus is later committed, rebuild the index so `source_commit` returns to a plain Git SHA.
 - Frontmatter improves stable IDs and filters; headings/body text improve semantic matching because
   chunk embeddings currently use chunk text, not metadata. Keep both in good shape.
 - Do not reshape imported writing samples or Substack posts merely to satisfy indexing warnings.
-  Treat `substack/` and `writingsamples/` as canonical unless the owner explicitly asks for edits or
-  evals show a real retrieval failure. Current cleanup permission is limited to `homemaint/` and
-  `workhistory/`.
-- `.env` exists locally and contains the OpenRouter API key. It is ignored by Git. Never commit it.
-- The agreed first real embedding model is `openai/text-embedding-3-small` through OpenRouter at
-  1536 dimensions. Current evals do not justify a reranker.
-- Reranker trigger remains evidence-driven: consider it only if correct sources often appear in top
-  5 but not top 1/top 3 after frontmatter, headings, and filters are in good shape.
+- `.env` exists locally and contains runtime secrets. It is ignored by Git. Never commit it.
+- Current eval evidence does not justify a reranker.
 
-## Restart Instructions
+## Rollback
 
-After restart, continue with Phase 1D Cloudflare contract discovery and cutover planning. Stay in
-this repo and do not work on VPS deployment unless explicitly asked.
+Rollback restores the existing tunnel origin alias to the POC container:
 
-1. Run `git status --short --branch` and confirm the branch is clean except ignored `.env`, `.ykm/`,
-   caches, and POC runtime files. The expected `ykmcorpus` source commit for the latest local real
-   index is `07c85a4113a11b98f2a27200b5822a8e2539b8ce`.
-2. Run `mise run test`, `mise run lint`, and `mise run eval`.
-3. Run `YKM_EMBEDDING_PROVIDER=openrouter mise run real-smoke` to build the private corpus with real
-   embeddings:
+```bash
+ssh hermes-vps '
+docker stop youknowme-phase1e >/dev/null 2>&1 || true
+docker network disconnect roger-knowledge-private youknowme-phase1e >/dev/null 2>&1 || true
+docker network connect --alias roger-knowledge-mcp roger-knowledge-private roger-knowledge-mcp-phase0 >/dev/null 2>&1 || true
+docker start roger-knowledge-mcp-phase0
+'
+```
 
-   ```bash
-   YKM_EMBEDDING_PROVIDER=openrouter mise run real-smoke
-   ```
+Then verify:
 
-   This reads `OPENROUTER_API_KEY` from local `.env` and writes ignored artifacts under
-   `.ykm/real-index`.
-4. Run the private real-corpus eval if `.ykm/private-eval/ykmcorpus.json` exists:
+```bash
+ssh hermes-vps 'docker run --rm --network roger-knowledge-private curlimages/curl:latest -fsS http://roger-knowledge-mcp:8765/health'
+```
 
-   ```bash
-   YKM_EMBEDDING_PROVIDER=openrouter uv run ykm eval --index .ykm/real-index --cases .ykm/private-eval/ykmcorpus.json
-   ```
+## Next Work
 
-5. Improve remaining `oversized-parent` / `headerless-or-single-section` warnings by corpus
-   structure first. See `docs/ykm-corpus-authoring.md`.
-6. Add more private eval cases as real usage appears. Do not paste sensitive corpus content into
-   commits or docs; summarize by aggregate results and source IDs/paths.
-7. Run `mise run container-smoke` to verify the Phase 1C container packaging against
-   `.ykm/real-index`.
-8. Next phase is Phase 1D: inspect `POC/` as reference only and document the existing Cloudflare
-   Tunnel / Access contract and cutover plan. Do not modify or restart the running POC.
+Proceed to Phase 2: retrieval quality and corpus loop.
+
+Good next slices:
+
+- Add usage-derived private eval cases from protected logs and observed ChatGPT/Claude behavior.
+- If Cloudflare has a setting to forward `Cf-Access-Jwt-Assertion` for all AI Controls calls, enable
+  it, set `YKM_CLOUDFLARE_TRUST_EDGE_AUTH=false`, redeploy, and verify owner-email auth.
+- Commit the thermostat file in `ykmcorpus` when ready, rebuild the index, and redeploy so provenance
+  returns to a clean Git SHA.

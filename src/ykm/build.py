@@ -323,13 +323,26 @@ def source_commit(corpus: Path) -> str:
             capture_output=True,
             text=True,
         )
-        return result.stdout.strip()
+        commit = result.stdout.strip()
+        status = subprocess.run(
+            ["git", "-C", str(corpus), "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        if status.stdout.strip():
+            return f"{commit}+dirty.{corpus_digest(corpus)}"
+        return commit
     except (subprocess.CalledProcessError, FileNotFoundError):
-        digest = hashlib.sha256()
-        for path in sorted(corpus.rglob("*.md")):
-            digest.update(path.relative_to(corpus).as_posix().encode())
-            digest.update(path.read_bytes())
-        return f"local-{digest.hexdigest()[:16]}"
+        return f"local-{corpus_digest(corpus)}"
+
+
+def corpus_digest(corpus: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(corpus.rglob("*.md")):
+        digest.update(path.relative_to(corpus).as_posix().encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()[:16]
 
 
 def write_json(path: Path, payload: dict[str, object]) -> None:

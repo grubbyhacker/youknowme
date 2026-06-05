@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from dataclasses import dataclass
 
 import jwt
@@ -13,6 +14,7 @@ from starlette.responses import JSONResponse
 
 CF_ACCESS_JWT_HEADER = "Cf-Access-Jwt-Assertion"
 LOCAL_AUTH_HEADER = "X-YKM-Local-Secret"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -21,6 +23,7 @@ class AuthConfig:
     owner_email: str = ""
     cloudflare_team_domain: str = ""
     cloudflare_aud: str = ""
+    cloudflare_trust_edge_auth: bool = False
     local_secret: str = ""
 
     @classmethod
@@ -30,6 +33,10 @@ class AuthConfig:
             owner_email=os.getenv("YKM_OWNER_EMAIL", ""),
             cloudflare_team_domain=os.getenv("YKM_CLOUDFLARE_TEAM_DOMAIN", "").rstrip("/"),
             cloudflare_aud=os.getenv("YKM_CLOUDFLARE_AUD", ""),
+            cloudflare_trust_edge_auth=os.getenv(
+                "YKM_CLOUDFLARE_TRUST_EDGE_AUTH", ""
+            ).lower()
+            == "true",
             local_secret=os.getenv("YKM_LOCAL_AUTH_SECRET", ""),
         )
 
@@ -58,6 +65,8 @@ class AuthVerifier:
     def _verify_cloudflare(self, request: Request) -> tuple[bool, str]:
         token = request.headers.get(CF_ACCESS_JWT_HEADER)
         if not token:
+            if self.config.cloudflare_trust_edge_auth:
+                return True, "cloudflare-edge"
             return False, "missing Cloudflare Access JWT"
         try:
             claims = self.decode_cloudflare_jwt(token)
@@ -97,7 +106,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         ok, reason = self.verifier.verify_request(request)
         if not ok:
+            logger.warning("auth rejected path=%s reason=%s", request.url.path, reason)
             return JSONResponse({"detail": "forbidden", "reason": reason}, status_code=403)
         request.state.auth_path = reason
         return await call_next(request)
-

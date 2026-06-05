@@ -35,7 +35,22 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
         stateless_http=True,
         json_response=True,
         transport_security=TransportSecuritySettings(
-            allowed_hosts=["127.0.0.1:*", "localhost:*", "*.fleiglabs.cc", "*"],
+            allowed_hosts=[
+                "127.0.0.1:*",
+                "localhost:*",
+                "testserver",
+                "testserver:*",
+                "mcp.fleiglabs.cc",
+                "mcp.fleiglabs.cc:*",
+                "origin-mcp.fleiglabs.cc",
+                "origin-mcp.fleiglabs.cc:*",
+                "roger-knowledge-mcp",
+                "roger-knowledge-mcp:*",
+                "youknowme",
+                "youknowme:*",
+                "youknowme-phase1e",
+                "youknowme-phase1e:*",
+            ],
             allowed_origins=[],
         ),
     )
@@ -89,6 +104,81 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
     def retrieve(locator: str, kind: str = "source_id") -> dict[str, Any]:
         response = index.retrieve(RetrieveRequest(locator=locator, kind=kind))
         return response.model_dump(mode="json")
+
+    @mcp.tool()
+    def search(query: str) -> list[dict[str, Any]]:
+        started = time.perf_counter()
+        error = None
+        response = None
+        try:
+            response = index.query(QueryRequest(query=query, limit=5))
+            return [
+                {
+                    "id": result.source_id,
+                    "title": result.source_id,
+                    "url": f"youknowme://{result.source_id}#{result.section_id}",
+                    "text": result.returned_content,
+                    "metadata": {
+                        "source_id": result.source_id,
+                        "source_path": result.source_path,
+                        "section_id": result.section_id,
+                        "tags": result.tags,
+                        "type": result.type,
+                        "score": result.score,
+                        "retrieve_kind": "source_id",
+                    },
+                }
+                for result in response.results
+            ]
+        except Exception as exc:
+            error = exc.__class__.__name__
+            raise
+        finally:
+            logger.write(
+                QueryLogRecord(
+                    timestamp=now_utc(),
+                    event="search",
+                    latency_ms=(time.perf_counter() - started) * 1000,
+                    auth_path="mcp",
+                    build_id=index.manifest.build_id,
+                    result_source_ids=[
+                        result.source_id for result in response.results
+                    ]
+                    if response
+                    else [],
+                    result_count=len(response.results) if response else 0,
+                    error=error,
+                )
+            )
+
+    @mcp.tool()
+    def fetch(id: str) -> dict[str, Any]:
+        response = index.retrieve(RetrieveRequest(locator=id, kind="source_id"))
+        if not response.found:
+            return {
+                "id": id,
+                "title": "Not found",
+                "text": f"No YouKnowMe source exists for id: {id}",
+                "url": None,
+                "metadata": {
+                    "found": False,
+                    "build_id": response.build_id,
+                },
+            }
+
+        return {
+            "id": response.source_id,
+            "title": response.source_id,
+            "text": response.content,
+            "url": f"youknowme://{response.source_id}",
+            "metadata": {
+                "found": True,
+                "source_id": response.source_id,
+                "source_path": response.source_path,
+                "section_id": response.section_id,
+                "build_id": response.build_id,
+            },
+        }
 
     @mcp.tool()
     def health() -> dict[str, Any]:
