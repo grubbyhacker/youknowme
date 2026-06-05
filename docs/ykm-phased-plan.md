@@ -45,25 +45,58 @@ Goal: run the validated local serving path in a container without changing produ
 - Run container locally against `.ykm/real-index`.
 - Keep build provenance light: manifest-backed, no signing yet.
 
-## Phase 1D: Remote Path Reimplementation
+## Phase 1D: Existing Cloudflare Path Discovery And Cutover Plan
 
-Goal: reimplement the proven Phase 0 Cloudflare path in production code outside `POC/`.
+Goal: make production YKM ready for the existing Cloudflare Tunnel / Access contract without
+disrupting the running POC.
 
-- Use `POC/` only as reference.
-- Configure Cloudflare Tunnel and Access for production YKM.
-- Validate signed Cloudflare Access JWT using team JWKS, issuer, audience, expiry, and owner email.
-- Verify remote MCP with ChatGPT and Claude.
+Important constraint:
+
+- The POC is still actively serving from the VPS through the existing Cloudflare Tunnel / Access
+  setup.
+- The production system will reuse that existing Cloudflare configuration.
+- Do not create another Cloudflare Tunnel for YKM.
+- Do not start a second `cloudflared` with the existing tunnel token. Running the same tunnel token
+  from a second place can disrupt or contend with the active POC route.
+
+Work in this phase:
+
+- Inspect `POC/` as reference only; do not modify or restart the running POC.
+- Document the existing Cloudflare contract:
+  - public hostname / route shape
+  - origin path expected by the tunnel
+  - Access application assumptions
+  - `Cf-Access-Jwt-Assertion` behavior
+  - team domain / issuer
+  - audience tag required by YKM
+  - owner email claim used for authorization
+- Confirm production YKM `public` mode matches that contract:
+  - validates signed Cloudflare Access JWT through JWKS
+  - checks issuer, audience, expiry, and owner email
+  - fails closed on missing/invalid/mismatched JWT
 - Keep local/Hermes auth separate from public Cloudflare auth.
+- Write the cutover plan:
+  - how the existing tunnel origin moves from POC to production YKM on the VPS
+  - how to verify remote MCP after cutover
+  - how to roll back by restoring the POC origin
+
+Remote live verification through ChatGPT/Claude likely happens during Phase 1E, because the existing
+tunnel is currently attached to the running POC.
 
 ## Phase 1E: VPS Deployment
 
-Goal: run the containerized read-only YKM service on the VPS.
+Goal: run the containerized read-only YKM service on the VPS and cut over the existing Cloudflare
+route from the POC to production YKM.
 
 - Deploy the service container.
 - Load only the official/local pipeline artifact.
 - Persist protected query logs.
 - Document rebuild, restart, and smoke-test runbook.
 - Confirm no source repo write credential is present in the serve container.
+- Retarget the existing Cloudflare Tunnel origin from the POC service to the production YKM service.
+- Verify remote MCP through the existing Cloudflare Access app with ChatGPT and Claude.
+- Verify missing/wrong Access JWT still fails closed.
+- Keep the POC available as rollback/reference until the production path is stable.
 
 ## Phase 2: Retrieval Quality And Corpus Loop
 
