@@ -158,5 +158,3 @@ answer, with working source pointers and no silent merging, in a fresh fast sess
 - Keep the plan honest about the dependency chain: embedding → build location → artifact shape;
   contracts → serving. Don't serialize what can parallelize (Track A), don't parallelize what's gated
   (serving behind G1).
-EOF
-echo "created; line count:"; wc -l /home/claude/ykm-planning-guidance.md

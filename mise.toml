@@ -18,6 +18,10 @@ run = "uv run ruff check ."
 description = "Build the synthetic corpus and run local CLI demo queries"
 run = "scripts/local-demo.sh"
 
+[tasks.eval]
+description = "Build the synthetic corpus and run committed retrieval eval cases"
+run = "rm -rf .ykm/eval-index && YKM_EMBEDDING_PROVIDER=fake uv run ykm build --corpus fixtures/corpus --out .ykm/eval-index >/dev/null && YKM_EMBEDDING_PROVIDER=fake uv run ykm eval --index .ykm/eval-index --cases fixtures/eval/synthetic.json"
+
 [tasks.real-smoke]
 description = "Build the private local corpus checkout into an ignored local index"
 run = "scripts/real-corpus-smoke.sh"

@@ -19,6 +19,10 @@ Phase 1 currently implements a local-first RAG path over markdown:
   text or returned content.
 - `fixtures/corpus/` is synthetic-only and exercises ambiguous same-kind subjects, preferences,
   writing, projects, bare markdown, and secret quarantine.
+- `src/ykm/eval.py` and `ykm eval` provide a local retrieval eval harness with top 1 / top 3 /
+  top 5 measurement over committed synthetic cases and ignored private cases.
+- `docs/ykm-corpus-authoring.md` captures current frontmatter and markdown authoring guidance for
+  `ykmcorpus`.
 
 Useful commands:
 
@@ -26,21 +30,32 @@ Useful commands:
 mise run test
 mise run lint
 mise run demo
+mise run eval
 mise run real-smoke
 YKM_EMBEDDING_PROVIDER=fake uv run ykm build --corpus fixtures/corpus --out .ykm/demo-index
 YKM_EMBEDDING_PROVIDER=fake uv run ykm query "weekly spa maintenance" --index .ykm/demo-index --tag spa
+YKM_EMBEDDING_PROVIDER=openrouter mise run real-smoke
+YKM_EMBEDDING_PROVIDER=openrouter uv run ykm eval --index .ykm/real-index --cases .ykm/private-eval/ykmcorpus.json
 ```
 
 ## Verification Completed
 
-- `mise run test`: 17 tests passing.
+- `mise run test`: 22 tests passing.
 - `mise run lint`: Ruff passing.
+- `mise run eval`: committed synthetic eval passes 6/6; last observed top 1 = 5/6, top 3 = 6/6,
+  top 5 = 6/6 with fake embeddings.
 - `mise run demo`: builds the synthetic corpus and returns distinct spa maintenance results.
 - `mise run real-smoke`: builds the private local corpus checkout at `~/src/ykmcorpus` into
   `.ykm/real-index` and prints aggregate build metadata only. Last observed real-corpus smoke:
-  18 markdown files, 268 chunks, 0 quarantined files, 39 structural/frontmatter warnings, fake
+  18 markdown files, 287 chunks, 0 quarantined files, 14 structural warnings, OpenRouter
   embeddings.
-- Local server smoke: `/livez` returned process liveness, unauthenticated `/mcp` returned 403.
+- Private real-corpus eval in ignored `.ykm/private-eval/ykmcorpus.json`: last observed 16/16
+  passing, top 1 = 16/16, top 3 = 16/16, top 5 = 16/16 with
+  `openai/text-embedding-3-small`.
+- Local server smoke against `.ykm/real-index`: `/livez` returned process liveness,
+  unauthenticated `/mcp` returned 403, authenticated local MCP listed `query`/`retrieve`/`health`,
+  `health` returned provenance, `query` returned a real source pointer, `retrieve` resolved it, and
+  the query log recorded source IDs without raw query/content.
 
 ## Important Lessons
 
@@ -58,21 +73,32 @@ YKM_EMBEDDING_PROVIDER=fake uv run ykm query "weekly spa maintenance" --index .y
   for real retrieval. Use OpenRouter before judging retrieval quality.
 - The private corpus repo exists at `git@github.com:grubbyhacker/ykmcorpus.git` with a local clone at
   `~/src/ykmcorpus`. Treat it as sensitive input. Do not copy corpus content into this service repo.
+- `ykmcorpus` now has frontmatter IDs/types/tags and allowed `homemaint/` + `workhistory/`
+  structure cleanup committed and pushed at `07c85a4` (`chore:more cleanup for better indexing`).
+  Rebuild the index after pulling.
+- Frontmatter improves stable IDs and filters; headings/body text improve semantic matching because
+  chunk embeddings currently use chunk text, not metadata. Keep both in good shape.
+- Do not reshape imported writing samples or Substack posts merely to satisfy indexing warnings.
+  Treat `substack/` and `writingsamples/` as canonical unless the owner explicitly asks for edits or
+  evals show a real retrieval failure. Current cleanup permission is limited to `homemaint/` and
+  `workhistory/`.
 - `.env` exists locally and contains the OpenRouter API key. It is ignored by Git. Never commit it.
 - The agreed first real embedding model is `openai/text-embedding-3-small` through OpenRouter at
-  1536 dimensions. Do not add a reranker until an eval shows embedding-only retrieval has a specific
-  failure pattern.
+  1536 dimensions. Current evals do not justify a reranker.
+- Reranker trigger remains evidence-driven: consider it only if correct sources often appear in top
+  5 but not top 1/top 3 after frontmatter, headings, and filters are in good shape.
 
 ## Restart Instructions
 
-After restart, continue from local real-corpus evaluation. Stay in this repo and do not work on VPS
-deployment.
+After restart, continue from local Phase 1 hardening. Stay in this repo and do not work on VPS
+deployment unless explicitly asked.
 
 1. Run `git status --short --branch` and confirm the branch is clean except ignored `.env`, `.ykm/`,
-   caches, and POC runtime files.
-2. Run `mise run test` and `mise run lint`.
-3. Run `mise run real-smoke` to confirm the private corpus still builds.
-4. Build a real OpenRouter index:
+   caches, and POC runtime files. The expected `ykmcorpus` source commit for the latest local real
+   index is `07c85a4113a11b98f2a27200b5822a8e2539b8ce`.
+2. Run `mise run test`, `mise run lint`, and `mise run eval`.
+3. Run `YKM_EMBEDDING_PROVIDER=openrouter mise run real-smoke` to build the private corpus with real
+   embeddings:
 
    ```bash
    YKM_EMBEDDING_PROVIDER=openrouter mise run real-smoke
@@ -80,11 +106,14 @@ deployment.
 
    This reads `OPENROUTER_API_KEY` from local `.env` and writes ignored artifacts under
    `.ykm/real-index`.
-5. Run a few manual private-corpus queries with OpenRouter embeddings. Do not paste sensitive
-   content into commits or docs; summarize retrieval behavior by source IDs/paths and aggregate
-   observations.
-6. Create a local eval command/harness next. It should support private uncommitted golden cases and
-   committed synthetic regression cases. Measure expected source/section in top 1, top 3, and top 5.
-7. Improve chunking/frontmatter guidance before adding model complexity. Only consider a reranker if
-   the correct section often appears in top 5 but not top 1/top 3.
-8. Add container packaging later, after local RAG behavior is complete and tested.
+4. Run the private real-corpus eval if `.ykm/private-eval/ykmcorpus.json` exists:
+
+   ```bash
+   YKM_EMBEDDING_PROVIDER=openrouter uv run ykm eval --index .ykm/real-index --cases .ykm/private-eval/ykmcorpus.json
+   ```
+
+5. Improve remaining `oversized-parent` / `headerless-or-single-section` warnings by corpus
+   structure first. See `docs/ykm-corpus-authoring.md`.
+6. Add more private eval cases as real usage appears. Do not paste sensitive corpus content into
+   commits or docs; summarize by aggregate results and source IDs/paths.
+7. Add container packaging later, after local RAG behavior and corpus-authoring loop stay stable.

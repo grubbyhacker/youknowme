@@ -8,3 +8,4 @@ Current planning artifacts:
 - `ykm-invariants.md` - durable project invariants.
 - `ykm-planning-guidance.md` - planning method and implementation gates.
 - `ykm-planning-answers.md` - resolved planning-agent questions and owner decisions.
+- `ykm-corpus-authoring.md` - frontmatter and markdown authoring guidance for the private corpus.

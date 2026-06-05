@@ -1,0 +1,49 @@
+{
+  "cases": [
+    {
+      "name": "ambiguous_spa_subjects_surface_distinct_sources",
+      "query": "weekly spa maintenance",
+      "tags": ["spa"],
+      "expected_sources": ["spa-home", "spa-cabin"],
+      "match": "all",
+      "limit": 5
+    },
+    {
+      "name": "bromine_filter_prevents_home_spa",
+      "query": "weekly maintenance",
+      "tags": ["bromine"],
+      "expected_sources": ["spa-cabin"],
+      "absent_sources": ["spa-home"],
+      "limit": 5
+    },
+    {
+      "name": "see_only_related_links_do_not_traverse",
+      "query": "home chlorine weekly",
+      "tags": ["home"],
+      "expected_sources": ["spa-home"],
+      "absent_sources": ["chemical-storage"],
+      "limit": 5
+    },
+    {
+      "name": "preference_query_finds_communication_preferences",
+      "query": "concise engineering updates",
+      "type": "preference",
+      "expected_sources": ["communication-preferences"],
+      "limit": 5
+    },
+    {
+      "name": "project_query_finds_offline_rag",
+      "query": "local retrieval pipeline before VPS deployment",
+      "type": "project",
+      "expected_sources": ["offline-rag-project"],
+      "limit": 5
+    },
+    {
+      "name": "writing_query_finds_review_style",
+      "query": "code review comments lead with findings",
+      "type": "writing",
+      "expected_sources": ["code-review-style"],
+      "limit": 5
+    }
+  ]
+}

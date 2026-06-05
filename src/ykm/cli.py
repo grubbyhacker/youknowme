@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from ykm.build import build_index
 from ykm.contracts import QueryRequest, RetrieveRequest
 from ykm.embeddings import provider_from_env
+from ykm.eval import load_eval_suite, run_eval
 from ykm.index import YkmIndex
 from ykm.server import create_app
 
@@ -42,6 +43,10 @@ def main() -> None:
     inspect.add_argument("result_id")
     inspect.add_argument("--index", required=True, type=Path)
 
+    eval_parser = subparsers.add_parser("eval")
+    eval_parser.add_argument("--index", required=True, type=Path)
+    eval_parser.add_argument("--cases", required=True, type=Path)
+
     serve = subparsers.add_parser("serve")
     serve.add_argument("--index", required=True, type=Path)
     serve.add_argument("--mode", choices=["local", "public"], default="local")
@@ -72,6 +77,12 @@ def main() -> None:
     elif args.command == "inspect-result":
         index = YkmIndex(args.index, provider_from_env())
         print(json.dumps(index.explain(args.result_id), indent=2, sort_keys=True))
+    elif args.command == "eval":
+        index = YkmIndex(args.index, provider_from_env())
+        summary = run_eval(index, load_eval_suite(args.cases))
+        print(summary.model_dump_json(indent=2))
+        if not summary.passed:
+            raise SystemExit(1)
     elif args.command == "serve":
         uvicorn.run(create_app(args.index, args.mode), host=args.host, port=args.port)
 

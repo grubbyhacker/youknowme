@@ -4,11 +4,25 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+REQUESTED_YKM_CORPUS_PATH="${YKM_CORPUS_PATH:-}"
+REQUESTED_YKM_REAL_INDEX_PATH="${YKM_REAL_INDEX_PATH:-}"
+REQUESTED_YKM_EMBEDDING_PROVIDER="${YKM_EMBEDDING_PROVIDER:-}"
+
 if [[ -f .env ]]; then
   set -a
   # shellcheck disable=SC1091
   . ./.env
   set +a
+fi
+
+if [[ -n "$REQUESTED_YKM_CORPUS_PATH" ]]; then
+  YKM_CORPUS_PATH="$REQUESTED_YKM_CORPUS_PATH"
+fi
+if [[ -n "$REQUESTED_YKM_REAL_INDEX_PATH" ]]; then
+  YKM_REAL_INDEX_PATH="$REQUESTED_YKM_REAL_INDEX_PATH"
+fi
+if [[ -n "$REQUESTED_YKM_EMBEDDING_PROVIDER" ]]; then
+  YKM_EMBEDDING_PROVIDER="$REQUESTED_YKM_EMBEDDING_PROVIDER"
 fi
 
 CORPUS_PATH="${YKM_CORPUS_PATH:-../ykmcorpus}"
@@ -25,8 +39,11 @@ if [[ "$PROVIDER" == "openrouter" && -z "${OPENROUTER_API_KEY:-}" ]]; then
   exit 1
 fi
 
+BUILD_OUTPUT="$(mktemp -t ykm-real-corpus-smoke.XXXXXX)"
+trap 'rm -f "$BUILD_OUTPUT"' EXIT
+
 rm -rf "$INDEX_DIR"
-uv run ykm build --corpus "$CORPUS_PATH" --out "$INDEX_DIR"
+uv run ykm build --corpus "$CORPUS_PATH" --out "$INDEX_DIR" > "$BUILD_OUTPUT"
 
 python - <<'PY'
 import json
@@ -57,4 +74,3 @@ print(
     )
 )
 PY
-

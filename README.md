@@ -27,6 +27,7 @@ Phase 1 is local-first. The synthetic corpus in `fixtures/corpus/` exercises the
 mise run test
 mise run lint
 mise run demo
+mise run eval
 ```
 
 Manual equivalent:
@@ -34,6 +35,7 @@ Manual equivalent:
 ```bash
 YKM_EMBEDDING_PROVIDER=fake uv run ykm build --corpus fixtures/corpus --out .ykm/demo-index
 YKM_EMBEDDING_PROVIDER=fake uv run ykm query "weekly spa maintenance" --index .ykm/demo-index --tag spa
+YKM_EMBEDDING_PROVIDER=fake uv run ykm eval --index .ykm/demo-index --cases fixtures/eval/synthetic.json
 ```
 
 To use real embeddings later, create `.env` from `.env.example`, set `OPENROUTER_API_KEY`, and use:
@@ -41,5 +43,7 @@ To use real embeddings later, create `.env` from `.env.example`, set `OPENROUTER
 ```bash
 YKM_EMBEDDING_PROVIDER=openrouter uv run ykm build --corpus /path/to/content-repo --out .ykm/openrouter-index
 ```
+
+Private eval cases can live outside this repo and be passed with `--cases /path/to/private-cases.json`.
 
 Generated indexes and logs live under `.ykm/` and are ignored.
