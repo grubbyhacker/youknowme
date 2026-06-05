@@ -1,0 +1,15 @@
+.venv/
+.env
+.env.*
+!.env.example
+!.env.*.example
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.DS_Store
+.ykm/
+artifacts/
+*.jsonl
+!fixtures/**/*.jsonl

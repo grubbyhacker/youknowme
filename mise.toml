@@ -1,0 +1,19 @@
+[tools]
+python = "3.12"
+uv = "latest"
+
+[tasks.sync]
+description = "Install project dependencies with uv"
+run = "uv sync"
+
+[tasks.test]
+description = "Run the test suite"
+run = "uv run pytest"
+
+[tasks.lint]
+description = "Run lint checks"
+run = "uv run ruff check ."
+
+[tasks.demo]
+description = "Build the synthetic corpus and run local CLI demo queries"
+run = "scripts/local-demo.sh"

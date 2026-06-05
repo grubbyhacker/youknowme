@@ -1,0 +1,173 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+SCHEMA_VERSION = "1"
+
+
+class SourceDoc(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str
+    aliases: list[str] = Field(default_factory=list)
+    source_path: str
+    title: str
+    type: str = "note"
+    tags: list[str] = Field(default_factory=list)
+    related: list[str] = Field(default_factory=list)
+    body: str
+
+
+class ChunkRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    chunk_id: str
+    source_id: str
+    aliases: list[str] = Field(default_factory=list)
+    source_path: str
+    section_id: str
+    section_heading: str
+    heading_path: list[str] = Field(default_factory=list)
+    type: str = "note"
+    tags: list[str] = Field(default_factory=list)
+    related: list[str] = Field(default_factory=list)
+    text: str
+    parent_text: str
+    ordinal: int
+    start_line: int | None = None
+    end_line: int | None = None
+
+
+class BuildWarning(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_path: str
+    code: str
+    message: str
+
+
+class QuarantineRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_path: str
+    reason: str
+
+
+class ArtifactManifest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = SCHEMA_VERSION
+    build_id: str
+    source_commit: str
+    embedding_provider: str
+    embedding_model: str
+    embedding_dimensions: int
+    created_at: datetime
+    chunk_count: int
+    quarantined_count: int = 0
+    warning_count: int = 0
+
+
+class BuildOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    manifest: ArtifactManifest
+    warnings: list[BuildWarning] = Field(default_factory=list)
+    quarantined: list[QuarantineRecord] = Field(default_factory=list)
+
+
+class QueryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    type: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    tags_any: list[str] = Field(default_factory=list)
+    source: str | None = None
+    limit: int = Field(default=5, ge=1, le=10)
+
+
+class SourcePointer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str
+    source_path: str
+    section_id: str
+
+
+class QueryResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    result_id: str
+    source_id: str
+    source_path: str
+    section_id: str
+    parent_section: str
+    matched_chunk: str
+    returned_content: str
+    tags: list[str]
+    type: str
+    score: float
+    disambiguation_hint: str
+    related: list[str] = Field(default_factory=list)
+    truncated: bool = False
+    retrieve_pointer: SourcePointer
+
+
+class QueryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    results: list[QueryResult]
+    build_id: str
+    source_commit: str
+    warnings: list[str] = Field(default_factory=list)
+
+
+class RetrieveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    locator: str
+    kind: Literal["source_id", "section_id", "path"] = "source_id"
+
+
+class RetrieveResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    found: bool
+    locator: str
+    kind: str
+    source_id: str | None = None
+    source_path: str | None = None
+    section_id: str | None = None
+    content: str | None = None
+    build_id: str
+
+
+class HealthResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["ok", "degraded"]
+    service: str = "YouKnowMe"
+    index_loaded: bool
+    source_commit: str | None = None
+    build_id: str | None = None
+    embedding_model: str | None = None
+    created_at: datetime | None = None
+
+
+class QueryLogRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    timestamp: datetime
+    event: str
+    latency_ms: float
+    auth_path: str
+    build_id: str | None
+    result_source_ids: list[str] = Field(default_factory=list)
+    result_count: int = 0
+    error: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
