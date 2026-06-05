@@ -25,3 +25,7 @@ run = "rm -rf .ykm/eval-index && YKM_EMBEDDING_PROVIDER=fake uv run ykm build --
 [tasks.real-smoke]
 description = "Build the private local corpus checkout into an ignored local index"
 run = "scripts/real-corpus-smoke.sh"
+
+[tasks.local-mcp-smoke]
+description = "Run local MCP server smoke against an existing index"
+run = "scripts/local-mcp-smoke.sh"

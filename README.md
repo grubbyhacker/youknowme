@@ -28,6 +28,7 @@ mise run test
 mise run lint
 mise run demo
 mise run eval
+YKM_EMBEDDING_PROVIDER=openrouter mise run local-mcp-smoke
 ```
 
 Manual equivalent:

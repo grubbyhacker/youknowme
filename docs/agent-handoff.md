@@ -23,6 +23,7 @@ Phase 1 currently implements a local-first RAG path over markdown:
   top 5 measurement over committed synthetic cases and ignored private cases.
 - `docs/ykm-corpus-authoring.md` captures current frontmatter and markdown authoring guidance for
   `ykmcorpus`.
+- `docs/ykm-phased-plan.md` captures the high-level project phases and current status.
 
 Useful commands:
 
@@ -32,6 +33,7 @@ mise run lint
 mise run demo
 mise run eval
 mise run real-smoke
+YKM_EMBEDDING_PROVIDER=openrouter mise run local-mcp-smoke
 YKM_EMBEDDING_PROVIDER=fake uv run ykm build --corpus fixtures/corpus --out .ykm/demo-index
 YKM_EMBEDDING_PROVIDER=fake uv run ykm query "weekly spa maintenance" --index .ykm/demo-index --tag spa
 YKM_EMBEDDING_PROVIDER=openrouter mise run real-smoke
@@ -55,7 +57,8 @@ YKM_EMBEDDING_PROVIDER=openrouter uv run ykm eval --index .ykm/real-index --case
 - Local server smoke against `.ykm/real-index`: `/livez` returned process liveness,
   unauthenticated `/mcp` returned 403, authenticated local MCP listed `query`/`retrieve`/`health`,
   `health` returned provenance, `query` returned a real source pointer, `retrieve` resolved it, and
-  the query log recorded source IDs without raw query/content.
+  the query log recorded source IDs without raw query/content. This is now repeatable with
+  `YKM_EMBEDDING_PROVIDER=openrouter mise run local-mcp-smoke`.
 
 ## Important Lessons
 
@@ -116,4 +119,5 @@ deployment unless explicitly asked.
    structure first. See `docs/ykm-corpus-authoring.md`.
 6. Add more private eval cases as real usage appears. Do not paste sensitive corpus content into
    commits or docs; summarize by aggregate results and source IDs/paths.
-7. Add container packaging later, after local RAG behavior and corpus-authoring loop stay stable.
+7. `mise run local-mcp-smoke` completes Phase 1B local serving hardening. Next phase is container
+   packaging; see `docs/ykm-phased-plan.md`.
