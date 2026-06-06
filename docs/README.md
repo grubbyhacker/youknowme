@@ -12,3 +12,4 @@ Current planning artifacts:
 - `ykm-cloudflare-cutover.md` - existing Cloudflare Tunnel / Access contract and cutover plan.
 - `ykm-vps-runbook.md` - Phase 1E VPS deployment, smoke checks, and rollback runbook.
 - `ykm-phased-plan.md` - current high-level implementation phases and status.
+- `ykm-phase2-runbook.md` - retrieval quality and private eval loop for Phase 2.

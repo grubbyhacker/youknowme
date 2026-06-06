@@ -29,6 +29,7 @@ class EvalCase(BaseModel):
     absent_sources: list[str] = Field(default_factory=list)
     absent_paths: list[str] = Field(default_factory=list)
     limit: int = Field(default=5, ge=1, le=10)
+    pass_at: int | None = Field(default=None, ge=1, le=10)
 
 
 class EvalSuite(BaseModel):
@@ -111,7 +112,8 @@ def run_eval_case(index: YkmIndex, case: EvalCase, top_ks: list[int]) -> EvalCas
     absent_ok = not set(case.absent_sources).intersection(result_sources) and not set(
         case.absent_paths
     ).intersection(result_paths)
-    passed = hit_at[f"top_{max(top_ks)}"] and absent_ok
+    pass_at = case.pass_at or max(top_ks)
+    passed = _matches(expectations, pass_at, case.match) and absent_ok
     return EvalCaseResult(
         name=case.name,
         query=case.query,

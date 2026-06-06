@@ -46,6 +46,7 @@ def main() -> None:
     eval_parser = subparsers.add_parser("eval")
     eval_parser.add_argument("--index", required=True, type=Path)
     eval_parser.add_argument("--cases", required=True, type=Path)
+    eval_parser.add_argument("--out", type=Path)
 
     serve = subparsers.add_parser("serve")
     serve.add_argument("--index", required=True, type=Path)
@@ -80,7 +81,11 @@ def main() -> None:
     elif args.command == "eval":
         index = YkmIndex(args.index, provider_from_env())
         summary = run_eval(index, load_eval_suite(args.cases))
-        print(summary.model_dump_json(indent=2))
+        summary_json = summary.model_dump_json(indent=2)
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(f"{summary_json}\n", encoding="utf-8")
+        print(summary_json)
         if not summary.passed:
             raise SystemExit(1)
     elif args.command == "serve":

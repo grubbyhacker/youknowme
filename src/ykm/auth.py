@@ -87,7 +87,6 @@ class AuthVerifier:
         try:
             claims = self.decode_cloudflare_jwt(token)
         except (PyJWTError, RuntimeError, OSError) as exc:
-            self._log_unverified_jwt_context(token)
             return AuthDecision(False, f"invalid Cloudflare Access token: {exc}", 401)
         email = str(claims.get("email", "")).lower()
         if self.config.owner_email and email == self.config.owner_email.lower():
@@ -97,7 +96,6 @@ class AuthVerifier:
         if common_name and common_name in self.config.allowed_service_common_names:
             return AuthDecision(True, "cloudflare-service")
 
-        self._log_unverified_jwt_context(token)
         if common_name or not email:
             return AuthDecision(False, "owner email or service identity mismatch", 403)
         return AuthDecision(False, "owner email mismatch", 403)
@@ -131,39 +129,6 @@ class AuthVerifier:
             audience=self.config.cloudflare_aud,
             issuer=self.config.cloudflare_team_domain,
             leeway=60,
-        )
-
-    def _log_unverified_jwt_context(self, token: str) -> None:
-        try:
-            header = jwt.get_unverified_header(token)
-            claims = jwt.decode(
-                token,
-                options={
-                    "verify_signature": False,
-                    "verify_aud": False,
-                    "verify_exp": False,
-                    "verify_iat": False,
-                    "verify_iss": False,
-                },
-            )
-        except PyJWTError as exc:
-            logger.warning("rejected jwt debug unavailable reason=%s", exc)
-            return
-
-        logger.warning(
-            (
-                "rejected jwt debug kid=%r iss=%r aud=%r email=%r sub=%r "
-                "exp=%r iat=%r scope=%r common_name=%r"
-            ),
-            header.get("kid"),
-            claims.get("iss"),
-            claims.get("aud"),
-            claims.get("email"),
-            claims.get("sub"),
-            claims.get("exp"),
-            claims.get("iat"),
-            claims.get("scope"),
-            claims.get("common_name"),
         )
 
 

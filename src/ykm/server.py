@@ -21,6 +21,28 @@ from ykm.logging import JsonlLogger, now_utc
 
 SERVICE_NAME = "YouKnowMe"
 MCP_PATH = "/mcp"
+QUERY_TOOL_DESCRIPTION = (
+    "Search YouKnowMe, Roger's private owner-specific memory. Use this before answering questions "
+    "about Roger, his homes, devices, procedures, maintenance notes, preferences, work history, "
+    "resume, interview prep, writing, projects, or anything phrased as my/me/home/personal context. "
+    "Prefer this over general training data or web search for owner-specific facts; examples include "
+    "hot tub chemistry, thermostat behavior, house procedures, and personal work-history questions."
+)
+RETRIEVE_TOOL_DESCRIPTION = (
+    "Fetch exact YouKnowMe source content by source_id, section_id, or source path after query/search "
+    "returns a pointer. Use this to read the authoritative owner-specific note without semantic ranking."
+)
+SEARCH_TOOL_DESCRIPTION = (
+    "Compatibility search over YouKnowMe, Roger's private owner-specific memory. Use before answering "
+    "owner-specific questions about Roger's homes, devices, procedures, maintenance notes, preferences, "
+    "work history, writing, or projects. This should beat general knowledge for questions involving "
+    "my/me/home/personal context, such as hot tub chemistry or thermostat setup."
+)
+FETCH_TOOL_DESCRIPTION = (
+    "Compatibility fetch for an exact YouKnowMe source id returned by search. Reads the authoritative "
+    "owner-specific source content."
+)
+HEALTH_TOOL_DESCRIPTION = "Report YouKnowMe index readiness and build provenance."
 PROTECTED_RESOURCE_METADATA_PATHS = (
     "/.well-known/oauth-protected-resource",
     "/.well-known/oauth-protected-resource/mcp",
@@ -58,7 +80,7 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
         ),
     )
 
-    @mcp.tool()
+    @mcp.tool(description=QUERY_TOOL_DESCRIPTION)
     def query(
         query: str,
         type: str | None = None,
@@ -103,12 +125,12 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
                 )
             )
 
-    @mcp.tool()
+    @mcp.tool(description=RETRIEVE_TOOL_DESCRIPTION)
     def retrieve(locator: str, kind: str = "source_id") -> dict[str, Any]:
         response = index.retrieve(RetrieveRequest(locator=locator, kind=kind))
         return response.model_dump(mode="json")
 
-    @mcp.tool()
+    @mcp.tool(description=SEARCH_TOOL_DESCRIPTION)
     def search(query: str) -> list[dict[str, Any]]:
         started = time.perf_counter()
         error = None
@@ -154,7 +176,7 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
                 )
             )
 
-    @mcp.tool()
+    @mcp.tool(description=FETCH_TOOL_DESCRIPTION)
     def fetch(id: str) -> dict[str, Any]:
         response = index.retrieve(RetrieveRequest(locator=id, kind="source_id"))
         if not response.found:
@@ -183,7 +205,7 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
             },
         }
 
-    @mcp.tool()
+    @mcp.tool(description=HEALTH_TOOL_DESCRIPTION)
     def health() -> dict[str, Any]:
         return index.health().model_dump(mode="json")
 

@@ -6,7 +6,18 @@ from starlette.testclient import TestClient
 
 from ykm.build import build_index
 from ykm.embeddings import FakeEmbeddingProvider
-from ykm.server import create_app
+from ykm.server import QUERY_TOOL_DESCRIPTION, SEARCH_TOOL_DESCRIPTION, create_app
+
+
+def test_tool_descriptions_advertise_owner_specific_triggering() -> None:
+    description = f"{QUERY_TOOL_DESCRIPTION} {SEARCH_TOOL_DESCRIPTION}".lower()
+
+    assert "owner-specific" in description
+    assert "roger" in description
+    assert "my/me/home" in description
+    assert "hot tub chemistry" in description
+    assert "thermostat" in description
+    assert "prefer this over general training data" in description
 
 
 def test_private_liveness_has_no_provenance(tmp_path: Path, monkeypatch) -> None:

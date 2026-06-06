@@ -96,7 +96,7 @@ async def main() -> None:
 
     forbidden = httpx.post(f"{base_url}/mcp", timeout=10)
     assert forbidden.status_code == 403, forbidden.text
-    assert forbidden.json()["reason"] == "invalid local secret"
+    assert forbidden.json()["detail"] == "forbidden"
 
     async with ClientSessionGroup() as group:
         session = await group.connect_to_server(
@@ -110,6 +110,10 @@ async def main() -> None:
         tools = await session.list_tools()
         tool_names = {tool.name for tool in tools.tools}
         assert {"query", "retrieve", "health"}.issubset(tool_names), tool_names
+        tool_descriptions = {tool.name: tool.description or "" for tool in tools.tools}
+        assert "owner-specific" in tool_descriptions["query"]
+        assert "hot tub chemistry" in tool_descriptions["query"]
+        assert "owner-specific" in tool_descriptions["search"]
 
         health = await session.call_tool("health", {})
         health_payload = json.loads(health.content[0].text)

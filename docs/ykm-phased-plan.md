@@ -149,13 +149,28 @@ Completed so far:
 
 ## Phase 2: Retrieval Quality And Corpus Loop
 
+Status: done.
+
 Goal: improve retrieval using eval and usage evidence.
 
-- Add real usage-derived private eval cases.
-- Improve corpus frontmatter/headings where evals show misses.
-- Tune payload breadth and source diversity if evidence supports it.
-- Consider reranking only if correct sources frequently appear in top 5 but not top 1/top 3 after
-  corpus structure and filters are healthy.
+Completed:
+
+- Current private baseline: 19/19 cases pass against build
+  `f1fa6a81d97e4650b5775f717ad8c5dd`; 18 pass at top 1, all pass at top 3/top 5, and no reranker is
+  justified by current evidence.
+- Added usage-derived private eval coverage under `.ykm/private-eval/`.
+- Added eval `pass_at` support and `ykm eval --out` so private baselines can be saved and compared.
+- Removed temporary rejected-token debug logging and redeployed the code/container.
+- Improved MCP tool descriptions so agents are more likely to consult YouKnowMe for owner-specific
+  home, device, preference, work-history, writing, and project questions.
+- Record repeated complementary-artifact patterns, such as a thermostat manual plus owner writeup,
+  as future Curator consolidation candidates rather than merging them in retrieval.
+
+Runbook: `docs/ykm-phase2-runbook.md`.
+
+Future retrieval/triggering work is usage-driven maintenance unless new evidence justifies reopening
+this phase. Classify any future issue as corpus structure, filter semantics, payload breadth,
+ranking, or triggering/tool adoption before changing retrieval code.
 
 ## Phase 3: Write Paths
 

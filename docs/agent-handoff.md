@@ -168,14 +168,24 @@ ssh hermes-vps 'docker run --rm --network roger-knowledge-private curlimages/cur
 
 ## Next Work
 
-Proceed to Phase 2: retrieval quality and corpus loop.
+Phase 2 is complete given the small amount of real usage so far.
+
+Current Phase 2 evidence:
+
+- The private baseline has 19 cases and passes 19/19 against build
+  `f1fa6a81d97e4650b5775f717ad8c5dd`; 18 pass at top 1, and all pass at top 3/top 5.
+- The one non-top-1 case intentionally expects both a thermostat manual artifact and an owner
+  thermostat writeup.
+- Current evidence does not justify a reranker or payload/ranking changes.
+- Triggering/tool-adoption was improved by deploying owner-specific MCP tool descriptions.
+- Treat future "agent did not call YouKnowMe" reports as triggering/tool-adoption issues, not
+  retrieval-ranking issues. The example is "How much bromine should I put into my home hot tub?";
+  general knowledge is misleading because the private corpus says the home hot tub is chlorine-based.
 
 Good next slices:
 
-- Remove the temporary rejected-token debug logging once the direct Access OAuth and Hermes
-  service-token paths have had enough soak time. It logs only unverified `kid`, `iss`, `aud`,
-  `email`, `sub`, `exp`, `iat`, `scope`, and `common_name`, never raw tokens or corpus data.
-- Add usage-derived private eval cases from protected logs and observed ChatGPT/Claude behavior.
+- Proceed to Phase 3 write-path design only when ready; do not add upload/feedback casually.
+- Keep collecting usage-derived private eval cases as maintenance.
 - If direct Cloudflare Access works for a generic MCP client but ChatGPT or Claude does not, stop and
   record the exact compatibility failure. Do not fall back to Cloudflare MCP Portal with an
   unauthenticated upstream.
