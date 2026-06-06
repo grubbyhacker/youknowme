@@ -14,3 +14,4 @@ Current planning artifacts:
 - `ykm-phased-plan.md` - current high-level implementation phases and status.
 - `ykm-phase2-runbook.md` - retrieval quality and private eval loop for Phase 2.
 - `ykm-phase3-intake.md` - staged upload/feedback intake contract and forward Curator design.
+- `ykm-phase4-curator.md` - Curator agent plan, state machines, runtime direction, and open questions.
