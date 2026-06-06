@@ -370,8 +370,10 @@ frontmatter so no separate records are persisted beyond the repo.
 ## 9. Non-functional requirements
 
 - **Containerized on owned VPS** — Hostinger KVM4. Everything runs in containers.
-- **Local sibling access.** The Hermes Agent runs in a container on the *same* VPS and makes
-  *local* connections to YKM, bypassing Cloudflare.
+- **Hermes service-token access.** The Hermes Agent runs in a container on the *same* VPS but uses
+  the public Cloudflare Access route with service-token headers. Cloudflare validates the service
+  token; YouKnowMe then authorizes the verified Access JWT `common_name` against
+  `YKM_ALLOWED_SERVICE_COMMON_NAMES`.
 - **Compatible with web/mobile ChatGPT and Claude**, including remote-data-center execution.
 - **Authentication — SOLVED (POC complete).** Cloudflare/managed OAuth + tunnels + fronting owns
   *authentication* (proving identity). Single-use OTP. Agent ↔ MCP flows for query/health/retrieve
@@ -382,30 +384,29 @@ frontmatter so no separate records are persisted beyond the repo.
   config (an email allowlist on token issuance) silently do all the *authorization* work — one
   misconfiguration away from exposing personal data to any authenticated principal. Correct this:
   the service **independently authorizes** the Cloudflare-authenticated identity against a configured
-  **owner-email allowlist (size one)**, and returns a 4xx on mismatch. Two independent layers must
-  both fail for exposure to occur. This is *not* multi-tenancy (no `user_id` in the data model, §1) —
-  it's a single front-door gate authorizing against a configured principal.
+  **owner-email allowlist (size one)** or an explicit Cloudflare Access service-token identity
+  allowlist, and returns a 4xx on mismatch. Two independent layers must both fail for exposure to
+  occur. This is *not* multi-tenancy (no `user_id` in the data model, §1) — it's a single front-door
+  gate authorizing against configured principals.
   - **Verify the *signed* assertion, never a bare header.** The check is only additive if the service
     validates Cloudflare's **signed identity assertion** (e.g. the Access JWT against Cloudflare's
-    public keys + audience tag) and extracts the verified email from *that* — not an unverified
-    `Cf-Access-…-Email` header, which anything reaching the origin could spoof. An unverified-header
-    check is security theater and worse than none.
+    public keys + audience tag) and extracts the verified email or service-token `common_name` from
+    *that* — not an unverified `Cf-Access-…-Email` header, which anything reaching the origin could
+    spoof. An unverified-header check is security theater and worse than none.
   - **DEPENDENCY TO CONFIRM before building:** that the Cloudflare flow exposes a *verifiable* signed
     identity claim to the origin. The design is sound only if it does (see planning guidance).
-  - **Fail closed.** Missing / unverifiable assertion, or email mismatch → reject. Never fall back to
-    "couldn't verify, allow." Tested as a negative case (§13a).
+  - **Fail closed.** Missing / unverifiable assertion, owner-email mismatch, or unallowed
+    service-token `common_name` → reject. Never fall back to "couldn't verify, allow." Tested as a
+    negative case (§13a).
   - **Residual risk (don't oversell):** this defends against the auth-layer misconfiguration named
     above (wrong email issued a token). It does **not** protect against a compromised Cloudflare
     account, leaked signing material, or a hijacked owner session. It raises the bar; it does not make
     serving personal data risk-free.
-- **Two ingress paths, two authz mechanisms (Hermes bypass).** The remote path is Cloudflare-fronted
-  and **always** requires the verified signed JWT (above), failing closed. The **local Hermes path
-  bypasses Cloudflare** and therefore carries **no JWT** — so it must be a **private-only listener**
-  (loopback / private container network, never publicly routable) with a **separate** trust mechanism
-  (private-network trust and/or a shared secret), *not* the JWT check. **The failure to prevent: a
-  single listener serving both paths, where relaxing the JWT requirement for Hermes silently relaxes
-  it for the public path.** Keep the paths and their authz distinct; the public path's JWT requirement
-  is never globally disabled.
+- **No public-path relaxation for Hermes.** Earlier planning considered a local Hermes bypass. The
+  current Hermes path uses Cloudflare Access service tokens instead, so the public route still
+  **always** requires a verified signed JWT and fails closed. The failure to prevent remains the same:
+  never relax the public JWT requirement merely because Hermes needs access. Service-token JWTs are
+  authorized only by verified `common_name` allowlist, not by `aud` plus missing `email`.
 - **Health endpoint is split.** (a) A **private, unauthenticated liveness** endpoint (process up),
   bound to the private interface for the container/orchestrator. (b) An **authenticated MCP `health`
   tool** reporting serve-readiness + provenance (`source_commit`/`build_id`/`embedding_model`/
@@ -597,10 +598,10 @@ hasn't quietly introduced a "couldn't verify, allow" path to protect access.
 ## 14. Security boundaries, logging & privacy
 
 **Actors / trust boundaries (name them, then map read/write).** Serving container · build pipeline ·
-source repo · Curator · remote MCP client · local Hermes client · Cloudflare/OAuth layer. The spec
-pass maps which actor can read/write what; the load-bearing facts already decided: serve = read-only,
-no repo write (§9); Curator = branch-push, no merge (§8); build = the one place with repo-read +
-(optional) signing (§9).
+source repo · Curator · remote MCP client · Hermes service-token client · Cloudflare/OAuth layer.
+The spec pass maps which actor can read/write what; the load-bearing facts already decided: serve =
+read-only, no repo write (§9); Curator = branch-push, no merge (§8); build = the one place with
+repo-read + (optional) signing (§9).
 
 **Logs are inside the private/sensitive boundary.** Logs carry `source_id`s that point at
 (potentially sensitive) docs — so **logs inherit the sensitivity of what they reference.** Two
@@ -641,8 +642,8 @@ between "bare markdown always ingests" and "the build handles secrets":
   rules (§6, §9) are load-bearing, not optional.
 
 **Compatibility tests (define, don't assume).** "Compatible with web/mobile ChatGPT and Claude" needs
-concrete path tests: remote OAuth MCP `query`, local Hermes `query` (Cloudflare-bypass), `health`,
-`retrieve`, and defined **failure behavior** on each path (§13a).
+concrete path tests: remote OAuth MCP `query`, Hermes service-token `query`, `health`, `retrieve`,
+and defined **failure behavior** on each path (§13a).
 
 **Single-tenant access model (state it, don't leave it accidental).** The corpus is **single-tenant
 by design** (§1). Any *authorized* principal sees the whole corpus — there is no in-corpus access

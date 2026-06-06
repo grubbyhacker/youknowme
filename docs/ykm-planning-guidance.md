@@ -111,8 +111,8 @@ shape, ID + alias scheme, filter semantics, failure behavior (§13a), artifact +
 - Reranker decision *via the eval gate*, not by default (§5).
 - All §13 acceptance tests green.
 
-**Deploy:** compatibility tests across client paths — remote OAuth MCP, local Hermes (Cloudflare
-bypass), `health`, `retrieve` (§14).
+**Deploy:** compatibility tests across client paths — remote OAuth MCP, Hermes Cloudflare Access
+service-token MCP, `health`, `retrieve` (§14).
 
 ---
 

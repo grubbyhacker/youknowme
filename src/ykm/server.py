@@ -21,9 +21,14 @@ from ykm.logging import JsonlLogger, now_utc
 
 SERVICE_NAME = "YouKnowMe"
 MCP_PATH = "/mcp"
+PROTECTED_RESOURCE_METADATA_PATHS = (
+    "/.well-known/oauth-protected-resource",
+    "/.well-known/oauth-protected-resource/mcp",
+)
 
 
 def create_app(index_path: Path, mode: str = "local") -> Starlette:
+    auth_config = AuthConfig.from_env(mode)
     index = YkmIndex(index_path, provider_from_env())
     logger = JsonlLogger(
         Path(os.getenv("YKM_LOG_PATH")) if os.getenv("YKM_LOG_PATH") else None,
@@ -42,8 +47,6 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
                 "testserver:*",
                 "mcp.fleiglabs.cc",
                 "mcp.fleiglabs.cc:*",
-                "origin-mcp.fleiglabs.cc",
-                "origin-mcp.fleiglabs.cc:*",
                 "roger-knowledge-mcp",
                 "roger-knowledge-mcp:*",
                 "youknowme",
@@ -187,6 +190,15 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
     async def livez(_request) -> JSONResponse:
         return JSONResponse({"status": "ok", "service": SERVICE_NAME})
 
+    async def oauth_protected_resource_metadata(_request) -> JSONResponse:
+        return JSONResponse(
+            {
+                "resource": auth_config.mcp_resource_url,
+                "authorization_servers": [auth_config.cloudflare_team_domain],
+                "bearer_methods_supported": ["header"],
+            }
+        )
+
     @asynccontextmanager
     async def lifespan(_app):
         async with mcp.session_manager.run():
@@ -195,9 +207,14 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
     app = Starlette(
         routes=[
             Route("/livez", livez, methods=["GET"]),
+            Route("/health", livez, methods=["GET"]),
+            *[
+                Route(path, oauth_protected_resource_metadata, methods=["GET"])
+                for path in PROTECTED_RESOURCE_METADATA_PATHS
+            ],
             Mount("/", app=mcp.streamable_http_app()),
         ],
         lifespan=lifespan,
     )
-    app.add_middleware(AuthMiddleware, verifier=AuthVerifier(AuthConfig.from_env(mode)))
+    app.add_middleware(AuthMiddleware, verifier=AuthVerifier(auth_config))
     return app

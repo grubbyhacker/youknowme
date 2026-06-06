@@ -111,14 +111,11 @@ default given. PRD = `ykm-requirements.md`; card = `ykm-invariants.md`.*
     - **Still confirm against the POC's actually-observed headers + current config** (the AUD tag is
       deployment-specific; the POC already authenticates, so it is ground truth).
 
-17. **Hermes local bypass authz — [REQ, sharpened — see PRD §9 update].** The local path bypasses
-    Cloudflare, so it carries **no CF JWT**. Therefore: (a) the local listener is **private-only**
-    (loopback / private container network, never publicly routable); (b) authz there is a **separate**
-    trust mechanism — private-network trust and/or a shared secret — **not** the CF JWT; (c) the
-    failure to prevent is **a single listener serving both paths**, where relaxing the JWT for Hermes
-    accidentally relaxes it for the public path. **Requirement: two ingress paths, two distinct authz
-    mechanisms; the public path ALWAYS requires the verified CF JWT and fails closed.** (Cloudflare's
-    ecosystem has this exact split-DNS / private-IP-allow pattern.)
+17. **Hermes service-token authz — [UPDATED, see PRD §9 update].** Earlier planning considered a
+    local Hermes bypass with a separate private-only trust mechanism. The current Hermes path uses
+    the public Cloudflare Access route with service-token headers. Requirement: the public path
+    ALWAYS requires a verified CF JWT and fails closed; Hermes is allowed only when the verified JWT
+    `common_name` matches `YKM_ALLOWED_SERVICE_COMMON_NAMES`.
 
 18. **Health auth — [REQ — see PRD §9 update].** **Split it:** (a) a **private, unauthenticated
     liveness** endpoint (process up) bound to the private interface for the container/orchestrator;
@@ -158,9 +155,10 @@ default given. PRD = `ykm-requirements.md`; card = `ykm-invariants.md`.*
     phase-2 candidate gated by the eval**, not an unconditional skip.
 
 25. **MCP compatibility — [REQ].** Acceptance must cover **ChatGPT remote MCP (via Cloudflare), Claude
-    remote MCP (via Cloudflare), and Hermes local (bypass)** — plus per-path failure behavior (§13a,
-    §14). **MCP Inspector = dev harness throughout, not an acceptance gate.** Priority: one remote path
-    end-to-end first (proves the Cloudflare/MCP path), then the second remote, then Hermes local.
+    remote MCP (via Cloudflare), and Hermes service-token MCP (via Cloudflare)** — plus per-path
+    failure behavior (§13a, §14). **MCP Inspector = dev harness throughout, not an acceptance gate.**
+    Priority: one remote path end-to-end first (proves the Cloudflare/MCP path), then the second
+    remote, then Hermes service-token MCP.
 
 26. **Naming — [OWNER/IMPL].** No requirement. Recommend **consistency**; `ykm` is the established
     shorthand in these docs, so e.g. `ykm` code namespace + `you-know-me`/`youknowme` for human-facing

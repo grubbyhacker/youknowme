@@ -56,9 +56,18 @@ YKM_EMBEDDING_DIMENSIONS=1536
 YKM_OWNER_EMAIL=<owner email>
 YKM_CLOUDFLARE_TEAM_DOMAIN=<existing Access team domain>
 YKM_CLOUDFLARE_AUD=<existing Access application audience>
-YKM_CLOUDFLARE_TRUST_EDGE_AUTH=true
+YKM_ALLOWED_SERVICE_COMMON_NAMES=<Hermes Cloudflare Access service token Client ID>
+YKM_MCP_RESOURCE_URL=https://mcp.fleiglabs.cc/mcp
 OPENROUTER_API_KEY=<runtime key>
 ```
+
+Confirm the Hermes service-token JWT includes `common_name` equal to the Cloudflare service token
+Client ID before setting `YKM_ALLOWED_SERVICE_COMMON_NAMES`. If Cloudflare does not include
+`common_name`, stop rather than authorizing a missing-email token from audience alone.
+
+Hermes secrets live in `/docker/hermes-agent-6aso/.env`. Hermes config should reference
+`${YKM_CF_ACCESS_CLIENT_ID}` and `${YKM_CF_ACCESS_CLIENT_SECRET}` placeholders rather than literal
+secret values.
 
 Restart production:
 
@@ -102,16 +111,33 @@ Private origin fail-closed check:
 ssh hermes-vps 'docker run --rm --network roger-knowledge-private curlimages/curl:latest -sS -i -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}" http://roger-knowledge-mcp:8765/mcp | sed -n "1,10p"'
 ```
 
-Expected origin response without the Access JWT when strict JWT enforcement is active:
+Expected origin response without the Access token:
 
 ```text
-HTTP/1.1 403 Forbidden
-{"detail":"forbidden","reason":"missing Cloudflare Access JWT"}
+HTTP/1.1 401 Unauthorized
+{"detail":"unauthorized"}
 ```
 
-The current `hermes-vps` deployment uses `YKM_CLOUDFLARE_TRUST_EDGE_AUTH=true` because the existing
-Cloudflare AI Controls flow authenticates at the Access edge but does not forward
-`Cf-Access-Jwt-Assertion` to the origin.
+The public `/mcp` route must never allow a missing-token request through to FastMCP. A missing token
+should return `401`; a valid token for any email other than the configured owner should return
+`403` unless its verified `common_name` is explicitly listed in
+`YKM_ALLOWED_SERVICE_COMMON_NAMES`.
+
+Protected-resource metadata:
+
+```bash
+curl -sS https://mcp.fleiglabs.cc/.well-known/oauth-protected-resource/mcp
+```
+
+Expected fields:
+
+```json
+{
+  "resource": "https://mcp.fleiglabs.cc/mcp",
+  "authorization_servers": ["<Cloudflare Access team domain>"],
+  "bearer_methods_supported": ["header"]
+}
+```
 
 Public unauthenticated front-door check:
 
@@ -127,7 +153,20 @@ server: cloudflare
 ```
 
 Authenticated remote MCP verification still requires a fresh Cloudflare Access session from each
-remote client. Verify with ChatGPT and Claude after reauthentication.
+remote client. Verify generic direct Access MCP first; run ChatGPT and Claude only as later
+compatibility tests after unauthenticated `/mcp` is proven blocked.
+
+Hermes service-token verification:
+
+1. Deploy rejected-token debug logging with `common_name` included.
+2. Trigger one Hermes connection attempt.
+3. Confirm logs show a verified service-token JWT shape with `common_name` equal to the Hermes
+   Cloudflare Access service token Client ID.
+4. Set `YKM_ALLOWED_SERVICE_COMMON_NAMES=<Hermes CF-Access-Client-Id>` in
+   `/opt/youknowme/runtime.env`.
+5. Rebuild/redeploy `youknowme:phase1e`, recreate `youknowme-phase1e`, and restart the Hermes
+   gateway to trigger MCP discovery.
+6. Confirm Hermes reaches FastMCP and lists tools, while unauthenticated `/mcp` remains `401`.
 
 Production exposes the native Phase 1 tools:
 

@@ -81,7 +81,7 @@ Work in this phase:
   - validates signed Cloudflare Access JWT through JWKS
   - checks issuer, audience, expiry, and owner email
   - fails closed on missing/invalid/mismatched JWT
-- Keep local/Hermes auth separate from public Cloudflare auth.
+- Keep local shared-secret auth separate from public Cloudflare auth.
 - Write the cutover plan:
   - how the existing tunnel origin moves from POC to production YKM on the VPS
   - how to verify remote MCP after cutover
@@ -126,22 +126,26 @@ Completed so far:
 - Verified private `/livez` succeeds and private `/mcp` fails closed without
   `Cf-Access-Jwt-Assertion`.
 - Verified public unauthenticated `https://mcp.fleiglabs.cc/mcp` receives Cloudflare `401`.
-- Found the existing Cloudflare AI Controls path authenticates at the edge but does not forward
-  `Cf-Access-Jwt-Assertion` to the origin; production uses explicit
-  `YKM_CLOUDFLARE_TRUST_EDGE_AUTH=true` for that compatibility path while preserving strict JWT
-  validation when an assertion is present.
+- Later OAuth reset direction: use direct Cloudflare Access protection for
+  `https://mcp.fleiglabs.cc/mcp`; do not use Cloudflare MCP Portal or any unauthenticated public
+  upstream URL.
 - Added `search` and `fetch` compatibility aliases backed by the Phase 1 index so the existing
   Phase 0 ChatGPT tool registration can call production successfully while native `query`,
   `retrieve`, and `health` remain available.
 - Optimized Docker build and transfer time: dependency installation is cached before source copy, the
   runtime image no longer includes `uv` or uv cache, and the VPS image measured about 194 MB.
-- Rebuilt and deployed the production index from `~/src/ykmcorpus`, including the owner's
-  uncommitted thermostat markdown file.
-- Current deployed build ID is `4f07762808ea41e981ff2437fdf0bcb1` with 312 chunks and source
-  provenance `07c85a4113a11b98f2a27200b5822a8e2539b8ce+dirty.b09de997c23ce964`.
+- Rebuilt and deployed the production index from `~/src/ykmcorpus`.
+- Current deployed build ID is `f1fa6a81d97e4650b5775f717ad8c5dd` with 339 chunks and source
+  provenance `65607eb0e5d152506d76fb74205f7eed108655f2`.
 - Verified ChatGPT and Claude can retrieve new production data through the live remote MCP route.
 - Documented the rebuild, restart, smoke-test, logging, and rollback runbook in
   `docs/ykm-vps-runbook.md`.
+- Added a deliberate Hermes service-token path for the public Cloudflare Access route:
+  YouKnowMe accepts verified owner email tokens as `cloudflare` and accepts verified service-token
+  JWTs as `cloudflare-service` only when JWT `common_name` is listed in
+  `YKM_ALLOWED_SERVICE_COMMON_NAMES`.
+- Deployed the Hermes service-token allowlist on `hermes-vps`; verified Hermes Agent and Claude.ai
+  work, and verified public/private red-team probes still fail closed.
 
 ## Phase 2: Retrieval Quality And Corpus Loop
 
