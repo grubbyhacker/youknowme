@@ -15,6 +15,7 @@ As of the Phase 1E cutover:
 - Production runtime directory: `/opt/youknowme`.
 - Production index mount: `/opt/youknowme/index:/data/index:ro`.
 - Production log mount: `/opt/youknowme/logs:/data/logs`.
+- Production intake mount: `/opt/youknowme/intake:/data/intake`.
 - Production env file: `/opt/youknowme/runtime.env`, mode `0600`.
 - POC origin container is stopped and kept for rollback: `roger-knowledge-mcp-phase0`.
 
@@ -50,6 +51,7 @@ YKM_AUTH_MODE=public
 YKM_INDEX_PATH=/data/index
 YKM_LOG_PATH=/data/logs/query-log.jsonl
 YKM_LOG_RETENTION_DAYS=90
+YKM_INTAKE_PATH=/data/intake
 YKM_EMBEDDING_PROVIDER=openrouter
 YKM_EMBEDDING_MODEL=openai/text-embedding-3-small
 YKM_EMBEDDING_DIMENSIONS=1536
@@ -73,6 +75,10 @@ Restart production:
 
 ```bash
 ssh hermes-vps '
+mkdir -p /opt/youknowme/index /opt/youknowme/logs /opt/youknowme/intake
+uid_gid=$(docker run --rm --entrypoint id youknowme:phase1e -u):$(docker run --rm --entrypoint id youknowme:phase1e -g)
+chown -R "$uid_gid" /opt/youknowme/logs /opt/youknowme/intake
+chmod 700 /opt/youknowme/logs /opt/youknowme/intake
 docker rm -f youknowme-phase1e >/dev/null 2>&1 || true
 docker run -d \
   --name youknowme-phase1e \
@@ -83,6 +89,7 @@ docker run -d \
   --env-file /opt/youknowme/runtime.env \
   -v /opt/youknowme/index:/data/index:ro \
   -v /opt/youknowme/logs:/data/logs \
+  -v /opt/youknowme/intake:/data/intake \
   --read-only \
   --tmpfs /tmp \
   --cap-drop ALL \
@@ -176,6 +183,17 @@ retrieve
 health
 ```
 
+It also exposes Phase 3 staged intake tools:
+
+```text
+upload
+feedback
+```
+
+`upload` writes bounded markdown bundles under `/opt/youknowme/intake/uploads/pending`; it does not
+index, merge, or open PRs. `feedback` appends bounded observations under
+`/opt/youknowme/intake/feedback/feedback.jsonl`.
+
 It also exposes compatibility aliases for the existing Phase 0 ChatGPT registration:
 
 ```text
@@ -202,6 +220,16 @@ ssh hermes-vps 'ls -l /opt/youknowme/logs && tail -n 20 /opt/youknowme/logs/quer
 
 Query logs should contain source IDs, result counts, latency, build ID, and errors. They must not
 contain raw query text or returned content.
+
+Protected intake:
+
+```bash
+ssh hermes-vps 'find /opt/youknowme/intake -maxdepth 4 -type f | sort | tail -n 20'
+```
+
+Intake may contain staged upload markdown and agent feedback. Treat it as sensitive input. Staged
+uploads are not part of the served corpus until a future Curator or human turns them into a reviewed
+corpus PR and the official index is rebuilt.
 
 ## Rollback
 

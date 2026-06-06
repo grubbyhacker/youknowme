@@ -21,7 +21,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH" \
     YKM_INDEX_PATH=/data/index \
-    YKM_LOG_PATH=/data/logs/query-log.jsonl
+    YKM_LOG_PATH=/data/logs/query-log.jsonl \
+    YKM_INTAKE_PATH=/data/intake
 
 RUN useradd --create-home --home-dir /home/ykm --shell /usr/sbin/nologin ykm
 
@@ -29,10 +30,10 @@ WORKDIR /app
 
 COPY --from=builder --chown=ykm:ykm /app/.venv ./.venv
 
-RUN mkdir -p /data/index /data/logs && \
-    chown -R ykm:ykm /data/logs /home/ykm && \
+RUN mkdir -p /data/index /data/logs /data/intake && \
+    chown -R ykm:ykm /data/logs /data/intake /home/ykm && \
     chmod 755 /data /data/index && \
-    chmod 700 /data/logs
+    chmod 700 /data/logs /data/intake
 
 USER ykm
 

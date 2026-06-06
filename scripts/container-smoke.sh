@@ -9,6 +9,7 @@ REQUESTED_YKM_EMBEDDING_MODEL="${YKM_EMBEDDING_MODEL:-}"
 REQUESTED_YKM_EMBEDDING_DIMENSIONS="${YKM_EMBEDDING_DIMENSIONS:-}"
 REQUESTED_YKM_CONTAINER_INDEX_PATH="${YKM_CONTAINER_INDEX_PATH:-}"
 REQUESTED_YKM_CONTAINER_LOG_DIR="${YKM_CONTAINER_LOG_DIR:-}"
+REQUESTED_YKM_CONTAINER_INTAKE_DIR="${YKM_CONTAINER_INTAKE_DIR:-}"
 REQUESTED_YKM_CONTAINER_PORT="${YKM_CONTAINER_PORT:-}"
 
 if [[ -f .env ]]; then
@@ -33,12 +34,16 @@ fi
 if [[ -n "$REQUESTED_YKM_CONTAINER_LOG_DIR" ]]; then
   YKM_CONTAINER_LOG_DIR="$REQUESTED_YKM_CONTAINER_LOG_DIR"
 fi
+if [[ -n "$REQUESTED_YKM_CONTAINER_INTAKE_DIR" ]]; then
+  YKM_CONTAINER_INTAKE_DIR="$REQUESTED_YKM_CONTAINER_INTAKE_DIR"
+fi
 if [[ -n "$REQUESTED_YKM_CONTAINER_PORT" ]]; then
   YKM_CONTAINER_PORT="$REQUESTED_YKM_CONTAINER_PORT"
 fi
 
 INDEX_DIR="${YKM_CONTAINER_INDEX_PATH:-${YKM_REAL_INDEX_PATH:-.ykm/real-index}}"
 LOG_DIR="${YKM_CONTAINER_LOG_DIR:-.ykm/container-smoke/logs}"
+INTAKE_DIR="${YKM_CONTAINER_INTAKE_DIR:-.ykm/container-smoke/intake}"
 PORT="${YKM_CONTAINER_PORT:-8765}"
 SECRET="${YKM_LOCAL_AUTH_SECRET:-container-smoke-secret}"
 
@@ -90,10 +95,13 @@ if [[ "$PROVIDER" == "openrouter" && -z "${OPENROUTER_API_KEY:-}" ]]; then
 fi
 
 mkdir -p "$LOG_DIR"
+rm -rf "$INTAKE_DIR"
+mkdir -p "$INTAKE_DIR"
 rm -f "$LOG_DIR/query-log.jsonl"
 
 export YKM_CONTAINER_INDEX_PATH="$INDEX_DIR"
 export YKM_CONTAINER_LOG_DIR="$LOG_DIR"
+export YKM_CONTAINER_INTAKE_DIR="$INTAKE_DIR"
 export YKM_CONTAINER_PORT="$PORT"
 export YKM_LOCAL_AUTH_SECRET="$SECRET"
 export YKM_EMBEDDING_PROVIDER="$PROVIDER"
@@ -118,7 +126,7 @@ for _ in {1..80}; do
   sleep 0.5
 done
 
-uv run python - "$PORT" "$SECRET" "$LOG_DIR/query-log.jsonl" <<'PY'
+uv run python - "$PORT" "$SECRET" "$LOG_DIR/query-log.jsonl" "$INTAKE_DIR" <<'PY'
 from __future__ import annotations
 
 import json
@@ -134,6 +142,7 @@ from mcp.client.session_group import ClientSessionGroup, StreamableHttpParameter
 port = sys.argv[1]
 secret = sys.argv[2]
 log_path = Path(sys.argv[3])
+intake_dir = Path(sys.argv[4])
 base_url = f"http://127.0.0.1:{port}"
 
 
@@ -157,11 +166,13 @@ async def main() -> None:
         )
         tools = await session.list_tools()
         tool_names = {tool.name for tool in tools.tools}
-        assert {"query", "retrieve", "health"}.issubset(tool_names), tool_names
+        assert {"query", "retrieve", "health", "upload", "feedback"}.issubset(tool_names), tool_names
         tool_descriptions = {tool.name: tool.description or "" for tool in tools.tools}
         assert "owner-specific" in tool_descriptions["query"]
         assert "hot tub chemistry" in tool_descriptions["query"]
         assert "owner-specific" in tool_descriptions["search"]
+        assert "does not publish, index, or merge" in tool_descriptions["upload"]
+        assert "not indexed" in tool_descriptions["feedback"]
 
         health = await session.call_tool("health", {})
         health_payload = json.loads(health.content[0].text)
@@ -194,6 +205,39 @@ async def main() -> None:
         assert retrieve_payload["found"] is True
         assert retrieve_payload["source_id"] == first["source_id"]
         assert retrieve_payload["section_id"] == first["section_id"]
+
+        upload = await session.call_tool(
+            "upload",
+            {
+                "files": [
+                    {
+                        "filename": "smoke-note.md",
+                        "content": "# Smoke Note\n\nA bounded staged upload for container smoke.",
+                    }
+                ],
+                "purpose": "container smoke",
+                "suggested_type": "note",
+                "suggested_tags": ["smoke"],
+            },
+        )
+        upload_payload = json.loads(upload.content[0].text)
+        assert upload_payload["accepted"] is True
+        assert upload_payload["status"] == "pending"
+        staged_path = intake_dir / upload_payload["staged_path"]
+        assert (staged_path / "manifest.json").exists()
+        assert (staged_path / "files" / "smoke-note.md").exists()
+
+        feedback = await session.call_tool(
+            "feedback",
+            {
+                "category": "agent_note",
+                "comment": "Container smoke verified bounded feedback logging.",
+                "upload_id": upload_payload["upload_id"],
+            },
+        )
+        feedback_payload = json.loads(feedback.content[0].text)
+        assert feedback_payload["accepted"] is True
+        assert (intake_dir / feedback_payload["path"]).exists()
 
     records = [json.loads(line) for line in log_path.read_text().splitlines() if line.strip()]
     assert records, "expected query log record"

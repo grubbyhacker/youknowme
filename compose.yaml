@@ -14,6 +14,7 @@ services:
       YKM_LOCAL_AUTH_SECRET: "${YKM_LOCAL_AUTH_SECRET:?YKM_LOCAL_AUTH_SECRET is required}"
       YKM_LOG_PATH: /data/logs/query-log.jsonl
       YKM_LOG_RETENTION_DAYS: "${YKM_LOG_RETENTION_DAYS:-90}"
+      YKM_INTAKE_PATH: /data/intake
       YKM_OWNER_EMAIL: "${YKM_OWNER_EMAIL:-}"
       YKM_CLOUDFLARE_TEAM_DOMAIN: "${YKM_CLOUDFLARE_TEAM_DOMAIN:-}"
       YKM_CLOUDFLARE_AUD: "${YKM_CLOUDFLARE_AUD:-}"
@@ -27,6 +28,9 @@ services:
       - type: bind
         source: ${YKM_CONTAINER_LOG_DIR:-.ykm/container-smoke/logs}
         target: /data/logs
+      - type: bind
+        source: ${YKM_CONTAINER_INTAKE_DIR:-.ykm/container-smoke/intake}
+        target: /data/intake
     read_only: true
     tmpfs:
       - /tmp

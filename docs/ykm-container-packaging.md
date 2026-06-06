@@ -9,6 +9,7 @@ The production image is built from `Dockerfile`.
 - Runtime command: `ykm serve --index "$YKM_INDEX_PATH" --mode "$YKM_AUTH_MODE" --host 0.0.0.0`.
 - Default index path: `/data/index`.
 - Default log path: `/data/logs/query-log.jsonl`.
+- Default intake path: `/data/intake`.
 - Runtime user: unprivileged `ykm`.
 - Healthcheck: `GET /livez`.
 
@@ -22,6 +23,7 @@ artifacts, local secrets, or repository write credentials.
 
 - Mounts `${YKM_CONTAINER_INDEX_PATH:-.ykm/real-index}` at `/data/index` as read-only.
 - Mounts `${YKM_CONTAINER_LOG_DIR:-.ykm/container-smoke/logs}` at `/data/logs` as writable.
+- Mounts `${YKM_CONTAINER_INTAKE_DIR:-.ykm/container-smoke/intake}` at `/data/intake` as writable.
 - Uses a read-only root filesystem with `/tmp` as tmpfs.
 - Requires `YKM_LOCAL_AUTH_SECRET` for local mode.
 
@@ -53,5 +55,7 @@ The smoke script:
 - authenticates with `X-YKM-Local-Secret`;
 - verifies MCP `health`, `query`, and `retrieve`;
 - verifies query logs contain returned source IDs and not raw query text or returned content.
+- verifies `upload` stages a bounded markdown bundle under intake;
+- verifies `feedback` appends a bounded JSONL record under intake.
 
 For real OpenRouter-backed indexes, `.env` must contain `OPENROUTER_API_KEY`.

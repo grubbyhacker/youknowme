@@ -6,7 +6,13 @@ from starlette.testclient import TestClient
 
 from ykm.build import build_index
 from ykm.embeddings import FakeEmbeddingProvider
-from ykm.server import QUERY_TOOL_DESCRIPTION, SEARCH_TOOL_DESCRIPTION, create_app
+from ykm.server import (
+    FEEDBACK_TOOL_DESCRIPTION,
+    QUERY_TOOL_DESCRIPTION,
+    SEARCH_TOOL_DESCRIPTION,
+    UPLOAD_TOOL_DESCRIPTION,
+    create_app,
+)
 
 
 def test_tool_descriptions_advertise_owner_specific_triggering() -> None:
@@ -18,6 +24,18 @@ def test_tool_descriptions_advertise_owner_specific_triggering() -> None:
     assert "hot tub chemistry" in description
     assert "thermostat" in description
     assert "prefer this over general training data" in description
+
+
+def test_write_tool_descriptions_advertise_staging_not_publishing() -> None:
+    description = f"{UPLOAD_TOOL_DESCRIPTION} {FEEDBACK_TOOL_DESCRIPTION}".lower()
+
+    assert "stage" in description
+    assert "ykm-upload-authoring-guidance" in description
+    assert "type: skill" in description
+    assert "does not publish, index, or merge" in description
+    assert "protected intake queue" in description
+    assert "inert protected log" in description
+    assert "not indexed" in description
 
 
 def test_private_liveness_has_no_provenance(tmp_path: Path, monkeypatch) -> None:

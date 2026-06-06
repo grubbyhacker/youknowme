@@ -174,12 +174,29 @@ ranking, or triggering/tool adoption before changing retrieval code.
 
 ## Phase 3: Write Paths
 
+Status: implemented as staged intake.
+
 Goal: add controlled write inputs while preserving the spine rule.
 
-- `upload`: markdown in, sanitize, open PR.
-- `feedback`: inert observation log for future Curator use.
-- Human reviews and merges all source changes.
-- Build provenance and trust rigor become more important here because input is less controlled.
+Completed:
+
+- `upload` stages bounded markdown bundles under protected filesystem intake; it does not publish,
+  index, merge, or choose final corpus paths.
+- `feedback` appends bounded structured observations to protected JSONL intake for future Curator
+  use.
+- The serving container still has no GitHub/corpus write credential and can only write runtime logs
+  plus `/data/intake`.
+- Intake guardrails cover file count, file size, total size, path traversal, non-markdown filenames,
+  binary/control bytes, script/HTML/data payloads, and high-confidence secrets.
+- Documented the Phase 4 Curator queue contract and rebuild/redeploy forward design in
+  `docs/ykm-phase3-intake.md`.
+
+Not included:
+
+- No Curator agent yet.
+- No GitHub PR/issue creation from YKM itself.
+- No automatic corpus rebuild/redeploy.
+- No indexing of staged upload or feedback content.
 
 ## Phase 4: Curator
 

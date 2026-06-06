@@ -13,9 +13,17 @@ from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
 from ykm.auth import AuthConfig, AuthMiddleware, AuthVerifier
-from ykm.contracts import QueryLogRecord, QueryRequest, RetrieveRequest
+from ykm.contracts import (
+    FeedbackRequest,
+    QueryLogRecord,
+    QueryRequest,
+    RetrieveRequest,
+    UploadFileInput,
+    UploadRequest,
+)
 from ykm.embeddings import provider_from_env
 from ykm.index import YkmIndex
+from ykm.intake import IntakeStore
 from ykm.logging import JsonlLogger, now_utc
 
 
@@ -43,6 +51,16 @@ FETCH_TOOL_DESCRIPTION = (
     "owner-specific source content."
 )
 HEALTH_TOOL_DESCRIPTION = "Report YouKnowMe index readiness and build provenance."
+UPLOAD_TOOL_DESCRIPTION = (
+    "Stage agent-curated markdown for future YouKnowMe corpus review. Before preparing an upload, "
+    "retrieve and follow the normal YKM guidance source ykm-upload-authoring-guidance "
+    "(type: skill). This does not publish, index, or merge content. It stores bounded markdown files "
+    "in the protected intake queue for later human or Curator processing."
+)
+FEEDBACK_TOOL_DESCRIPTION = (
+    "Record bounded feedback about missing, stale, wrong, or unclear YouKnowMe content. Feedback is "
+    "an inert protected log for future Curator review; it is not indexed or shown in query results."
+)
 PROTECTED_RESOURCE_METADATA_PATHS = (
     "/.well-known/oauth-protected-resource",
     "/.well-known/oauth-protected-resource/mcp",
@@ -52,6 +70,7 @@ PROTECTED_RESOURCE_METADATA_PATHS = (
 def create_app(index_path: Path, mode: str = "local") -> Starlette:
     auth_config = AuthConfig.from_env(mode)
     index = YkmIndex(index_path, provider_from_env())
+    intake = IntakeStore(Path(os.getenv("YKM_INTAKE_PATH", "/data/intake")))
     logger = JsonlLogger(
         Path(os.getenv("YKM_LOG_PATH")) if os.getenv("YKM_LOG_PATH") else None,
         int(os.getenv("YKM_LOG_RETENTION_DAYS", "90")),
@@ -208,6 +227,50 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
     @mcp.tool(description=HEALTH_TOOL_DESCRIPTION)
     def health() -> dict[str, Any]:
         return index.health().model_dump(mode="json")
+
+    @mcp.tool(description=UPLOAD_TOOL_DESCRIPTION)
+    def upload(
+        files: list[dict[str, str]],
+        purpose: str | None = None,
+        suggested_type: str | None = None,
+        suggested_tags: list[str] | None = None,
+        suggested_related: list[str] | None = None,
+    ) -> dict[str, Any]:
+        response = intake.stage_upload(
+            UploadRequest(
+                files=[UploadFileInput(**file) for file in files],
+                purpose=purpose,
+                suggested_type=suggested_type,
+                suggested_tags=suggested_tags or [],
+                suggested_related=suggested_related or [],
+            ),
+            build_id=index.manifest.build_id,
+            auth_path="mcp",
+        )
+        return response.model_dump(mode="json")
+
+    @mcp.tool(description=FEEDBACK_TOOL_DESCRIPTION)
+    def feedback(
+        category: str,
+        comment: str,
+        source_id: str | None = None,
+        section_id: str | None = None,
+        result_ids: list[str] | None = None,
+        upload_id: str | None = None,
+    ) -> dict[str, Any]:
+        response = intake.record_feedback(
+            FeedbackRequest(
+                category=category,
+                comment=comment,
+                source_id=source_id,
+                section_id=section_id,
+                result_ids=result_ids or [],
+                upload_id=upload_id,
+            ),
+            build_id=index.manifest.build_id,
+            auth_path="mcp",
+        )
+        return response.model_dump(mode="json")
 
     async def livez(_request) -> JSONResponse:
         return JSONResponse({"status": "ok", "service": SERVICE_NAME})
