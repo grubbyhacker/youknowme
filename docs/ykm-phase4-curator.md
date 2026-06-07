@@ -13,7 +13,12 @@ intake and before any Curator runtime is built.
 
 The Curator's first useful job is intake triage, not broad autonomous corpus maintenance.
 
-Phase 4 v1 should:
+In this document, "initial scope" means the first production-safe manual Curator workflow. It is not
+a full versioned release plan. It means enough Curator behavior to process staged uploads and
+feedback, open reviewed PRs/issues, maintain its own PRs, and persist run state without giving the
+Curator merge, deploy, or always-on authority.
+
+Initial scope should:
 
 - Drain staged upload bundles from the YKM intake queue.
 - Review actionable feedback records and turn them into corpus PRs or GitHub issues.
@@ -23,7 +28,7 @@ Phase 4 v1 should:
 - Build the Curator as an SDK-first agent system so we learn the mechanics of typed agent
   development rather than delegating the whole workflow to an existing coding agent shell.
 
-Phase 4 v1 should not:
+Initial scope should not:
 
 - Automatically merge PRs.
 - Rebuild or redeploy the live YKM index.
@@ -138,7 +143,7 @@ state.
 
 ## Agent SDK Direction
 
-Phase 4 v1 should be SDK-first and provider-neutral.
+The first implementation should be SDK-first and provider-neutral.
 
 Implementation should live in this repository initially because the Curator is part of the
 YouKnowMe lifecycle and should be tested against the YKM intake contracts.
@@ -272,7 +277,7 @@ actions, but GitHub mutations need hard per-run ceilings for opened PRs plus fil
 and PR creation count against these ceilings; updates to existing Curator PR branches or comments on
 existing Curator PRs do not, because PR maintenance runs before new work and should not be starved.
 
-Upload processing should not be permanently starved by feedback. v1 should use separate mutation
+Upload processing should not be permanently starved by feedback. Initial scope should use separate mutation
 sub-budgets or a fairness rule so a noisy feedback batch cannot consume every new GitHub object every
 run while pending uploads wait. Valid over-cap actions should be capacity-deferred with an immediate
 retry trigger for the next run, not mixed with owner-blocked `defer` decisions.
@@ -417,7 +422,7 @@ The feedback batch plan is the durable explanation of Curator agency for a run. 
 Each action in the plan must cite its evidence. Evidence should include the relevant feedback IDs
 and, when available, upload IDs, source IDs, section IDs, result IDs, or query-log references.
 
-Allowed v1 feedback action types:
+Allowed initial-scope feedback action types:
 
 - `no_action`: positive, non-actionable, duplicate, superseded, or insufficiently grounded feedback.
 - `issue`: owner action, product follow-up, corpus maintenance, or ambiguous work that needs review.
@@ -574,7 +579,7 @@ or "let's hold off" should close or defer work, not prompt the Curator to keep p
 
 ## Corpus Maintenance
 
-Proactive corpus maintenance should be issue-only in v1.
+Proactive corpus maintenance should be issue-only in initial scope.
 
 The Curator may notice maintenance candidates while processing intake, such as:
 
@@ -584,12 +589,12 @@ The Curator may notice maintenance candidates while processing intake, such as:
 - Labels that should be promoted into frontmatter.
 - Entity disambiguation candidates, such as distinct same-kind subjects.
 
-In v1, these become labeled backlog issues. They should not become proactive cleanup PRs unless they
-are directly necessary to process a specific upload or feedback item.
+In initial scope, these become labeled backlog issues. They should not become proactive cleanup PRs
+unless they are directly necessary to process a specific upload or feedback item.
 
-Entity identity remains Curator-owned over time, but v1 should represent entity work as corpus
-frontmatter, tags, related links, aliases, and issue backlog items. Do not introduce a separate entity
-database or query-path entity resolution.
+Entity identity remains Curator-owned over time, but initial scope should represent entity work as
+corpus frontmatter, tags, related links, aliases, and issue backlog items. Do not introduce a separate
+entity database or query-path entity resolution.
 
 ## Safety And Prompt-Injection Policy
 
@@ -766,7 +771,7 @@ Manual acceptance:
 - Owner merges.
 - Curator marks linked intake processed on a later run.
 - Curator files a labeled issue for ambiguous feedback.
-- Curator does not create proactive cleanup PRs in v1.
+- Curator does not create proactive cleanup PRs in initial scope.
 - Curator makes model calls through the broker/proxy without provider keys in the sandbox.
 - Curator run reports clearly show partial failures and whether the feedback checkpoint advanced.
 
@@ -779,8 +784,8 @@ Manual acceptance:
 - What `gh-agent-proxy` changes are needed for the first self-hosted model broker/proxy?
 - What is the issue allowlist for cross-repo filing?
 - What retention policy should apply to processed, rejected, and archived intake?
-- How much query-log context is acceptable during v1? Current default: only use logs as supporting
-  context when feedback references result/source IDs.
+- How much query-log context is acceptable in initial scope? Current default: only use logs as
+  supporting context when feedback references result/source IDs.
 - What soft action-volume threshold should trigger extra reporting for a feedback batch?
 - What hard per-run GitHub mutation ceiling should the broker enforce?
 - What upload/feedback fairness split should apply within the GitHub mutation ceiling?
@@ -803,6 +808,6 @@ Manual acceptance:
 - Assign owner-action and product/service issues to Roger by default.
 - Hard cap on GitHub mutations per run with upload/feedback fairness; soft cap on planned actions.
 - Capacity-deferred work retries on the next run.
-- No proactive cleanup PRs in v1.
+- No proactive cleanup PRs in initial scope.
 - No always-on worker until the manual lifecycle is proven.
 - No live index rebuild or deploy responsibility in the Curator.
