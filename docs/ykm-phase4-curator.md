@@ -120,6 +120,11 @@ The controller owns:
 - Policy enforcement.
 - Run locking.
 
+This document uses "feedback planning" for one orchestration step inside a Curator run. It is not a
+separate daemon or independent product. In that step, the controller gathers the feedback batch and
+context, asks the agent layer for a proposed action plan, validates that plan, and then executes only
+the allowed actions.
+
 The agent layer owns bounded reasoning tasks:
 
 - Plan over feedback batches since the previous run.
@@ -272,10 +277,11 @@ Issue routing defaults:
 - Issue and PR bodies should summarize and cite source IDs or feedback IDs rather than dumping large
   private source excerpts.
 
-Broker-side mutation limits should be explicit. The feedback planner may have a soft cap on proposed
-actions, but GitHub mutations need hard per-run ceilings for opened PRs plus filed issues. New issue
-and PR creation count against these ceilings; updates to existing Curator PR branches or comments on
-existing Curator PRs do not, because PR maintenance runs before new work and should not be starved.
+Broker-side mutation limits should be explicit. The feedback planning step may have a soft cap on
+proposed actions, but GitHub mutations need hard per-run ceilings for opened PRs plus filed issues.
+New issue and PR creation count against these ceilings; updates to existing Curator PR branches or
+comments on existing Curator PRs do not, because PR maintenance runs before new work and should not be
+starved.
 
 Upload processing should not be permanently starved by feedback. Initial scope should use separate mutation
 sub-budgets or a fairness rule so a noisy feedback batch cannot consume every new GitHub object every
@@ -487,8 +493,8 @@ Positive feedback and non-actionable feedback should usually produce no correcti
 negative feedback should not trigger speculative corpus edits. Actionable feedback with source
 pointers may produce a PR if the fix is clear.
 
-Current production feedback should be used as E2E test data for the planner. Tests should assert the
-shape of the resulting plan, not exact wording. Useful scenarios include:
+Current production feedback should be used as E2E test data for feedback planning. Tests should
+assert the shape of the resulting plan, not exact wording. Useful scenarios include:
 
 - Noisy self-correcting feedback collapses into a small number of actions plus superseded/no-op
   dispositions.
@@ -760,8 +766,8 @@ Model tests:
 - Model broker/proxy tests verify per-run call/token budgets fail closed.
 - Real production feedback fixtures must remain inside the appropriate private boundary or be
   redacted/synthesized before being checked into this repo.
-- At least half of planner fixtures should be synthetic, shape-based cases to avoid overfitting to
-  the current production feedback batch.
+- At least half of feedback-planning fixtures should be synthetic, shape-based cases to avoid
+  overfitting to the current production feedback batch.
 
 Manual acceptance:
 
