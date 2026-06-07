@@ -15,3 +15,5 @@ Current planning artifacts:
 - `ykm-phase2-runbook.md` - retrieval quality and private eval loop for Phase 2.
 - `ykm-phase3-intake.md` - staged upload/feedback intake contract and forward Curator design.
 - `ykm-phase4-curator.md` - Curator agent plan, state machines, runtime direction, and open questions.
+- `ykm-curator-prerequisite-milestone.md` - broker, proxy, GitHub app, and deployment prerequisites
+  before Curator implementation.
