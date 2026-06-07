@@ -388,9 +388,9 @@ The Curator should track offsets or processed IDs in `curator-state.json`, persi
 under `feedback/runs/<run_id>/feedback-plan.json`, and append per-feedback dispositions to
 `curator-decisions.jsonl`.
 
-`curator-decisions.jsonl` is an append-only history. The current disposition of a feedback record is
-the last valid decision for that `feedback_id` after sorting by timestamp and then append order. This
-projection should be deterministic and tested.
+`curator-decisions.jsonl` should keep every decision the Curator has made. When the Curator needs the
+current status for one feedback record, it should use the newest decision for that `feedback_id`. If
+two decisions have the same timestamp, the later line in the file wins. This rule should be tested.
 
 If no previous checkpoint exists, the first production Curator run should plan over all existing
 feedback. The currently submitted production feedback should also become E2E fixture material for
@@ -631,8 +631,8 @@ failure status, and the next checkpoint if it advanced.
   feedback decision records.
 - Add additive feedback categories to the YKM contract.
 - Add tests for the new feedback categories.
-- Add contracts for run locking, feedback offset snapshots, action idempotency keys, and current
-  decision projection.
+- Add contracts for run locking, feedback offset snapshots, action idempotency keys, and the rule for
+  finding the current feedback decision.
 
 ### Slice 2: Deterministic Skeleton
 
@@ -650,7 +650,7 @@ failure status, and the next checkpoint if it advanced.
 - Implement atomic upload claim.
 - Write and update `curator.json`.
 - Track feedback checkpoints, run plans, and per-feedback dispositions.
-- Implement the append-only decision projection.
+- Implement the rule for finding the current feedback decision from the append-only decision log.
 - Implement deferred feedback and deferred upload re-entry triggers.
 - Add fixture tests for state transitions and idempotency.
 
@@ -709,7 +709,7 @@ Offline tests:
   `non_actionable`.
 - Upload state transitions are valid and invalid transitions fail.
 - Feedback decisions are idempotent across repeated runs.
-- Current feedback disposition projection is deterministic over append-only decisions.
+- Current feedback status is read consistently from the append-only decision log.
 - Feedback batch plans support many-feedback-to-one-action and one-feedback-to-many-action mappings.
 - Feedback batch actions cite evidence IDs.
 - Feedback batch start/end offsets freeze records appended during a run for the next run.
