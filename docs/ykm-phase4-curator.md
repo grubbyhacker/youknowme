@@ -244,7 +244,7 @@ Broker policy should deny:
 - Writes to non-allowlisted repositories.
 - Secret exfiltration through broad host access.
 - Unbounded issue creation.
-- Issue creation in public repositories.
+- Issue creation in public repositories except explicitly allowlisted public product repositories.
 - Unbounded PR or issue body content copied from private corpus or intake sources.
 
 All Curator-created issues should carry `ykm-curator`, plus more specific labels when useful:
@@ -261,7 +261,9 @@ Issue routing defaults:
 - Product, service, tool-description, schema, and Curator implementation issues go to this YKM repo.
 - `needs_owner_action` issues are assigned to Roger by default.
 - Product or service follow-up issues are also assigned to Roger by default.
-- All issue targets must be private repositories unless Roger explicitly decides otherwise.
+- Corpus and owner-fact issue targets must be private unless Roger explicitly decides otherwise.
+- Public product repositories, including this YKM repo, may receive product/service/implementation
+  issues when the body contains no private corpus, intake, log, or personal-memory content.
 - Issue and PR bodies should summarize and cite source IDs or feedback IDs rather than dumping large
   private source excerpts.
 
@@ -726,7 +728,8 @@ Fixture or mocked-broker tests:
 - Push to `main` denied.
 - PR merge denied.
 - Issue creation allowed only for allowlisted repos.
-- Public issue repositories are denied unless explicitly allowed by policy.
+- Public issue repositories are denied unless explicitly allowed by policy for non-sensitive
+  product/service work.
 - PR/issue bodies are bounded and do not dump large corpus or intake excerpts.
 - Hard per-run GitHub mutation limits defer over-cap actions.
 - Upload PR creation is not indefinitely starved by feedback issue/PR creation.
