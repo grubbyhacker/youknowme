@@ -62,7 +62,8 @@ def test_curator_dry_run_fails_when_forbidden_secret_env_is_present(
     assert report.status == "fail"
     forbidden = next(probe for probe in report.probes if probe.name == "forbidden-env")
     assert forbidden.status == "fail"
-    assert forbidden.details == {"names": ["OPENROUTER_API_KEY"]}
+    assert "OPENROUTER_API_KEY" in forbidden.details["names"]
+    assert "secret-value" not in json.dumps(forbidden.model_dump(mode="json"))
 
 
 def test_curator_dry_run_can_require_broker_probe(tmp_path: Path, monkeypatch) -> None:
