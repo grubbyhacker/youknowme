@@ -209,6 +209,22 @@ fixtures only and should not be treated as production-ready.
 
 The Curator should run in a sandboxed container launched by `gh-agent-broker` sandbox-broker.
 
+Live broker contract as of 2026-06-08:
+
+- Broker Git remote for workers: `http://broker:8080/git/grubbyhacker/ykmcorpus.git`.
+- Workers should not use direct GitHub SSH or HTTPS remotes.
+- Broker principal: `BROKER_AGENT_ID=ykm-curator`.
+- Broker secret is injected by sandbox-broker from the VPS environment.
+- GitHub app context: `ykm-curator`.
+- GitHub app ID: `3991340`.
+- Installation ID for `grubbyhacker/ykmcorpus`: `138708452`.
+- Allowed branch pattern: `curator/<run-id>/<slug>`.
+- Allowed base branch: `main`.
+- Required PR metadata:
+  - `YKM-Curator-Run`
+  - `YKM-Curator-Action` with one of `upload`, `feedback`, or `maintenance`
+- Known caveat: broker issue `#27` tracks protection against reusing branches from merged PRs.
+
 The Curator container should receive:
 
 - Staged feedback and upload bundle contents mounted read-only as evidence.
@@ -282,6 +298,16 @@ proposed actions, but GitHub mutations need hard per-run ceilings for opened PRs
 New issue and PR creation count against these ceilings; updates to existing Curator PR branches or
 comments on existing Curator PRs do not, because PR maintenance runs before new work and should not be
 starved.
+
+Live YKM mutation budget concept:
+
+- `run_metadata_field: YKM-Curator-Run`
+- `action_metadata_field: YKM-Curator-Action`
+- `max_new_objects_per_run: 4`
+- `upload: 2`
+- `feedback: 2`
+- Enforced for `pull.create` and `issue.create`.
+- Over-budget denials return structured `capacity_deferred` responses.
 
 Upload processing should not be permanently starved by feedback. Initial scope should use separate mutation
 sub-budgets or a fairness rule so a noisy feedback batch cannot consume every new GitHub object every
@@ -514,6 +540,10 @@ blocked on owner input.
 
 The Curator must maintain its own active PRs. Opening a PR is not completion.
 
+The deployed prereq broker image exposes read APIs for PR list/read/files/comments/reviews,
+review-comments, review-threads, commit status, and check runs. The Curator should use brokered reads
+for reconciliation rather than direct GitHub access.
+
 GitHub is authoritative for PR and issue state. Local `curator.json`, run plans, and decision logs
 are durable Curator state, but they are reconciled against GitHub at run start. If local metadata and
 GitHub disagree, the Curator should prefer GitHub's current PR/issue state and append a reconciliation
@@ -654,6 +684,8 @@ failure status, and the next checkpoint if it advanced.
 - Build a feedback batch from records since the last checkpoint.
 - Freeze feedback start/end offsets at run start.
 - Discover Curator PR markers through broker calls, initially in dry-run or fixture mode.
+- Use the live broker remote `http://broker:8080/git/grubbyhacker/ykmcorpus.git` in sandboxed dry
+  runs.
 - Emit a run report without changing queues or GitHub state.
 
 ### Slice 3: Queue State
@@ -667,7 +699,7 @@ failure status, and the next checkpoint if it advanced.
 
 ### Slice 4: Broker Integration
 
-- Clone/fetch `ykmcorpus` through broker.
+- Clone/fetch `ykmcorpus` through the broker Git remote.
 - Create Curator branches through broker.
 - Open PRs through broker.
 - File allowlisted issues through broker.
@@ -677,7 +709,8 @@ failure status, and the next checkpoint if it advanced.
 
 ### Slice 4A: Model Broker Boundary
 
-- Choose or implement the model broker/proxy interface, likely in `gh-agent-proxy`.
+- Use the live `gh-agent-proxy` model endpoint from inside the Docker/Hermes network:
+  `http://gh-agent-proxy:8092/v1/model/call`.
 - Keep provider keys outside the Curator sandbox.
 - Allow Curator egress only to the model broker/proxy and required broker endpoints.
 - Keep the proxy self-hosted by default; hosted third-party proxy use requires an explicit design
@@ -787,15 +820,15 @@ Manual acceptance:
 - Should the Curator package be part of `src/ykm` or live under a separate package namespace in this
   repo?
 - What exact broker interface should the Curator call: MCP, CLI, HTTP, or another adapter?
-- What `gh-agent-proxy` changes are needed for the first self-hosted model broker/proxy?
 - What is the issue allowlist for cross-repo filing?
 - What retention policy should apply to processed, rejected, and archived intake?
 - How much query-log context is acceptable in initial scope? Current default: only use logs as
   supporting context when feedback references result/source IDs.
 - What soft action-volume threshold should trigger extra reporting for a feedback batch?
-- What hard per-run GitHub mutation ceiling should the broker enforce?
-- What upload/feedback fairness split should apply within the GitHub mutation ceiling?
-- What per-run model-call and token budgets should the proxy enforce?
+- What Curator worker image/entrypoint and sandbox template should use the live broker/proxy contract?
+- How should Curator avoid or recover from branch reuse until broker issue `#27` is fixed?
+- What production model-call and token budgets should the proxy enforce beyond the current prereq
+  smoke settings?
 - What stale-lock timeout and recovery command should manual runs use?
 
 ## Recommended Defaults
@@ -807,8 +840,7 @@ Manual acceptance:
 - Single-flight run lock and frozen feedback window.
 - SDK-first Python implementation.
 - Provider-neutral model adapter.
-- Model calls through a broker/proxy; no provider keys in the Curator sandbox.
-- Model proxy likely lives in `gh-agent-proxy` and is self-hosted by default.
+- Model calls through live `gh-agent-proxy`; no provider keys in the Curator sandbox.
 - Intake evidence read-only, queue moves narrowly writable, Curator state read-write, logs read-only.
 - Corpus PRs and allowlisted issues only.
 - Assign owner-action and product/service issues to Roger by default.

@@ -1,6 +1,6 @@
 # YouKnowMe Curator Prerequisite Milestone
 
-Status: ready to start.
+Status: mostly complete; ready for Curator-side dry-run integration.
 
 This milestone removes known external blockers before implementing the Curator itself. It covers
 GitHub app setup, broker capabilities, issue read/write flows, model proxying, sandbox runtime shape,
@@ -12,7 +12,7 @@ path.
 
 ## Current Starting Point
 
-Already done:
+Already done before this milestone:
 
 - `YKM Curator` GitHub App exists and is installed on private `grubbyhacker/ykmcorpus`.
 - `GrubbyHacker Issue Reporter` can file issues in all needed repositories.
@@ -33,9 +33,102 @@ Important auth note:
   A GitHub App client secret is for user OAuth flows and is not enough by itself for installation
   access.
 
+## Live Broker Status
+
+As of 2026-06-08, the broker side has live YKM Curator support on `hermes-vps`.
+
+GitHub app and broker identity:
+
+- GitHub app context: `ykm-curator`.
+- App ID: `3991340`.
+- Installation ID: `138708452`.
+- Repository: `grubbyhacker/ykmcorpus`.
+- Worker principal: `BROKER_AGENT_ID=ykm-curator`.
+- Worker secret: injected by sandbox-broker from the VPS environment.
+- Workers receive broker credentials only. They do not receive GitHub tokens or the GitHub App PEM.
+
+Broker-mediated Git:
+
+- Workers should use only `http://broker:8080/git/grubbyhacker/ykmcorpus.git`.
+- Workers should not use direct GitHub SSH or HTTPS remotes.
+- Allowed branch pattern: `curator/<run-id>/<slug>`.
+- Allowed base branch: `main`.
+- Known caveat: broker issue `#27` tracks protection against reusing branches from merged PRs.
+
+Required PR metadata:
+
+```json
+{
+  "YKM-Curator-Run": "<run-id>",
+  "YKM-Curator-Action": "upload|feedback|maintenance"
+}
+```
+
+Live E2E result:
+
+- PR: `https://github.com/grubbyhacker/ykmcorpus/pull/1`.
+- Branch: `curator/hermes-live-e2e-20260608/test-change`.
+- Run ID: `20260608T022143Z-98cf2065a920f79a`.
+
+Broker image:
+
+- Deployed locally on `hermes-vps` as `gh-agent-broker:ykm-prereqs-20260608`.
+- The live broker and issue reporter are running this image.
+
+New read APIs are available for broker-authorized principals:
+
+- issue list/read/comments;
+- PR list/read/files/comments/reviews/review-comments/review-threads;
+- commit status;
+- check runs.
+
+Reporter MCP read tools are available:
+
+- `broker_get_issue`
+- `broker_search_issues`
+- `broker_list_issue_comments`
+
+Mutation budgets:
+
+- Broker code supports durable mutation budgets.
+- Current YKM concept:
+  - `run_metadata_field: YKM-Curator-Run`
+  - `action_metadata_field: YKM-Curator-Action`
+  - `max_new_objects_per_run: 4`
+  - `upload: 2`
+  - `feedback: 2`
+- Enforced for `pull.create` and `issue.create`.
+- Over-budget denials return structured `capacity_deferred` responses.
+
+Model proxy:
+
+- Services: `litellm` and `gh-agent-proxy`.
+- Docker/Hermes network endpoint: `http://gh-agent-proxy:8092/v1/model/call`.
+- Host-local health endpoint: `http://127.0.0.1:8092/healthz`.
+- Workers call with `Authorization: Bearer <GH_AGENT_PROXY_TOKEN>`.
+- The token is injected by sandbox/broker environment and must not be hard-coded.
+- Allowed models:
+  - `google/gemma-4-26b-a4b-it`
+  - `google/gemma-4-26b-a4b-it:free`
+- The free model is policy-allowed but returned upstream 429 during testing; Curator should not
+  depend on free-model availability.
+- Proxy enforces bearer auth, allowed model list, per-run call/token budgets, request/response size
+  limits, and timeout.
+- Audit logs include run ID, model, decision, token counts, and errors. They do not include prompt
+  bodies by default.
+
+Sandbox mounts:
+
+- Broker code supports operator-configured sandbox template `extra_mounts`.
+- Callers cannot request arbitrary mounts.
+- Mounts must be configured by the operator in the sandbox template.
+- Unsafe paths and reserved mount targets are rejected.
+
 ## Workstream 1: GitHub App And Broker Config
 
 Add a Curator-specific GitHub app context to broker production config.
+
+Status: complete on `hermes-vps`.
 
 Requirements:
 
@@ -65,7 +158,13 @@ Acceptance:
 
 ## Workstream 2: Broker Read Surfaces
 
-The Curator needs read access for reconciliation. Current broker/reporter write paths are not enough.
+The Curator needs read access for reconciliation.
+
+Status: complete in deployed prereq broker image.
+
+Original requirement:
+
+Current broker/reporter write paths were not enough.
 Add either brokered CLI commands, broker REST endpoints, MCP tools, or a combination. The security
 posture is acceptable as long as the broker keeps auth and policy enforcement central and does not
 put raw GitHub tokens in the Curator container.
@@ -99,6 +198,8 @@ Acceptance:
 
 Add broker-side limits that protect Roger's review queue.
 
+Status: implemented for `pull.create` and `issue.create`.
+
 Requirements:
 
 - Hard per-run limit for new GitHub objects.
@@ -117,6 +218,8 @@ Acceptance:
 
 The existing reporter MCP write path is useful and should remain. Add read/query support so the
 Curator can use the same issue channel for owner-action and product/service issue lifecycle.
+
+Status: complete in deployed reporter MCP service.
 
 Required MCP additions:
 
@@ -142,6 +245,8 @@ Acceptance:
 
 Build or adapt a self-hosted model proxy so the Curator never receives provider keys.
 
+Status: live on `hermes-vps`.
+
 Requirements:
 
 - Likely home: `gh-agent-proxy`.
@@ -164,6 +269,9 @@ Acceptance:
 ## Workstream 6: Curator Sandbox Template
 
 Add a sandbox-broker template for manual Curator runs.
+
+Status: partially complete. Broker code supports operator-configured `extra_mounts`; the final YKM
+Curator template still needs to be defined once the Curator worker image/entrypoint exists.
 
 Requirements:
 
@@ -190,6 +298,9 @@ Acceptance:
 ## Workstream 7: Deployment And Operator Runbook
 
 Document how these services run together on `hermes-vps`.
+
+Status: partially complete. Live broker/proxy details are captured above; a final operator runbook
+still needs exact service names, config paths, mount paths, and smoke commands.
 
 Expected production shape:
 
@@ -258,3 +369,11 @@ This prerequisite milestone is done when:
 - Sandbox-broker has a Curator dry-run template with the right mounts and network limits.
 - A manual dry-run worker can produce a run report proving all external dependencies are reachable
   without raw GitHub or provider credentials in the worker.
+
+Remaining before marking fully done:
+
+- Define the final YKM Curator sandbox template and mount paths.
+- Add a Curator-side dry-run worker that exercises broker Git, PR/issue reads, issue reporter reads,
+  model proxy, and output report writing.
+- Record the exact deployment/runbook paths and smoke commands.
+- Decide how Curator should handle broker issue `#27` until branch-reuse protection lands.
