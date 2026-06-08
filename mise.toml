@@ -33,3 +33,7 @@ run = "scripts/local-mcp-smoke.sh"
 [tasks.container-smoke]
 description = "Run containerized local MCP smoke against an existing index"
 run = "scripts/container-smoke.sh"
+
+[tasks.index-promotion-smoke]
+description = "Run local Docker E2E smoke for index artifact promotion"
+run = "scripts/index-promotion-smoke.sh"

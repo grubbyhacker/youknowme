@@ -36,6 +36,68 @@ The Dockerfile uses a builder stage so dependency installation is cached separat
 source installation. The runtime image contains the finished virtualenv but not `uv`, the source
 tree, or uv's build cache. The Phase 1E minimized image measured about 194 MB on `hermes-vps`.
 
+## Promote A Private Corpus Index Artifact
+
+The private `ykmcorpus` Actions workflow uploads a GitHub artifact ZIP containing:
+
+```text
+youknowme-index-<source_commit>-<build_id>.tar.gz
+youknowme-index-<source_commit>-<build_id>.sha256
+youknowme-index-<source_commit>-<build_id>.build-report.json
+```
+
+The `.tar.gz` contains the deployable index directory:
+
+```text
+index/
+  manifest.json
+  chunks.jsonl
+  warnings.jsonl
+  quarantine.jsonl
+  lancedb/
+```
+
+Copy the downloaded artifact ZIP to the VPS:
+
+```bash
+scp youknowme-index-<run>.zip hermes-vps:/opt/youknowme/incoming/
+```
+
+Promote it manually:
+
+```bash
+ssh hermes-vps '
+sudo /opt/youknowme/bin/relaunch-container-with-new-index.sh \
+  --artifact /opt/youknowme/incoming/youknowme-index-<run>.zip
+'
+```
+
+The utility:
+
+- verifies the ZIP contains exactly one tarball, checksum, and build report;
+- verifies the tarball checksum;
+- validates the unpacked index with the production YKM image;
+- installs the index under `/opt/youknowme/index-builds/<source_commit>-<build_id>/`;
+- updates `/opt/youknowme/index-current`;
+- records the previous target in `/opt/youknowme/index-previous`;
+- recreates `youknowme-phase1e` with the same network aliases, env file, log mount, and intake
+  mount;
+- verifies `/livez` and fail-closed unauthenticated `/mcp`.
+
+The production container should mount `/opt/youknowme/index-current:/data/index:ro` after this
+promotion path is adopted. Recreating the container is intentional: YKM opens `manifest.json`,
+`chunks.jsonl`, and LanceDB at startup and does not hot-reload the index.
+
+For local E2E verification of the same promotion path:
+
+```bash
+mise run index-promotion-smoke
+```
+
+This smoke builds two fake index artifacts, promotes both through Docker, verifies the active
+`build_id` changes, queries content that exists only in the promoted index, and confirms a corrupt
+artifact is rejected without changing the active index.
+
 When deploying an index built from an uncommitted corpus working tree, `source_commit` is marked as:
 
 ```text
