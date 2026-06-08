@@ -45,3 +45,7 @@ run = "uv run scripts/download-latest-corpus-index-artifact.py"
 [tasks.watch-and-promote-corpus-index]
 description = "Run the containerized corpus index watcher and promote a newer artifact from the host"
 run = "scripts/watch-and-promote-corpus-index.sh"
+
+[tasks.curator-dry-run]
+description = "Run the local Curator dry-run harness against ignored local fixtures"
+run = "rm -rf .ykm/curator-dry-run && mkdir -p .ykm/curator-dry-run/intake/uploads/pending .ykm/curator-dry-run/logs .ykm/curator-dry-run/output && env -u GITHUB_TOKEN -u GH_TOKEN -u OPENROUTER_API_KEY -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u YKM_GITHUB_PRIVATE_KEY_PATH -u YKM_CF_ACCESS_CLIENT_SECRET uv run ykm curator-dry-run --run-id local-curator-dry-run --intake .ykm/curator-dry-run/intake --logs .ykm/curator-dry-run/logs --output .ykm/curator-dry-run/output --no-task"

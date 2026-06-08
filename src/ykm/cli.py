@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import uvicorn
@@ -10,6 +11,7 @@ from dotenv import load_dotenv
 from ykm.artifact import ArtifactError, package_index, validate_index
 from ykm.build import build_index
 from ykm.contracts import QueryRequest, RetrieveRequest
+from ykm.curator import CuratorDryRunConfig, run_curator_dry_run
 from ykm.embeddings import provider_from_env
 from ykm.eval import load_eval_suite, run_eval
 from ykm.index import YkmIndex
@@ -17,8 +19,6 @@ from ykm.server import create_app
 
 
 def main() -> None:
-    load_dotenv()
-
     parser = argparse.ArgumentParser(prog="ykm")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -69,7 +69,23 @@ def main() -> None:
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8765)
 
+    curator = subparsers.add_parser("curator-dry-run")
+    curator.add_argument("--run-id", default=os.getenv("SANDBOX_RUN_ID", "local-curator-dry-run"))
+    curator.add_argument("--intake", type=Path, default=Path(os.getenv("YKM_INTAKE_PATH", "/data/intake")))
+    curator.add_argument("--logs", type=Path, default=Path(os.getenv("YKM_LOG_DIR", "/data/logs")))
+    curator.add_argument("--output", type=Path, default=Path(os.getenv("YKM_CURATOR_OUTPUT", "/output")))
+    curator.add_argument("--task", type=Path, default=Path("/input/task.json"))
+    curator.add_argument("--no-task", action="store_true")
+    curator.add_argument("--broker-url", default=os.getenv("BROKER_URL"))
+    curator.add_argument("--model-proxy-url", default=os.getenv("GH_AGENT_PROXY_URL"))
+    curator.add_argument("--model-proxy-token", default=os.getenv("GH_AGENT_PROXY_TOKEN"))
+    curator.add_argument("--require-broker", action="store_true")
+    curator.add_argument("--require-model-proxy", action="store_true")
+
     args = parser.parse_args()
+    if args.command != "curator-dry-run":
+        load_dotenv()
+
     if args.command == "build":
         output = build_index(
             args.corpus,
@@ -126,6 +142,24 @@ def main() -> None:
             raise SystemExit(1)
     elif args.command == "serve":
         uvicorn.run(create_app(args.index, args.mode), host=args.host, port=args.port)
+    elif args.command == "curator-dry-run":
+        report = run_curator_dry_run(
+            CuratorDryRunConfig(
+                run_id=args.run_id,
+                intake=args.intake,
+                logs=args.logs,
+                output=args.output,
+                task=None if args.no_task else args.task,
+                broker_url=args.broker_url,
+                model_proxy_url=args.model_proxy_url,
+                model_proxy_token=args.model_proxy_token,
+                required_broker=args.require_broker,
+                required_model_proxy=args.require_model_proxy,
+            )
+        )
+        print(report.model_dump_json(indent=2))
+        if report.status != "pass":
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":

@@ -17,5 +17,7 @@ Current planning artifacts:
 - `ykm-phase4-curator.md` - Curator agent plan, state machines, runtime direction, and open questions.
 - `ykm-curator-prerequisite-milestone.md` - broker, proxy, GitHub app, and deployment prerequisites
   before Curator implementation.
+- `ykm-curator-dry-run-harness-milestone.md` - minimal Curator dry-run worker and sandbox report
+  contract.
 - `ykm-corpus-ci-artifact-prerequisite-milestone.md` - `ykmcorpus` CI validation and official
   LanceDB index artifact production prerequisite.
