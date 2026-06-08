@@ -270,8 +270,9 @@ Acceptance:
 
 Add a sandbox-broker template for manual Curator runs.
 
-Status: partially complete. Broker code supports operator-configured `extra_mounts`; the final YKM
-Curator template still needs to be defined once the Curator worker image/entrypoint exists.
+Status: partially complete. Broker code supports operator-configured `extra_mounts`; YKM now has a
+minimal `ykm-curator-dry-run` worker entrypoint. The final live sandbox template still needs to be
+configured and launched on `hermes-vps`.
 
 Requirements:
 
@@ -372,8 +373,10 @@ This prerequisite milestone is done when:
 
 Remaining before marking fully done:
 
-- Define the final YKM Curator sandbox template and mount paths.
-- Add a Curator-side dry-run worker that exercises broker Git, PR/issue reads, issue reporter reads,
-  model proxy, and output report writing.
+- Configure the final YKM Curator dry-run sandbox template and mount paths on `hermes-vps`.
+- Launch the YKM `ykm-curator-dry-run` worker through sandbox-broker and verify the collected
+  `/output/run-report.json`.
+- Extend the dry-run worker or broker task fixture to exercise PR/issue read and reporter MCP reads
+  once the live template is in place.
 - Record the exact deployment/runbook paths and smoke commands.
 - Decide how Curator should handle broker issue `#27` until branch-reuse protection lands.
