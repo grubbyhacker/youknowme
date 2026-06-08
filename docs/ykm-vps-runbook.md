@@ -159,6 +159,10 @@ The wrapper:
 
 - runs `ykm-download-latest-corpus-index` from the `youknowme:phase1e` image;
 - mounts only `/opt/youknowme` into that short-lived watcher container;
+- compares the latest successful `ykmcorpus/main` workflow `head_sha` to
+  `/opt/youknowme/index-current/manifest.json` before downloading the artifact;
+- downloads the artifact only when the latest successful workflow head differs from the serving
+  manifest `source_commit`;
 - treats watcher exit code `10` as "already current";
 - promotes from the host only when the watcher writes a newer artifact path;
 - does not mount `/var/run/docker.sock` into the watcher container.

@@ -192,6 +192,43 @@ def test_cli_writes_path_file_for_new_artifact(
     )
 
 
+def test_cli_skips_download_when_workflow_head_matches_current_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_github_download(
+        tmp_path,
+        monkeypatch,
+        source_commit="same-source",
+        build_id="different-build-that-should-not-matter-for-metadata-skip",
+        fail_on_download=True,
+    )
+    _write_current_manifest(tmp_path, source_commit="same-source", build_id="same-build")
+
+    result = cli.run(_args(tmp_path, exit_code_current=True))
+
+    assert result == cli.CURRENT_EXIT_CODE
+    assert not (tmp_path / "incoming" / "youknowme-index-same-source.zip").exists()
+
+
+def test_cli_force_downloads_even_when_workflow_head_matches_current_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_github_download(
+        tmp_path,
+        monkeypatch,
+        source_commit="same-source",
+        build_id="same-build",
+    )
+    _write_current_manifest(tmp_path, source_commit="same-source", build_id="same-build")
+
+    result = cli.run(_args(tmp_path, exit_code_current=True, force=True))
+
+    assert result == 0
+    assert (tmp_path / "incoming" / "youknowme-index-same-source.zip").exists()
+
+
 def _args(tmp_path: Path, **overrides: object) -> SimpleNamespace:
     private_key = tmp_path / "private-key.pem"
     private_key.write_text("fake-key", encoding="utf-8")
@@ -235,6 +272,7 @@ def _install_fake_github_download(
     *,
     source_commit: str,
     build_id: str,
+    fail_on_download: bool = False,
 ) -> None:
     class FakeSelection:
         artifact_id = 200
@@ -251,6 +289,8 @@ def _install_fake_github_download(
             return None
 
         def download_artifact_zip(self, *, repo: str, artifact_id: int, out: Path) -> None:
+            if fail_on_download:
+                raise AssertionError("download should have been skipped")
             out.parent.mkdir(parents=True, exist_ok=True)
             with zipfile.ZipFile(out, "w") as archive:
                 archive.writestr(
