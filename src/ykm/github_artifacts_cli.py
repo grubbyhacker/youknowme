@@ -111,6 +111,14 @@ def run(args: argparse.Namespace) -> int:
             f"{selection.artifact_name} from run {selection.run_id} at {selection.head_sha}"
         )
 
+        current_manifest = read_manifest(args.deploy_root / "index-current")
+        if not args.force and workflow_head_matches_current_index(
+            head_sha=selection.head_sha,
+            current_manifest=current_manifest,
+        ):
+            print(f"current index already matches latest successful workflow head {selection.head_sha}")
+            return CURRENT_EXIT_CODE if args.exit_code_current else 0
+
         if not args.dry_run:
             client.download_artifact_zip(
                 repo=args.repo,
@@ -161,3 +169,13 @@ def run(args: argparse.Namespace) -> int:
 def _require(value: str | None, name: str) -> None:
     if not value:
         raise ValueError(f"{name} is required")
+
+
+def workflow_head_matches_current_index(
+    *,
+    head_sha: str,
+    current_manifest: dict[str, object] | None,
+) -> bool:
+    if current_manifest is None:
+        return False
+    return current_manifest.get("source_commit") == head_sha
