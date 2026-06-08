@@ -37,3 +37,7 @@ run = "scripts/container-smoke.sh"
 [tasks.index-promotion-smoke]
 description = "Run local Docker E2E smoke for index artifact promotion"
 run = "scripts/index-promotion-smoke.sh"
+
+[tasks.download-latest-corpus-index]
+description = "Download the latest official ykmcorpus index artifact with a GitHub App"
+run = "uv run scripts/download-latest-corpus-index-artifact.py"
