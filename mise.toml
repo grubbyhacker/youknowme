@@ -41,3 +41,7 @@ run = "scripts/index-promotion-smoke.sh"
 [tasks.download-latest-corpus-index]
 description = "Download the latest official ykmcorpus index artifact with a GitHub App"
 run = "uv run scripts/download-latest-corpus-index-artifact.py"
+
+[tasks.watch-and-promote-corpus-index]
+description = "Run the containerized corpus index watcher and promote a newer artifact from the host"
+run = "scripts/watch-and-promote-corpus-index.sh"
