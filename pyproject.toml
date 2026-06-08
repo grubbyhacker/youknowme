@@ -20,6 +20,7 @@ dependencies = [
 
 [project.scripts]
 ykm = "ykm.cli:main"
+ykm-download-latest-corpus-index = "ykm.github_artifacts_cli:main"
 
 [build-system]
 requires = ["hatchling"]

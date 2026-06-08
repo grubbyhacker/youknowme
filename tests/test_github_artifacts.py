@@ -4,12 +4,15 @@ import json
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import jwt
+import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+import ykm.github_artifacts_cli as cli
 from ykm.github_artifacts import (
     GitHubActionsClient,
     artifact_matches_current_index,
@@ -135,3 +138,135 @@ def test_read_build_report_and_match_current_manifest(tmp_path: Path) -> None:
             "build_id": "different",
         },
     )
+
+
+def test_cli_returns_current_exit_code_without_path_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_github_download(
+        tmp_path,
+        monkeypatch,
+        source_commit="same-source",
+        build_id="same-build",
+    )
+    _write_current_manifest(tmp_path, source_commit="same-source", build_id="same-build")
+    path_file = tmp_path / "watcher-state" / "artifact.path"
+
+    result = cli.run(
+        _args(
+            tmp_path,
+            artifact_path_file=path_file,
+            exit_code_current=True,
+        )
+    )
+
+    assert result == cli.CURRENT_EXIT_CODE
+    assert not path_file.exists()
+
+
+def test_cli_writes_path_file_for_new_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_github_download(
+        tmp_path,
+        monkeypatch,
+        source_commit="new-source",
+        build_id="new-build",
+    )
+    _write_current_manifest(tmp_path, source_commit="old-source", build_id="old-build")
+    path_file = tmp_path / "watcher-state" / "artifact.path"
+
+    result = cli.run(
+        _args(
+            tmp_path,
+            artifact_path_file=path_file,
+            exit_code_current=True,
+        )
+    )
+
+    assert result == 0
+    assert path_file.read_text(encoding="utf-8").strip() == str(
+        tmp_path / "incoming" / "youknowme-index-new-source.zip"
+    )
+
+
+def _args(tmp_path: Path, **overrides: object) -> SimpleNamespace:
+    private_key = tmp_path / "private-key.pem"
+    private_key.write_text("fake-key", encoding="utf-8")
+    values = {
+        "repo": "grubbyhacker/ykmcorpus",
+        "branch": "main",
+        "event": "push",
+        "workflow_name": "Production index artifact",
+        "artifact_prefix": "youknowme-index-",
+        "app_id": "4001682",
+        "installation_id": "138954168",
+        "private_key": str(private_key),
+        "api_url": "https://api.github.test",
+        "out_dir": tmp_path / "incoming",
+        "deploy_root": tmp_path,
+        "artifact_path_file": None,
+        "exit_code_current": False,
+        "promote_script": tmp_path / "promote.sh",
+        "promote": False,
+        "sudo": False,
+        "promote_arg": [],
+        "force": False,
+        "dry_run": False,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _write_current_manifest(tmp_path: Path, *, source_commit: str, build_id: str) -> None:
+    index_current = tmp_path / "index-current"
+    index_current.mkdir()
+    (index_current / "manifest.json").write_text(
+        json.dumps({"source_commit": source_commit, "build_id": build_id}),
+        encoding="utf-8",
+    )
+
+
+def _install_fake_github_download(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    source_commit: str,
+    build_id: str,
+) -> None:
+    class FakeSelection:
+        artifact_id = 200
+        artifact_name = f"youknowme-index-{source_commit}"
+        run_id = 20
+        head_sha = source_commit
+
+    class FakeClient:
+        def __init__(self, *, token: str, api_url: str) -> None:
+            self.token = token
+            self.api_url = api_url
+
+        def close(self) -> None:
+            return None
+
+        def download_artifact_zip(self, *, repo: str, artifact_id: int, out: Path) -> None:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(out, "w") as archive:
+                archive.writestr(
+                    "youknowme-index.build-report.json",
+                    json.dumps(
+                        {
+                            "manifest": {
+                                "source_commit": source_commit,
+                                "build_id": build_id,
+                            }
+                        }
+                    ),
+                )
+                archive.writestr("youknowme-index.tar.gz", b"fake")
+                archive.writestr("youknowme-index.sha256", "fake  youknowme-index.tar.gz\n")
+
+    monkeypatch.setattr(cli, "create_installation_token", lambda **_: "token")
+    monkeypatch.setattr(cli, "GitHubActionsClient", FakeClient)
+    monkeypatch.setattr(cli, "select_latest_index_artifact", lambda **_: FakeSelection())

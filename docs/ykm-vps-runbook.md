@@ -121,8 +121,7 @@ sudo install -m 0600 ykmcorpus-build-watcher.2026-06-08.private-key.pem \
   /opt/youknowme/secrets/ykmcorpus-build-watcher.private-key.pem
 ```
 
-Run from a YKM checkout or another host environment where the YKM package dependencies are installed.
-The expected local development invocation is:
+For local development from a YKM checkout, use:
 
 ```bash
 export YKM_GITHUB_APP_ID=4001682
@@ -148,6 +147,30 @@ For a cron-based phase, use the same command with `--promote --sudo`, redirect o
 log, and rely on `relaunch-container-with-new-index.sh` for the deployment lock. A future GitHub
 webhook/tickle should only wake this same checker; the checker remains the authority that verifies
 the latest successful `main` artifact before promotion.
+
+On the VPS, prefer the host wrapper plus containerized watcher instead of installing Python, `uv`, or
+a YKM virtualenv on the host:
+
+```bash
+sudo /opt/youknowme/bin/watch-and-promote-corpus-index.sh
+```
+
+The wrapper:
+
+- runs `ykm-download-latest-corpus-index` from the `youknowme:phase1e` image;
+- mounts only `/opt/youknowme` into that short-lived watcher container;
+- treats watcher exit code `10` as "already current";
+- promotes from the host only when the watcher writes a newer artifact path;
+- does not mount `/var/run/docker.sock` into the watcher container.
+
+The watcher command is packaged into the YKM image. The VPS host owns only Docker,
+`/opt/youknowme` state/secrets, and the host promotion wrapper.
+
+A cron entry can run the same wrapper and append logs:
+
+```cron
+*/10 * * * * root /opt/youknowme/bin/watch-and-promote-corpus-index.sh >> /opt/youknowme/logs/corpus-watch.log 2>&1
+```
 
 When deploying an index built from an uncommitted corpus working tree, `source_commit` is marked as:
 
