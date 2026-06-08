@@ -1,0 +1,78 @@
+name: YKM CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/ci.yml"
+      - "AGENTS.md"
+      - "Dockerfile"
+      - "README.md"
+      - "compose.yaml"
+      - "docs/**"
+      - "fixtures/**"
+      - "mise.toml"
+      - "pyproject.toml"
+      - "scripts/**"
+      - "src/**"
+      - "tests/**"
+      - "uv.lock"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/ci.yml"
+      - "AGENTS.md"
+      - "Dockerfile"
+      - "README.md"
+      - "compose.yaml"
+      - "docs/**"
+      - "fixtures/**"
+      - "mise.toml"
+      - "pyproject.toml"
+      - "scripts/**"
+      - "src/**"
+      - "tests/**"
+      - "uv.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ykm-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up mise
+        uses: jdx/mise-action@v2
+
+      - name: Install pinned tools
+        run: mise install
+
+      - name: Run lint
+        run: mise run lint
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up mise
+        uses: jdx/mise-action@v2
+
+      - name: Install pinned tools
+        run: mise install
+
+      - name: Run tests
+        run: mise run test

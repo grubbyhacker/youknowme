@@ -31,13 +31,19 @@ SECRET_PATTERNS = [
 ]
 
 
-def build_index(corpus: Path, out: Path, provider: EmbeddingProvider) -> BuildOutput:
+def build_index(
+    corpus: Path,
+    out: Path,
+    provider: EmbeddingProvider,
+    *,
+    include_roots: list[str] | None = None,
+) -> BuildOutput:
     corpus = corpus.resolve()
     out = out.resolve()
     if not corpus.exists():
         raise FileNotFoundError(f"Corpus path does not exist: {corpus}")
 
-    docs, warnings, quarantined = load_corpus(corpus)
+    docs, warnings, quarantined = load_corpus(corpus, include_roots=include_roots)
     chunks: list[ChunkRecord] = []
     for doc in docs:
         doc_chunks, doc_warnings = chunk_document(doc)
@@ -80,11 +86,15 @@ def build_index(corpus: Path, out: Path, provider: EmbeddingProvider) -> BuildOu
     return BuildOutput(manifest=manifest, warnings=warnings, quarantined=quarantined)
 
 
-def load_corpus(corpus: Path) -> tuple[list[SourceDoc], list[BuildWarning], list[QuarantineRecord]]:
+def load_corpus(
+    corpus: Path,
+    *,
+    include_roots: list[str] | None = None,
+) -> tuple[list[SourceDoc], list[BuildWarning], list[QuarantineRecord]]:
     docs: list[SourceDoc] = []
     warnings: list[BuildWarning] = []
     quarantined: list[QuarantineRecord] = []
-    for path in sorted(corpus.rglob("*.md")):
+    for path in markdown_paths(corpus, include_roots):
         rel_path = path.relative_to(corpus).as_posix()
         text = path.read_text(encoding="utf-8")
         secret_reason = detect_secret(text)
@@ -116,6 +126,30 @@ def load_corpus(corpus: Path) -> tuple[list[SourceDoc], list[BuildWarning], list
             )
         )
     return docs, warnings, quarantined
+
+
+def markdown_paths(corpus: Path, include_roots: list[str] | None = None) -> list[Path]:
+    if not include_roots:
+        return sorted(corpus.rglob("*.md"))
+
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for root_name in include_roots:
+        if not root_name or root_name.startswith("/") or ".." in Path(root_name).parts:
+            raise ValueError(f"include root must be a relative path inside the corpus: {root_name}")
+        root = corpus / root_name
+        if not root.exists():
+            raise FileNotFoundError(f"include root does not exist: {root_name}")
+        if root.is_file():
+            candidates = [root] if root.suffix.lower() == ".md" else []
+        else:
+            candidates = sorted(root.rglob("*.md"))
+        for candidate in candidates:
+            resolved = candidate.resolve()
+            if resolved not in seen:
+                seen.add(resolved)
+                paths.append(candidate)
+    return sorted(paths)
 
 
 def chunk_document(doc: SourceDoc) -> tuple[list[ChunkRecord], list[BuildWarning]]:

@@ -196,6 +196,8 @@ Not included:
 - No Curator agent yet.
 - No GitHub PR/issue creation from YKM itself.
 - No automatic corpus rebuild/redeploy.
+- No `ykmcorpus` CI-produced LanceDB artifact yet; see
+  `docs/ykm-corpus-ci-artifact-prerequisite-milestone.md`.
 - No indexing of staged upload or feedback content.
 
 ## Phase 4: Curator

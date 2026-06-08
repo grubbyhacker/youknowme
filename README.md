@@ -32,6 +32,9 @@ YKM_EMBEDDING_PROVIDER=openrouter mise run local-mcp-smoke
 mise run container-smoke
 ```
 
+GitHub CI runs `mise run lint` and `mise run test`. Run both before opening or updating a PR that
+changes code, tests, packaging, or workflows.
+
 Manual equivalent:
 
 ```bash
@@ -49,6 +52,20 @@ YKM_EMBEDDING_PROVIDER=openrouter uv run ykm build --corpus /path/to/content-rep
 Private eval cases can live outside this repo and be passed with `--cases /path/to/private-cases.json`.
 
 Generated indexes and logs live under `.ykm/` and are ignored.
+
+## Reusable Index Artifact Tools
+
+Private corpus repositories can install this package and use the public YKM build tooling without
+publishing private corpus content through this public repository.
+
+```bash
+YKM_EMBEDDING_PROVIDER=openrouter uv run ykm build --corpus /path/to/ykmcorpus --out .ykm/prod-index
+uv run ykm validate-index --index .ykm/prod-index
+uv run ykm package-index --index .ykm/prod-index --out artifacts
+```
+
+`package-index` writes a versioned `.tar.gz` bundle, `.sha256`, and `build-report.json`. Production
+corpus artifacts should be produced by the private corpus repository CI, not by this public repo CI.
 
 ## Container Packaging
 

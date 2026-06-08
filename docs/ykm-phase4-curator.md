@@ -849,3 +849,5 @@ Manual acceptance:
 - No proactive cleanup PRs in initial scope.
 - No always-on worker until the manual lifecycle is proven.
 - No live index rebuild or deploy responsibility in the Curator.
+- Corpus artifact production belongs to `ykmcorpus` CI after Roger merges to `main`; see
+  `docs/ykm-corpus-ci-artifact-prerequisite-milestone.md`.
