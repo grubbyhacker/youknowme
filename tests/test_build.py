@@ -4,7 +4,7 @@ from pathlib import Path
 
 import subprocess
 
-from ykm.build import build_index, load_corpus, source_commit
+from ykm.build import build_index, load_corpus, markdown_paths, source_commit
 from ykm.embeddings import FakeEmbeddingProvider
 
 
@@ -28,6 +28,49 @@ def test_build_index_writes_manifest_and_chunks(tmp_path: Path) -> None:
     assert (tmp_path / "index" / "manifest.json").exists()
     assert (tmp_path / "index" / "chunks.jsonl").exists()
     assert (tmp_path / "index" / "lancedb").exists()
+
+
+def test_load_corpus_can_limit_to_include_roots(tmp_path: Path) -> None:
+    corpus = tmp_path / "corpus"
+    included = corpus / "included"
+    excluded = corpus / "excluded"
+    included.mkdir(parents=True)
+    excluded.mkdir()
+    (included / "note.md").write_text(
+        """---
+id: included-note
+type: note
+tags: [test]
+---
+
+# Included
+""",
+        encoding="utf-8",
+    )
+    (excluded / "note.md").write_text(
+        """---
+id: excluded-note
+type: note
+tags: [test]
+---
+
+# Excluded
+""",
+        encoding="utf-8",
+    )
+
+    docs, _warnings, _quarantined = load_corpus(corpus, include_roots=["included"])
+
+    assert [doc.source_id for doc in docs] == ["included-note"]
+
+
+def test_markdown_paths_rejects_parent_traversal() -> None:
+    try:
+        markdown_paths(Path("fixtures/corpus"), ["../outside"])
+    except ValueError as exc:
+        assert "relative path" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
 
 
 def test_load_corpus_accepts_frontmatter_block_lists(tmp_path: Path) -> None:

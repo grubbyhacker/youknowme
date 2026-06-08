@@ -7,6 +7,7 @@ from pathlib import Path
 import uvicorn
 from dotenv import load_dotenv
 
+from ykm.artifact import ArtifactError, package_index, validate_index
 from ykm.build import build_index
 from ykm.contracts import QueryRequest, RetrieveRequest
 from ykm.embeddings import provider_from_env
@@ -24,6 +25,20 @@ def main() -> None:
     build = subparsers.add_parser("build")
     build.add_argument("--corpus", required=True, type=Path)
     build.add_argument("--out", required=True, type=Path)
+    build.add_argument(
+        "--include-root",
+        action="append",
+        default=[],
+        help="Relative corpus directory or markdown file to include; may be passed more than once.",
+    )
+
+    validate_index_parser = subparsers.add_parser("validate-index")
+    validate_index_parser.add_argument("--index", required=True, type=Path)
+
+    package_index_parser = subparsers.add_parser("package-index")
+    package_index_parser.add_argument("--index", required=True, type=Path)
+    package_index_parser.add_argument("--out", required=True, type=Path)
+    package_index_parser.add_argument("--name")
 
     query = subparsers.add_parser("query")
     query.add_argument("text")
@@ -56,8 +71,29 @@ def main() -> None:
 
     args = parser.parse_args()
     if args.command == "build":
-        output = build_index(args.corpus, args.out, provider_from_env())
+        output = build_index(
+            args.corpus,
+            args.out,
+            provider_from_env(),
+            include_roots=args.include_root or None,
+        )
         print(output.model_dump_json(indent=2))
+    elif args.command == "validate-index":
+        try:
+            print(json.dumps(validate_index(args.index), indent=2, sort_keys=True))
+        except ArtifactError as exc:
+            raise SystemExit(str(exc)) from exc
+    elif args.command == "package-index":
+        try:
+            print(
+                json.dumps(
+                    package_index(args.index, args.out, artifact_name=args.name),
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        except ArtifactError as exc:
+            raise SystemExit(str(exc)) from exc
     elif args.command == "query":
         index = YkmIndex(args.index, provider_from_env())
         response = index.query(
