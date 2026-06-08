@@ -98,6 +98,57 @@ This smoke builds two fake index artifacts, promotes both through Docker, verifi
 `build_id` changes, queries content that exists only in the promoted index, and confirms a corrupt
 artifact is rejected without changing the active index.
 
+## Download The Latest Official Corpus Artifact
+
+The next automation step is intentionally split from promotion. A watcher/downloader checks
+`grubbyhacker/ykmcorpus` for the newest successful `main` Actions artifact, downloads it to the VPS,
+compares its build report with `/opt/youknowme/index-current/manifest.json`, and only then hands the
+ZIP to `relaunch-container-with-new-index.sh`.
+
+The GitHub App should be installed only on `grubbyhacker/ykmcorpus` and needs:
+
+- `Metadata`: mandatory.
+- `Actions`: read.
+
+It does not need corpus contents write access, repository administration, workflow write access,
+secrets access, pull request access, or VPS credentials.
+
+Store the private key outside the repository on the VPS, for example:
+
+```bash
+sudo install -d -m 0700 /opt/youknowme/secrets
+sudo install -m 0600 ykmcorpus-build-watcher.2026-06-08.private-key.pem \
+  /opt/youknowme/secrets/ykmcorpus-build-watcher.private-key.pem
+```
+
+Run from a YKM checkout or another host environment where the YKM package dependencies are installed.
+The expected local development invocation is:
+
+```bash
+export YKM_GITHUB_APP_ID=4001682
+export YKM_GITHUB_INSTALLATION_ID=138954168
+export YKM_GITHUB_PRIVATE_KEY_PATH=/opt/youknowme/secrets/ykmcorpus-build-watcher.private-key.pem
+
+mise run download-latest-corpus-index -- \
+  --out-dir /opt/youknowme/incoming \
+  --deploy-root /opt/youknowme
+```
+
+That downloads a newer artifact but does not deploy it. To deploy in the same run:
+
+```bash
+mise run download-latest-corpus-index -- \
+  --out-dir /opt/youknowme/incoming \
+  --deploy-root /opt/youknowme \
+  --promote \
+  --sudo
+```
+
+For a cron-based phase, use the same command with `--promote --sudo`, redirect output to a deploy
+log, and rely on `relaunch-container-with-new-index.sh` for the deployment lock. A future GitHub
+webhook/tickle should only wake this same checker; the checker remains the authority that verifies
+the latest successful `main` artifact before promotion.
+
 When deploying an index built from an uncommitted corpus working tree, `source_commit` is marked as:
 
 ```text
