@@ -30,6 +30,7 @@ mise run demo
 mise run eval
 YKM_EMBEDDING_PROVIDER=openrouter mise run local-mcp-smoke
 mise run container-smoke
+mise run index-promotion-smoke
 ```
 
 GitHub CI runs `mise run lint` and `mise run test`. Run both before opening or updating a PR that
@@ -66,6 +67,13 @@ uv run ykm package-index --index .ykm/prod-index --out artifacts
 
 `package-index` writes a versioned `.tar.gz` bundle, `.sha256`, and `build-report.json`. Production
 corpus artifacts should be produced by the private corpus repository CI, not by this public repo CI.
+
+The local promotion smoke builds two fake index artifacts, relaunches a Docker container onto the
+new artifact, and verifies checksum failure leaves the active index unchanged:
+
+```bash
+mise run index-promotion-smoke
+```
 
 ## Container Packaging
 
