@@ -103,7 +103,6 @@ require_command() {
 require_command docker
 require_command python3
 require_command tar
-require_command unzip
 
 ARTIFACT_ZIP="$(cd "$(dirname "$ARTIFACT_ZIP")" && pwd)/$(basename "$ARTIFACT_ZIP")"
 DEPLOY_ROOT="$(mkdir -p "$DEPLOY_ROOT" && cd "$DEPLOY_ROOT" && pwd)"
@@ -138,7 +137,22 @@ ARTIFACT_DIR="$WORK_DIR/artifact"
 UNPACK_DIR="$WORK_DIR/unpacked"
 mkdir -p "$ARTIFACT_DIR" "$UNPACK_DIR" "$DEPLOY_ROOT/index-builds" "$DEPLOY_ROOT/logs" "$DEPLOY_ROOT/intake"
 
-unzip -q "$ARTIFACT_ZIP" -d "$ARTIFACT_DIR"
+python3 - "$ARTIFACT_ZIP" "$ARTIFACT_DIR" <<'PY'
+from __future__ import annotations
+
+import sys
+import zipfile
+from pathlib import Path
+
+artifact = Path(sys.argv[1])
+target = Path(sys.argv[2])
+with zipfile.ZipFile(artifact) as archive:
+    for member in archive.infolist():
+        name = Path(member.filename)
+        if name.is_absolute() or ".." in name.parts:
+            raise SystemExit(f"unsafe ZIP member path: {member.filename}")
+        archive.extract(member, target)
+PY
 
 TARBALLS=()
 while IFS= read -r path; do
