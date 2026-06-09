@@ -1,10 +1,20 @@
 # YouKnowMe Curator Launcher Plan
 
-Status: planned; sandbox-broker operator REST launch profiles are live and E2E tested.
+Status: live on `hermes-vps` for hourly Curator dry-run launches.
 
 This document captures how Curator should be triggered on the VPS. It depends on the generic
 sandbox-broker operator REST launch profile design in
 `/Users/roger/src/gh-agent-broker/plans/operator-rest-launch-profiles.md`.
+
+Deployed on 2026-06-09:
+
+- sandbox-broker config: `/docker/gh-agent-broker/configs/sandbox-beta.yaml`;
+- broker env: `/docker/gh-agent-broker/.env`;
+- Curator image: `youknowme:curator-launcher-20260609`;
+- launcher user: `sandbox-curator-timer`;
+- timer env: `/home/sandbox-curator-timer/.config/gh-agent-broker/operator.env`;
+- systemd units: `ykm-curator-launch.service` and `ykm-curator-launch.timer`;
+- latest manual smoke run: `20260609T220022Z-ec1c4c608fc2e6f7`.
 
 ## Summary
 
@@ -57,9 +67,9 @@ Use a Curator worker template like:
 ```yaml
 templates:
   ykm-curator-dry-run:
-    image: "youknowme:phase4-curator"
+    image: "youknowme:curator-launcher-20260609"
     command: ["curator", "run", "--task", "/input/task.json"]
-    user: "10000:10000"
+    user: "1000:1000"
     resources: {cpu_shares: 512, memory_mb: 4096, pids_limit: 512}
     network_policy: "worker-net"
     max_runtime_minutes: 30
@@ -165,6 +175,7 @@ WantedBy=timers.target
 
 Manual operator runs use `sudo systemctl start ykm-curator-launch.service`. The timer token cannot
 read logs/artifacts or stop/cleanup runs; artifact review uses the separate human operator token.
+The timer is currently enabled.
 
 The launcher user cannot directly talk to Docker, read broker secrets, choose images, choose mount
 paths, choose repos or branches, or retrieve GitHub tokens. Its only intended authority is one
