@@ -239,6 +239,53 @@ def test_curator_rejects_broker_task_contract_with_non_json_task(
     assert "broker task string must contain Curator task JSON" in task_probe.message
 
 
+def test_curator_replaces_broker_task_run_id_placeholder(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    intake = tmp_path / "intake"
+    intake.mkdir()
+    output = tmp_path / "output"
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "run_id": "broker-run",
+                "task": json.dumps(
+                    {
+                        "schema_version": "1",
+                        "run_id": "${SANDBOX_RUN_ID}",
+                        "mode": "dry_run",
+                        "enabled_actions": ["reconcile"],
+                    }
+                ),
+                "repo": "grubbyhacker/ykmcorpus",
+                "base_branch": "main",
+                "branch": "curator/broker-run/task",
+                "worker_agent_id": "ykm-curator",
+                "broker_remote_url": "http://broker:8080/git/grubbyhacker/ykmcorpus.git",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="fallback-run",
+            intake=intake,
+            output=output,
+            task=task,
+        )
+    )
+
+    assert report.status == "pass"
+    assert report.run_id == "broker-run"
+    assert report.task is not None
+    assert report.task["run_id"] == "broker-run"
+
+
 def test_curator_rejects_broker_task_run_id_mismatch(
     tmp_path: Path,
     monkeypatch,

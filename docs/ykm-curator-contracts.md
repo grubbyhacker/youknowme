@@ -61,7 +61,9 @@ When launched by sandbox-broker, `/input/task.json` is broker-owned and contains
 broker task wrapper. Curator-specific task JSON is embedded as the wrapper's `task` string and parsed
 by the Curator worker. Local development and tests may still point `curator run --task` or
 `curator inspect-task` directly at the raw Curator task JSON above. Worker-specific config must not
-replace or mount over `/input/task.json`.
+replace or mount over `/input/task.json`. For fixed launch profiles, the embedded Curator JSON may
+use `"run_id":"${SANDBOX_RUN_ID}"`; Curator replaces that placeholder with the broker wrapper
+`run_id` before validation.
 
 Initial modes:
 

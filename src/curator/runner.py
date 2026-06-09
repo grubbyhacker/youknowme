@@ -833,11 +833,22 @@ def parse_curator_task_payload(payload: dict[str, Any]) -> tuple[dict[str, Any],
         return payload, None, f"broker task string must contain Curator task JSON: {exc}"
     if not isinstance(embedded_payload, dict):
         return payload, None, "broker task string must contain a Curator task JSON object"
+    broker_run_id = payload.get("run_id")
+    if isinstance(broker_run_id, str):
+        embedded_payload = dict(embedded_payload)
+        if embedded_payload.get("run_id") in (
+            None,
+            "",
+            "$SANDBOX_RUN_ID",
+            "${SANDBOX_RUN_ID}",
+            "$BROKER_RUN_ID",
+            "${BROKER_RUN_ID}",
+        ):
+            embedded_payload["run_id"] = broker_run_id
     try:
         task = CuratorTask.model_validate(embedded_payload)
     except ValidationError as exc:
         return embedded_payload, None, f"embedded Curator task contract invalid: {exc}"
-    broker_run_id = payload.get("run_id")
     if isinstance(broker_run_id, str) and task.run_id != broker_run_id:
         return (
             embedded_payload,
