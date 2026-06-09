@@ -6,12 +6,14 @@ This runbook maintains the live Curator launcher on `hermes-vps`.
 
 - sandbox-broker config: `/docker/gh-agent-broker/configs/sandbox-beta.yaml`
 - broker env: `/docker/gh-agent-broker/.env`
-- Curator image: `youknowme:curator-launcher-20260609`
+- deterministic Curator image: `youknowme:curator-launcher-20260609`
+- manual model Curator image: `youknowme:curator-model-planning-20260609-ec1b842`
 - launcher user: `sandbox-curator-timer`
 - timer env: `/home/sandbox-curator-timer/.config/gh-agent-broker/operator.env`
 - systemd service: `ykm-curator-launch.service`
 - systemd timer: `ykm-curator-launch.timer`
-- sandbox profile: `ykm-curator-dry-run`
+- timer sandbox profile: `ykm-curator-dry-run`
+- manual model sandbox profile: `ykm-curator-dry-run-model`
 
 The timer user has only the scoped launch token. It cannot inspect runs, read artifacts, stop runs,
 choose Docker images, choose mounts, or access broker secrets. sandbox-broker owns Docker execution,
@@ -101,6 +103,38 @@ Expected dry-run safety values:
 - `upload_metadata_update_count=0`
 - `github_mutation_count=0`
 - `model_call_count=0`
+
+## Manual Model Launch
+
+The model-backed profile is intentionally manual-only. The timer principal must not list
+`ykm-curator-dry-run-model` in `allowed_profiles`; only `ykm-curator-operator` should be able to
+launch or inspect it.
+
+Launch it with the operator token:
+
+```bash
+ssh hermes-vps '
+cd /docker/gh-agent-broker
+set -a; . ./.env; set +a
+curl -fsS -X POST \
+  -H "Authorization: Bearer ${YKM_CURATOR_SANDBOX_ADMIN_TOKEN}" \
+  http://127.0.0.1:8091/v1/launch-profiles/ykm-curator-dry-run-model/launch
+'
+```
+
+Expected model dry-run safety values:
+
+- `status=pass`
+- `mode=dry_run`
+- `checkpoint_advanced=False`
+- `feedback_decisions_appended=0`
+- `upload_metadata_update_count=0`
+- `github_mutation_count=0`
+- `model_call_count=1`
+- `partial_failures=[]`
+
+The profile mounts only `/credentials/ykm-curator/proxy.env`, which contains the proxy token for
+`gh-agent-proxy`. It must not mount provider keys or the broker `.env`.
 
 ## Timer Control
 
