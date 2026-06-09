@@ -24,6 +24,8 @@ Current planning artifacts:
   launch profiles and a systemd timer.
 - `ykm-curator-launcher-runbook.md` - live Curator launcher maintenance, smoke checks, token
   rotation, image updates, and rollback.
+- `ykm-curator-model-planning-plan.md` - manual-only model-backed feedback planning milestone through
+  `gh-agent-proxy`.
 - `ykm-curator-prerequisite-milestone.md` - broker, proxy, GitHub app, and deployment prerequisites
   before Curator implementation.
 - `ykm-curator-dry-run-harness-milestone.md` - minimal Curator dry-run worker and sandbox report
