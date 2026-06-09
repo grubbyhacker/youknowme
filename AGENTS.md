@@ -29,7 +29,14 @@ mise run lint
 mise run test
 ```
 
+## Git Workflow
+
+`main` is protected. Always create or switch to a feature branch before making implementation changes.
+
+Do not make changes on `main` and then waste time porting them to a feature branch later.
+
+Delete old feature branches after they are merged or no longer needed.
+
 ## Secrets
 
 Do not commit `.env`, `.env.*`, tunnel tokens, Access credentials, VPS credentials, or generated private runtime files.
-
