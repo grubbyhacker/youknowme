@@ -1,6 +1,6 @@
 # YouKnowMe Phase 4 Curator Plan
 
-Status: planning draft.
+Status: planning draft, refreshed after Curator prerequisites.
 
 Phase 4 introduces The Curator: a separate, minimum-privilege agent that processes YouKnowMe intake,
 maintains its own proposed corpus PRs, and files GitHub issues when human or cross-repo follow-up is
@@ -8,6 +8,12 @@ better than a corpus edit.
 
 This document is a plan, not an implementation. It captures the intended shape after Phase 3 staged
 intake and before any Curator runtime is built.
+
+The prerequisite work changed this plan from an infrastructure feasibility sketch into an
+implementation plan. The YKM Curator GitHub app, brokered Git/PR/issue paths, broker read APIs,
+mutation budgets, self-hosted model proxy, and local dry-run worker now exist. The first Curator
+implementation should therefore optimize for deterministic state, contracts, and reports before
+enabling real model or GitHub mutations.
 
 ## Goals
 
@@ -27,6 +33,8 @@ Initial scope should:
 - Keep credentials and authority separated: the Curator proposes, GitHub records, the owner merges.
 - Build the Curator as an SDK-first agent system so we learn the mechanics of typed agent
   development rather than delegating the whole workflow to an existing coding agent shell.
+- Start with a state-only skeleton that proves locks, checkpoints, idempotency, run reports, and
+  reconciliation shape before any production mutations.
 
 Initial scope should not:
 
@@ -36,6 +44,29 @@ Initial scope should not:
 - Make proactive cleanup PRs without an upload or feedback trigger.
 - Run as an always-on daemon before the manual workflow is understood.
 - Depend on a specific model provider or subscription entitlement as a core architectural fact.
+
+## Launch And Scheduling
+
+The Curator is a short-lived worker, not a daemon.
+
+Production runs should be launched by an owner-controlled scheduler on `hermes-vps`, preferably a
+`systemd` timer rather than classic cron so runs have normal service logs, restart policy, and
+operator visibility. The timer invokes the sandbox-broker launch surface with a fixed
+operator-managed Curator template and task contract. Manual operator runs use the same launch path.
+
+Launch ownership is deliberately outside both the YKM serving process and the general-purpose broker
+core:
+
+- The YKM service writes uploads, feedback, and logs only. It does not start Curator workers and does
+  not hold broker/model credentials.
+- `gh-agent-broker` and `sandbox-broker` provide the launch and credential-broker infrastructure, but
+  they do not autonomously decide when Curator should run.
+- The VPS scheduler or an explicit operator command decides when to call sandbox-broker.
+- Fresh uploads and feedback wait in durable intake until the next scheduled or manual Curator run.
+
+Initial schedule decision: start with an operator-triggered dry run, then enable a conservative
+periodic timer such as hourly or daily after the read-only E2E smoke is reviewed. Do not add an
+upload-triggered wake path until the manual and scheduled lifecycle has proven reliable.
 
 ## Current Inputs
 
@@ -67,6 +98,10 @@ Phase 4 should extend the practical queue contract with:
 
 `deferred` is for upload bundles that are not unsafe, but require owner input before a useful PR can
 be created.
+
+The concrete Phase 4 JSON contracts live in `docs/ykm-curator-contracts.md`. This plan describes the
+workflow; that contract document defines `task.json`, `curator.json`, feedback plans, feedback
+decisions, lock behavior, branch naming, and run reports.
 
 The feedback schema should be extended additively with:
 
@@ -158,12 +193,15 @@ The first implementation should use:
 - Python.
 - Pydantic models for state, task contracts, and structured LLM outputs.
 - A small model adapter interface, rather than hard-coding one provider.
-- Either Pydantic AI or the OpenAI Agents SDK for the first agent layer.
+- A provider-neutral typed model adapter that calls the broker/proxy boundary first.
+- Either Pydantic AI or the OpenAI Agents SDK later, after a short comparison against real Curator
+  task shapes.
 
 Pydantic AI is attractive because typed structured output and durable-execution integrations map well
 to this workflow. OpenAI Agents SDK is attractive because tools, guardrails, handoffs, and tracing are
-first-class. The plan should not require either one until a short implementation spike compares them
-against the actual Curator tasks.
+first-class. The initial implementation should not commit to either SDK. It should define the typed
+adapter and broker/proxy contract first, then compare the SDKs on upload review, feedback planning,
+PR comment classification, and PR text drafting.
 
 The model provider should be selected by configuration. Reasonable initial provider paths:
 
@@ -204,6 +242,10 @@ usage, and budget exhaustion if the proxy exposes them.
 The first real Curator run over production intake should not happen until this boundary is designed
 and smoke-tested. If an early local spike uses direct model keys, it must use synthetic or low-risk
 fixtures only and should not be treated as production-ready.
+
+Current decision: model calls go through the live `gh-agent-proxy` model endpoint. Provider keys must
+not be mounted into the Curator sandbox. Direct provider-key use remains local-spike-only and must not
+process production intake or production feedback.
 
 ## Broker And Permission Boundaries
 
@@ -292,6 +334,12 @@ Issue routing defaults:
   issues when the body contains no private corpus, intake, log, or personal-memory content.
 - Issue and PR bodies should summarize and cite source IDs or feedback IDs rather than dumping large
   private source excerpts.
+
+Initial issue allowlist:
+
+- `grubbyhacker/ykmcorpus` for corpus facts, owner follow-up, and corpus maintenance.
+- This YKM repository for product, service, tool-description, schema, and Curator implementation
+  issues that contain no private corpus, intake, log, or personal-memory content.
 
 Broker-side mutation limits should be explicit. The feedback planning step may have a soft cap on
 proposed actions, but GitHub mutations need hard per-run ceilings for opened PRs plus filed issues.
@@ -414,6 +462,9 @@ owner-input issue closing, but a deferred upload may also use an explicit retry-
 the blocker is transient. On each run, the Curator should reconcile linked issue state before deciding
 whether `deferred -> claimed` is allowed.
 
+Initial retention policy: terminal processed or rejected bundles are retained indefinitely in the
+protected `archive/` directory. Automatic deletion is deferred until real volume creates pressure.
+
 ## Feedback State Machine
 
 Feedback records are append-only, but they are not the Curator's primary planning unit. The Curator
@@ -512,6 +563,8 @@ Decision records should include:
 - `source_id`
 - `section_id`
 - `upload_id`
+- `reentry_trigger`
+- `retry_after`
 - `reason`
 - `timestamp`
 
@@ -519,8 +572,10 @@ Positive feedback and non-actionable feedback should usually produce no correcti
 negative feedback should not trigger speculative corpus edits. Actionable feedback with source
 pointers may produce a PR if the fix is clear.
 
-Current production feedback should be used as E2E test data for feedback planning. Tests should
-assert the shape of the resulting plan, not exact wording. Useful scenarios include:
+Current production feedback should be used as private E2E fixture material for feedback planning.
+Real production feedback fixtures must stay ignored/private. Committed tests should use synthetic or
+carefully redacted shape cases and assert the shape of the resulting plan, not exact wording. Useful
+scenarios include:
 
 - Noisy self-correcting feedback collapses into a small number of actions plus superseded/no-op
   dispositions.
@@ -543,6 +598,10 @@ The Curator must maintain its own active PRs. Opening a PR is not completion.
 The deployed prereq broker image exposes read APIs for PR list/read/files/comments/reviews,
 review-comments, review-threads, commit status, and check runs. The Curator should use brokered reads
 for reconciliation rather than direct GitHub access.
+The initial implementation supports those brokered reads behind explicit operator opt-in
+(`--enable-broker-reads`) and converts broker PR/issue responses into the same reconciliation
+snapshot models used by fixture tests. GitHub mutations, branch edits, PR comments, queue movement,
+and model-backed planning remain disabled until their execution contracts are explicitly enabled.
 
 GitHub is authoritative for PR and issue state. Local `curator.json`, run plans, and decision logs
 are durable Curator state, but they are reconciled against GitHub at run start. If local metadata and
@@ -667,7 +726,7 @@ failure status, and the next checkpoint if it advanced.
 
 ### Slice 1: Documentation And Contracts
 
-- Write this plan.
+- Refresh this plan after the prerequisite lessons.
 - Add a Curator contract document for `task.json`, `curator.json`, feedback batch plans, and
   feedback decision records.
 - Add additive feedback categories to the YKM contract.
@@ -679,14 +738,18 @@ failure status, and the next checkpoint if it advanced.
 
 - Add a `ykm curator` CLI or separate `curator` entrypoint.
 - Load config and task contract.
+- Acquire the single-flight run lock, with a 2-hour stale-lock threshold and explicit stale-lock
+  recovery mode.
 - Discover upload directories.
 - Discover feedback records.
 - Build a feedback batch from records since the last checkpoint.
 - Freeze feedback start/end offsets at run start.
-- Discover Curator PR markers through broker calls, initially in dry-run or fixture mode.
+- Generate read-only broker preflight descriptors for Curator PR markers and idempotency keys.
 - Use the live broker remote `http://broker:8080/git/grubbyhacker/ykmcorpus.git` in sandboxed dry
   runs.
 - Emit a run report without changing queues or GitHub state.
+- This is the first real implementation slice. It should be complete before production queue moves,
+  GitHub mutations, or model decisions are enabled.
 
 ### Slice 3: Queue State
 
@@ -706,6 +769,8 @@ failure status, and the next checkpoint if it advanced.
 - Read PR comments, reviews, threads, and checks.
 - Enforce hard per-run GitHub mutation limits with upload/feedback fairness.
 - Deny disallowed broker operations in tests or dry-run policy checks.
+- Until broker issue `#27` is fixed, generate globally unique Curator branch names per action and
+  preflight existing branches plus PR/issue markers before pushing or creating a PR.
 
 ### Slice 4A: Model Broker Boundary
 
@@ -722,12 +787,14 @@ failure status, and the next checkpoint if it advanced.
 ### Slice 5: Typed Agent Decisions
 
 - Add provider-neutral model adapter.
+- Call the model through `gh-agent-proxy`; do not mount provider keys into the Curator sandbox.
 - Add first structured decision tasks:
   - upload review
   - feedback batch planning
   - PR comment classification
   - PR body drafting
-- Compare Pydantic AI and OpenAI Agents SDK for the actual task shape before committing long-term.
+- Compare Pydantic AI and OpenAI Agents SDK for the actual task shape after the adapter and fixture
+  tasks exist.
 
 ### Slice 6: PR Maintenance Loop
 
@@ -814,22 +881,31 @@ Manual acceptance:
 - Curator makes model calls through the broker/proxy without provider keys in the sandbox.
 - Curator run reports clearly show partial failures and whether the feedback checkpoint advanced.
 
-## Open Questions
+## Decisions From Prerequisites
 
-- Which SDK should be the first implementation target: Pydantic AI or OpenAI Agents SDK?
-- Should the Curator package be part of `src/ykm` or live under a separate package namespace in this
-  repo?
-- What exact broker interface should the Curator call: MCP, CLI, HTTP, or another adapter?
-- What is the issue allowlist for cross-repo filing?
-- What retention policy should apply to processed, rejected, and archived intake?
-- How much query-log context is acceptable in initial scope? Current default: only use logs as
-  supporting context when feedback references result/source IDs.
-- What soft action-volume threshold should trigger extra reporting for a feedback batch?
-- What Curator worker image/entrypoint and sandbox template should use the live broker/proxy contract?
-- How should Curator avoid or recover from branch reuse until broker issue `#27` is fixed?
-- What production model-call and token budgets should the proxy enforce beyond the current prereq
-  smoke settings?
-- What stale-lock timeout and recovery command should manual runs use?
+- First implementation slice: deterministic state skeleton before real GitHub or model mutations.
+- SDK direction: provider-neutral typed adapter first; compare Pydantic AI and OpenAI Agents SDK
+  after real task contracts exist.
+- Initial package location: keep Curator code in this repository, but give it its own sibling Python
+  package namespace under `src/curator`. The package can be named `curator` because this repository
+  has only one Curator concept and the YouKnowMe context is already established by the repo and
+  distribution.
+- Initial issue allowlist: private `grubbyhacker/ykmcorpus` plus this YKM repository.
+- Intake retention: keep terminal bundles indefinitely in protected archive for initial scope.
+- Query-log context: use logs only as supporting context when feedback references result/source IDs.
+- Feedback soft action threshold: report when a feedback batch proposes more than 10 actions.
+- Branch reuse mitigation: generate globally unique branch names and preflight branch/PR/issue
+  markers until broker issue `#27` is fixed.
+- Stale lock behavior: 2-hour stale-lock threshold, with explicit recovery mode required.
+- Test fixtures: real production feedback may be used only as ignored private fixtures; committed
+  tests use synthetic or redacted shape cases.
+
+Remaining operational items:
+
+- Configure and launch the final YKM Curator dry-run sandbox template on `hermes-vps`.
+- Record exact VPS service names, config paths, mount paths, and smoke commands in the runbook.
+- Set production model-call and token budgets in the proxy/operator config after the first real task
+  sizes are measured.
 
 ## Recommended Defaults
 

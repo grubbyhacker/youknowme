@@ -276,7 +276,7 @@ Acceptance:
 
 ## Workstream 6: Curator Sandbox Template
 
-Add a sandbox-broker template for manual Curator runs.
+Add a sandbox-broker template for short-lived Curator runs.
 
 Status: complete on `hermes-vps`.
 
@@ -289,6 +289,17 @@ Live dry-run smoke:
 - Result: `status=pass`.
 - Verified probes: task contract, intake mount, logs mount, output write, upload queue snapshot,
   feedback JSONL, query log JSONL, forbidden-secret absence, broker health, and model-proxy health.
+
+Launch decision:
+
+- Curator does not run continuously.
+- The YKM serving process does not launch Curator and does not call sandbox-broker.
+- `gh-agent-broker`/`sandbox-broker` are passive infrastructure for this workflow: they respond to
+  launch requests but do not decide when Curator should run.
+- An owner-controlled VPS scheduler, preferably a `systemd` timer, invokes sandbox-broker with the
+  Curator template and task contract. Manual operator runs use the same sandbox-broker invocation.
+- Upload and feedback writes do not synchronously wake Curator in the initial production-safe
+  workflow; queued intake waits for the next scheduled or manual run.
 
 Requirements:
 
@@ -336,8 +347,12 @@ hermes-vps
     - MCP service for issue create/read/query
     - uses reporter broker identity
 
+  vps systemd timer / operator command
+    - decides when Curator should run
+    - calls sandbox-broker with the Curator template and task contract
+
   sandbox-broker
-    - launches manual Curator worker containers
+    - launches short-lived Curator worker containers on request
     - controls mounts, network, task contract, and output contract
 
   gh-agent-proxy
@@ -346,7 +361,7 @@ hermes-vps
     - enforces model call/token budgets
 
   curator worker container
-    - launched manually through sandbox-broker
+    - launched through sandbox-broker by the timer or operator command
     - receives broker/proxy credentials only
     - reads intake/log evidence
     - writes Curator state and reports
@@ -358,6 +373,7 @@ Acceptance:
 - Services can be restarted independently.
 - Audit and run reports are retained in known protected paths.
 - A manual dry run can verify broker auth, repo probe, issue read, PR read, and model-proxy reachability.
+- The scheduled launcher uses the same sandbox-broker path as the manual dry run.
 
 Live operator paths:
 

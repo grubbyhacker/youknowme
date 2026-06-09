@@ -206,6 +206,9 @@ class FeedbackRequest(BaseModel):
         "stale_content",
         "unclear_content",
         "agent_note",
+        "needs_owner_action",
+        "positive_content",
+        "non_actionable",
     ]
     comment: str = Field(min_length=1, max_length=2000)
     source_id: str | None = Field(default=None, max_length=200)

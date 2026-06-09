@@ -169,6 +169,25 @@ def test_record_feedback_appends_bounded_jsonl(tmp_path: Path) -> None:
     assert "token" not in payload
 
 
+@pytest.mark.parametrize(
+    "category",
+    [
+        "missing_content",
+        "wrong_content",
+        "stale_content",
+        "unclear_content",
+        "agent_note",
+        "needs_owner_action",
+        "positive_content",
+        "non_actionable",
+    ],
+)
+def test_feedback_categories_accept_curator_additions(category: str) -> None:
+    request = FeedbackRequest(category=category, comment="bounded observation")
+
+    assert request.category == category
+
+
 def test_feedback_comment_is_bounded() -> None:
     with pytest.raises(ValidationError):
         FeedbackRequest(category="agent_note", comment="x" * 2001)

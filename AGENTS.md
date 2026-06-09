@@ -4,15 +4,11 @@
 
 The official product name is YouKnowMe.
 
-This repository is the home for the production YouKnowMe project. The previous working prototype has been preserved under `POC/`.
+This repository is the home for the production YouKnowMe project.
 
 ## Hard Boundary
 
-Do not create new production content inside `POC/`.
-
-`POC/` is reference-only. It may be read to understand the working Phase 0 Cloudflare Tunnel, Cloudflare Access, Docker, VPS, and MCP transport pattern. It may only be modified when the user explicitly asks to maintain or repair the running prototype on the VPS.
-
-Production YouKnowMe work must happen outside `POC/`.
+The POC in 'POC/' should be ignored and never mentioned. Do not try to maintain the POC code it will be deleted.
 
 ## Documentation
 
@@ -33,7 +29,18 @@ mise run lint
 mise run test
 ```
 
+Before opening or updating a PR, run both `mise run lint` and the full `mise run test` suite unless
+there is a concrete blocker. Focused tests are useful while iterating, but they are not enough for
+presubmit.
+
+## Git Workflow
+
+`main` is protected. Always create or switch to a feature branch before making implementation changes.
+
+Do not make changes on `main` and then waste time porting them to a feature branch later.
+
+Delete old feature branches after they are merged or no longer needed.
+
 ## Secrets
 
 Do not commit `.env`, `.env.*`, tunnel tokens, Access credentials, VPS credentials, or generated private runtime files.
-
