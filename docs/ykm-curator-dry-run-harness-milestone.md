@@ -1,6 +1,6 @@
 # YouKnowMe Curator Dry-Run Harness Milestone
 
-Status: implemented locally; ready for VPS sandbox template wiring.
+Status: complete; verified through sandbox-broker on `hermes-vps`.
 
 This milestone adds a minimal Curator worker entrypoint that proves the runtime contract before the
 real Curator behavior is built.
@@ -82,14 +82,24 @@ Forbidden environment variables are reported by name only, never by value.
 
 ## Sandbox Template Shape
 
-The intended sandbox-broker template should use:
+The sandbox-broker template should use this shape. The current `hermes-vps` template uses
+`youknowme:curator-dry-run-20260608`, which is a stable tag for the verified post-PR #7 YKM image.
+It runs as `1000:1000` because the live `/opt/youknowme/intake` and `/opt/youknowme/logs` trees are
+owned by the VPS `ubuntu` user.
 
 ```yaml
 templates:
   ykm-curator-dry-run:
-    image: "youknowme:phase1e"
-    command: ["ykm-curator-dry-run", "--require-broker", "--require-model-proxy"]
-    user: "10000:10000"
+    image: "youknowme:curator-dry-run-20260608"
+    command:
+      - "ykm-curator-dry-run"
+      - "--require-broker"
+      - "--require-model-proxy"
+      - "--model-proxy-url"
+      - "http://gh-agent-proxy:8092"
+      - "--model-proxy-token"
+      - "configured-by-sandbox-template"
+    user: "1000:1000"
     network_policy: "worker-net"
     max_runtime_minutes: 10
     broker_agent_id: "ykm-curator"
@@ -125,6 +135,14 @@ This milestone is complete when:
 - The command writes both report files.
 - Unit tests cover report generation, forbidden-secret failure, and required broker-probe failure.
 - A VPS sandbox template can launch the command and collect `/output/run-report.json`.
+
+Live VPS verification:
+
+- Template: `ykm-curator-dry-run`.
+- Run ID: `20260608T230054Z-2256c2e7576399ca`.
+- Report:
+  `/srv/hermes-sandbox-broker/runs/20260608T230054Z-2256c2e7576399ca/output/run-report.json`.
+- Result: `status=pass`.
 
 ## Follow-Up
 
