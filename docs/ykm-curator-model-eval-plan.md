@@ -1,6 +1,6 @@
 # YouKnowMe Curator Model Eval Plan
 
-Status: next milestone plan after manual model-backed dry-run launch.
+Status: implementation milestone for offline feedback-planning evals and manual real-run review.
 
 ## Goal
 
@@ -26,6 +26,9 @@ produce a passing dry-run report with zero state writes and zero GitHub mutation
 4. Add tests that run model-planning validation against fixture responses or fixed expected actions.
 5. Tune the feedback-planning prompt/schema until the dry-run output is stable and useful.
 6. Run several manual `ykm-curator-dry-run-model` launches and record the results.
+
+Raw reports and production feedback excerpts must stay under ignored local paths such as
+`.ykm/curator-model-eval/`. Commit only sanitized fixture shapes.
 
 ## Non-Goals
 
@@ -57,3 +60,40 @@ Known passing live run:
 - The prompt/schema has tests around expected action quality.
 - Manual model dry-runs produce stable, reviewable proposed actions.
 - The runbook records how to inspect model planning quality and token use.
+
+## Offline Eval Harness
+
+Committed fixture cases live under `fixtures/curator/model-feedback-planning/` and are exercised by:
+
+```bash
+mise run curator-model-eval
+```
+
+The evals validate action shape and safety properties, not exact model prose. They cover:
+
+- positive and non-actionable feedback producing `no_action`;
+- targeted stale/wrong/missing content with source evidence producing `corpus_pr`;
+- untargeted missing content routing to an owner-action issue instead of a speculative corpus edit;
+- upload-linked feedback producing `link_to_upload`;
+- repeated feedback grouping into one action with multiple feedback IDs;
+- bad model outputs rejected for unknown evidence, missing feedback coverage, duplicate actions,
+  invalid idempotency keys, unsupported corpus PRs, missing upload evidence, and wrong target repos.
+
+The runner fails closed when model output violates these checks. A failed model plan leaves the
+deterministic base plan in the report and records a `model-feedback-planning` failure with model name,
+validation error, proposed action count when available, and token usage when a model call happened.
+
+## Manual Inspection Workflow
+
+For a real manual launch, inspect `/output/run-report.json` and `/output/run-report.md` from the
+`ykm-curator-dry-run-model` run. Confirm:
+
+- `mode` is `dry_run`;
+- `checkpoint_advanced` is `false`;
+- `feedback_decisions_appended` is `0`;
+- `github_mutation_count` is `0`;
+- `model_call_count` is `1` when feedback was included;
+- `model_token_count` is reasonable for the feedback window;
+- proposed actions cite only included feedback and referenced evidence;
+- positive/non-actionable records are not turned into GitHub-object actions;
+- `corpus_pr` actions cite source, section, or upload evidence.

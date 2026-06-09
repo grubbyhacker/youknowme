@@ -133,6 +133,21 @@ Expected model dry-run safety values:
 - `model_call_count=1`
 - `partial_failures=[]`
 
+Inspect model planning quality before trusting the run:
+
+- compare `proposed_actions` with deterministic feedback categories and evidence;
+- confirm every included feedback ID is covered by at least one action;
+- confirm no positive or non-actionable feedback became an issue or PR;
+- confirm every `corpus_pr` cites source, section, or upload evidence;
+- confirm every `link_to_upload` cites upload evidence;
+- check `model_token_count` for unexpected prompt growth.
+
+Run the committed offline model-planning evals locally after prompt or schema changes:
+
+```bash
+mise run curator-model-eval
+```
+
 The profile mounts only `/credentials/ykm-curator/proxy.env`, which contains the proxy token for
 `gh-agent-proxy`. It must not mount provider keys or the broker `.env`.
 

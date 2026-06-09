@@ -11,6 +11,7 @@ from curator.models import (
     FeedbackInputRecord,
     FeedbackPlan,
     FeedbackWindow,
+    DEFAULT_TARGET_REPO,
     ProposedAction,
     UploadBundleSnapshot,
     UploadCuratorMetadata,
@@ -22,7 +23,6 @@ from curator.models import (
 from curator.state import deterministic_idempotency_key
 
 
-DEFAULT_TARGET_REPO = "grubbyhacker/ykmcorpus"
 REENTER_DECISIONS = {"deferred", "capacity_deferred"}
 IMMEDIATE_REENTRY_TRIGGERS = {"next_run"}
 

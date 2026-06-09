@@ -11,6 +11,7 @@ CURATOR_SCHEMA_VERSION = "1"
 CURATOR_REPORT_SCHEMA_VERSION = CURATOR_SCHEMA_VERSION
 DEFAULT_STALE_LOCK_TIMEOUT_SECONDS = 7200
 DEFAULT_LOCK_PATH = "/data/intake/curator-run.lock"
+DEFAULT_TARGET_REPO = "grubbyhacker/ykmcorpus"
 UPLOAD_QUEUE_DIRS = ("pending", "claimed", "processed", "rejected", "archive", "deferred")
 
 CuratorMode = Literal["dry_run", "state_only", "manual_live"]

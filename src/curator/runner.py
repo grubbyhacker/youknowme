@@ -15,7 +15,6 @@ from curator.adapters import (
     HttpModelProxyAdapter,
 )
 from curator.models import (
-    ActionEvidence,
     DEFAULT_LOCK_PATH,
     DEFAULT_STALE_LOCK_TIMEOUT_SECONDS,
     CuratorIssueSnapshot,
@@ -34,7 +33,11 @@ from curator.models import (
     UploadQueueSnapshot,
     UploadTransitionPreview,
 )
-from curator.model_tasks import FeedbackPlanningModelOutput, validate_model_response_output
+from curator.model_tasks import (
+    FeedbackPlanningModelOutput,
+    validate_feedback_planning_model_output,
+    validate_model_response_output,
+)
 from curator.execution import (
     append_feedback_decisions,
     build_execution_intents,
@@ -1032,20 +1035,32 @@ def _apply_model_feedback_planning(
             FeedbackPlanningModelOutput,
             expected_task_name="feedback_plan",
         )
-        _validate_model_feedback_actions(base_plan, output)
+        _validate_feedback_planning_model_output(base_plan, output)
     except Exception as exc:  # noqa: BLE001 - model failures must fail closed into the report.
         usage = empty_usage
+        details: dict[str, Any] = {"model": model, "error": str(exc)}
         if response is not None:
             usage = {
                 "call_count": 1,
                 "token_count": response.usage.input_tokens + response.usage.output_tokens,
             }
+            details.update(
+                {
+                    "input_tokens": response.usage.input_tokens,
+                    "output_tokens": response.usage.output_tokens,
+                }
+            )
+            if isinstance(response.output, dict):
+                proposed_actions = response.output.get("proposed_actions")
+                if isinstance(proposed_actions, list):
+                    details["proposed_action_count"] = len(proposed_actions)
         return (
             base_plan,
             CuratorProbe(
                 name="model-feedback-planning",
                 status="fail",
                 message=f"model feedback planning failed: {exc}",
+                details=details,
             ),
             usage,
         )
@@ -1117,6 +1132,12 @@ def _feedback_planning_model_request(
             "Do not propose GitHub mutations for positive or non-actionable feedback.",
             "Use action_type no_action, issue, corpus_pr, link_to_upload, or defer.",
             "Prefix every idempotency_key with the action_type and a colon.",
+            "Compute each idempotency_key from the exact action evidence; do not reuse keys.",
+            "Use unique action_id values and unique idempotency_key values.",
+            "Cover every included feedback_id in at least one proposed action.",
+            "Use corpus_pr only with source_id, section_id, or upload_id evidence.",
+            "Use link_to_upload only with upload_id evidence.",
+            f"Use target_repo {DEFAULT_CORPUS_REPO} for issue and corpus_pr actions.",
         ],
     }
     messages = [
@@ -1155,46 +1176,11 @@ def _feedback_planning_model_request(
     )
 
 
-def _validate_model_feedback_actions(
+def _validate_feedback_planning_model_output(
     base_plan: FeedbackPlan,
     output: FeedbackPlanningModelOutput,
 ) -> None:
-    allowed_feedback_ids = set(base_plan.included_feedback_ids)
-    allowed_upload_ids = set(base_plan.referenced_upload_ids)
-    allowed_source_ids = set(base_plan.referenced_source_ids)
-    allowed_section_ids = set(base_plan.referenced_section_ids)
-    allowed_result_ids = set(base_plan.referenced_result_ids)
-    for action in output.proposed_actions:
-        _validate_evidence_subset(
-            action.evidence,
-            allowed_feedback_ids=allowed_feedback_ids,
-            allowed_upload_ids=allowed_upload_ids,
-            allowed_source_ids=allowed_source_ids,
-            allowed_section_ids=allowed_section_ids,
-            allowed_result_ids=allowed_result_ids,
-        )
-
-
-def _validate_evidence_subset(
-    evidence: ActionEvidence,
-    *,
-    allowed_feedback_ids: set[str],
-    allowed_upload_ids: set[str],
-    allowed_source_ids: set[str],
-    allowed_section_ids: set[str],
-    allowed_result_ids: set[str],
-) -> None:
-    subsets = {
-        "feedback_ids": (set(evidence.feedback_ids), allowed_feedback_ids),
-        "upload_ids": (set(evidence.upload_ids), allowed_upload_ids),
-        "source_ids": (set(evidence.source_ids), allowed_source_ids),
-        "section_ids": (set(evidence.section_ids), allowed_section_ids),
-        "result_ids": (set(evidence.result_ids), allowed_result_ids),
-    }
-    for name, (actual, allowed) in subsets.items():
-        unknown = sorted(actual - allowed)
-        if unknown:
-            raise ValueError(f"model action cites unknown {name}: {unknown}")
+    validate_feedback_planning_model_output(base_plan, output)
 
 
 def _append_feedback_decisions_safely(
