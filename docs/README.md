@@ -26,6 +26,8 @@ Current planning artifacts:
   rotation, image updates, and rollback.
 - `ykm-curator-model-planning-plan.md` - manual-only model-backed feedback planning milestone through
   `gh-agent-proxy`.
+- `ykm-curator-model-eval-plan.md` - next milestone for evaluating and tightening model feedback
+  planning quality before state advancement or mutations.
 - `ykm-curator-prerequisite-milestone.md` - broker, proxy, GitHub app, and deployment prerequisites
   before Curator implementation.
 - `ykm-curator-dry-run-harness-milestone.md` - minimal Curator dry-run worker and sandbox report
