@@ -79,8 +79,13 @@ def main() -> None:
     curator.add_argument("--broker-url", default=os.getenv("BROKER_URL"))
     curator.add_argument("--model-proxy-url", default=os.getenv("GH_AGENT_PROXY_URL"))
     curator.add_argument("--model-proxy-token", default=os.getenv("GH_AGENT_PROXY_TOKEN"))
+    curator.add_argument("--broker-fixture", type=Path)
+    curator.add_argument("--model-proxy-fixture", type=Path)
     curator.add_argument("--require-broker", action="store_true")
     curator.add_argument("--require-model-proxy", action="store_true")
+    curator.add_argument("--lock-path", type=Path)
+    curator.add_argument("--recover-stale-lock", action="store_true")
+    curator.add_argument("--simulate-execution", action="store_true")
 
     args = parser.parse_args()
     if args.command != "curator-dry-run":
@@ -153,8 +158,13 @@ def main() -> None:
                 broker_url=args.broker_url,
                 model_proxy_url=args.model_proxy_url,
                 model_proxy_token=args.model_proxy_token,
+                broker_fixture=args.broker_fixture,
+                model_proxy_fixture=args.model_proxy_fixture,
                 required_broker=args.require_broker,
                 required_model_proxy=args.require_model_proxy,
+                lock_path=args.lock_path,
+                recover_stale_lock=args.recover_stale_lock,
+                simulate_execution=args.simulate_execution,
             )
         )
         print(report.model_dump_json(indent=2))

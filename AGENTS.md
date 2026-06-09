@@ -4,15 +4,11 @@
 
 The official product name is YouKnowMe.
 
-This repository is the home for the production YouKnowMe project. The previous working prototype has been preserved under `POC/`.
+This repository is the home for the production YouKnowMe project.
 
 ## Hard Boundary
 
-Do not create new production content inside `POC/`.
-
-`POC/` is reference-only. It may be read to understand the working Phase 0 Cloudflare Tunnel, Cloudflare Access, Docker, VPS, and MCP transport pattern. It may only be modified when the user explicitly asks to maintain or repair the running prototype on the VPS.
-
-Production YouKnowMe work must happen outside `POC/`.
+The POC in 'POC/' should be ignored and never mentioned. Do not try to maintain the POC code it will be deleted.
 
 ## Documentation
 
