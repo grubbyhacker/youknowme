@@ -62,6 +62,20 @@ from ykm.curator import CuratorDryRunConfig, run_curator_dry_run
 from curator.runner import write_curator_reports
 
 
+@pytest.fixture(autouse=True)
+def clear_curator_forbidden_env(monkeypatch) -> None:
+    for name in (
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "OPENROUTER_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "YKM_GITHUB_PRIVATE_KEY_PATH",
+        "YKM_CF_ACCESS_CLIENT_SECRET",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
 def test_curator_dry_run_writes_report(tmp_path: Path, monkeypatch) -> None:
     intake = tmp_path / "intake"
     pending = intake / "uploads" / "pending" / "upl_20260608_test"

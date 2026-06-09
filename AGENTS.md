@@ -29,6 +29,10 @@ mise run lint
 mise run test
 ```
 
+Before opening or updating a PR, run both `mise run lint` and the full `mise run test` suite unless
+there is a concrete blocker. Focused tests are useful while iterating, but they are not enough for
+presubmit.
+
 ## Git Workflow
 
 `main` is protected. Always create or switch to a feature branch before making implementation changes.
