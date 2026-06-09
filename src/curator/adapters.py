@@ -736,7 +736,7 @@ class HttpModelProxyAdapter:
         *,
         token: str | None,
         client: httpx.Client | None = None,
-        timeout_seconds: float = 5,
+        timeout_seconds: float = 120,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.token = token
