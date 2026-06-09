@@ -22,6 +22,8 @@ Current planning artifacts:
   capabilities, safety boundaries, verification, and next targets.
 - `ykm-curator-launcher-plan.md` - VPS Curator trigger plan using sandbox-broker operator REST
   launch profiles and a systemd timer.
+- `ykm-curator-launcher-runbook.md` - live Curator launcher maintenance, smoke checks, token
+  rotation, image updates, and rollback.
 - `ykm-curator-prerequisite-milestone.md` - broker, proxy, GitHub app, and deployment prerequisites
   before Curator implementation.
 - `ykm-curator-dry-run-harness-milestone.md` - minimal Curator dry-run worker and sandbox report
