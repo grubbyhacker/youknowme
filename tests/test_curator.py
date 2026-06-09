@@ -2040,12 +2040,8 @@ def test_model_fixture_adapter_validates_typed_response_output(tmp_path: Path) -
                             "schema_version": "1",
                             "proposed_actions": [
                                 {
-                                    "action_id": "act_1",
                                     "action_type": "corpus_pr",
                                     "classification": "corpus_candidate",
-                                    "idempotency_key": deterministic_idempotency_key(
-                                        "corpus_pr", evidence
-                                    ),
                                     "evidence": evidence.model_dump(),
                                     "target_repo": "grubbyhacker/ykmcorpus",
                                 }
@@ -2146,12 +2142,8 @@ def test_runner_uses_model_feedback_planning_when_task_opts_in(
                             "schema_version": "1",
                             "proposed_actions": [
                                 {
-                                    "action_id": "act_model_1",
                                     "action_type": "corpus_pr",
                                     "classification": "model_corpus_candidate",
-                                    "idempotency_key": deterministic_idempotency_key(
-                                        "corpus_pr", evidence
-                                    ),
                                     "evidence": evidence.model_dump(),
                                     "target_repo": "grubbyhacker/ykmcorpus",
                                 }
@@ -2183,6 +2175,9 @@ def test_runner_uses_model_feedback_planning_when_task_opts_in(
     assert report.model_token_count == 30
     assert report.proposed_action_count == 1
     assert report.proposed_actions[0]["action_id"] == "act_model_1"
+    assert report.proposed_actions[0]["idempotency_key"] == deterministic_idempotency_key(
+        "corpus_pr", evidence
+    )
     assert report.proposed_actions[0]["classification"] == "model_corpus_candidate"
     probe = next(probe for probe in report.probes if probe.name == "model-feedback-planning")
     assert probe.status == "pass"
@@ -2235,12 +2230,8 @@ def test_runner_fails_closed_when_model_plan_cites_unknown_evidence(
                             "schema_version": "1",
                             "proposed_actions": [
                                 {
-                                    "action_id": "act_bad",
                                     "action_type": "issue",
                                     "classification": "owner_action",
-                                    "idempotency_key": deterministic_idempotency_key(
-                                        "issue", evidence
-                                    ),
                                     "evidence": evidence.model_dump(),
                                     "target_repo": "grubbyhacker/ykmcorpus",
                                 }
@@ -2343,10 +2334,8 @@ def test_model_response_output_validates_feedback_plan_actions() -> None:
             "schema_version": "1",
             "proposed_actions": [
                 {
-                    "action_id": "act_1",
                     "action_type": "corpus_pr",
                     "classification": "corpus_candidate",
-                    "idempotency_key": deterministic_idempotency_key("corpus_pr", evidence),
                     "evidence": evidence.model_dump(),
                     "target_repo": "grubbyhacker/ykmcorpus",
                 }
@@ -2375,14 +2364,14 @@ def test_model_response_output_rejects_invalid_feedback_plan_action() -> None:
                     "action_type": "issue",
                     "classification": "owner_action",
                     "idempotency_key": "issue:abc",
-                    "evidence": {},
+                    "evidence": {"feedback_ids": ["fb_1"]},
                     "target_repo": "grubbyhacker/ykmcorpus",
                 }
             ],
         },
     )
 
-    with pytest.raises(ValidationError, match="durable evidence"):
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         validate_model_response_output(response, FeedbackPlanningModelOutput)
 
 

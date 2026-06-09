@@ -28,6 +28,7 @@ from curator.models import (
     FeedbackPlan,
     ModelCallBudget,
     ModelCallRequest,
+    ProposedAction,
     UploadPlan,
     UploadDecision,
     UploadQueueSnapshot,
@@ -35,6 +36,7 @@ from curator.models import (
 )
 from curator.model_tasks import (
     FeedbackPlanningModelOutput,
+    build_feedback_planning_proposed_actions,
     validate_feedback_planning_model_output,
     validate_model_response_output,
 )
@@ -1035,7 +1037,7 @@ def _apply_model_feedback_planning(
             FeedbackPlanningModelOutput,
             expected_task_name="feedback_plan",
         )
-        _validate_feedback_planning_model_output(base_plan, output)
+        proposed_actions = build_feedback_planning_proposed_actions(output, base_plan=base_plan)
     except Exception as exc:  # noqa: BLE001 - model failures must fail closed into the report.
         usage = empty_usage
         details: dict[str, Any] = {"model": model, "error": str(exc)}
@@ -1066,7 +1068,7 @@ def _apply_model_feedback_planning(
         )
     token_count = response.usage.input_tokens + response.usage.output_tokens
     return (
-        base_plan.model_copy(update={"proposed_actions": output.proposed_actions}),
+        base_plan.model_copy(update={"proposed_actions": proposed_actions}),
         CuratorProbe(
             name="model-feedback-planning",
             status="pass",
@@ -1123,22 +1125,19 @@ def _feedback_planning_model_request(
         "run_id": run_id,
         "feedback_window": base_plan.feedback_window.model_dump(),
         "feedback_records": records,
-        "deterministic_proposed_actions": [
-            action.model_dump(mode="json") for action in base_plan.proposed_actions
-        ],
+        "deterministic_action_summary": _action_summary(base_plan.proposed_actions),
+        "deterministic_capacity_deferred_feedback_ids": base_plan.capacity_deferred_feedback_ids,
         "constraints": [
             "Return only valid JSON matching the response schema.",
             "Use only durable evidence identifiers present in feedback_records.",
             "Do not propose GitHub mutations for positive or non-actionable feedback.",
             "Use action_type no_action, issue, corpus_pr, link_to_upload, or defer.",
-            "Prefix every idempotency_key with the action_type and a colon.",
-            "Compute each idempotency_key from the exact action evidence; do not reuse keys.",
-            "Use unique action_id values and unique idempotency_key values.",
+            "Do not include action_id, idempotency_key, validation, or execution fields; the controller assigns them.",
             "Cover every included feedback_id in at least one proposed action.",
             "Use corpus_pr only with source_id, section_id, or upload_id evidence.",
             "Use link_to_upload only with upload_id evidence.",
             f"Use target_repo {DEFAULT_CORPUS_REPO} for issue and corpus_pr actions.",
-            "Treat deterministic_proposed_actions as a baseline, not an answer to copy.",
+            "Treat deterministic_action_summary as a baseline summary, not an answer to copy.",
             "Do not preserve deterministic capacity deferrals when category and evidence support no_action.",
             "Classify agent_note, non_actionable, and positive_content as no_action unless durable evidence proves otherwise.",
             "Prefer one grouped action over many identical actions when action_type, classification, target_repo, and evidence kind match.",
@@ -1178,6 +1177,14 @@ def _feedback_planning_model_request(
         },
         max_tokens=max_tokens,
     )
+
+
+def _action_summary(actions: list[ProposedAction]) -> dict[str, int]:
+    summary: dict[str, int] = {}
+    for action in actions:
+        key = f"{action.action_type}:{action.classification}"
+        summary[key] = summary.get(key, 0) + 1
+    return dict(sorted(summary.items()))
 
 
 def _validate_feedback_planning_model_output(

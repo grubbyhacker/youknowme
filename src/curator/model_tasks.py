@@ -8,6 +8,7 @@ from curator.models import (
     CURATOR_SCHEMA_VERSION,
     DEFAULT_TARGET_REPO,
     ActionEvidence,
+    CuratorActionType,
     CuratorPrState,
     FeedbackPlan,
     ModelCallResponse,
@@ -17,11 +18,20 @@ from curator.models import (
 from curator.state import deterministic_idempotency_key
 
 
+class FeedbackPlanningModelAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action_type: CuratorActionType
+    classification: str
+    evidence: ActionEvidence = Field(default_factory=ActionEvidence)
+    target_repo: str | None = None
+
+
 class FeedbackPlanningModelOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal["1"] = CURATOR_SCHEMA_VERSION
-    proposed_actions: list[ProposedAction] = Field(default_factory=list)
+    proposed_actions: list[FeedbackPlanningModelAction] = Field(default_factory=list)
     notes: str | None = Field(default=None, max_length=500)
 
 
@@ -73,24 +83,24 @@ def validate_feedback_planning_model_output(
     base_plan: FeedbackPlan,
     output: FeedbackPlanningModelOutput,
 ) -> None:
+    build_feedback_planning_proposed_actions(output, base_plan=base_plan)
+
+
+def build_feedback_planning_proposed_actions(
+    output: FeedbackPlanningModelOutput,
+    *,
+    base_plan: FeedbackPlan,
+) -> list[ProposedAction]:
     allowed_feedback_ids = set(base_plan.included_feedback_ids)
     allowed_upload_ids = set(base_plan.referenced_upload_ids)
     allowed_source_ids = set(base_plan.referenced_source_ids)
     allowed_section_ids = set(base_plan.referenced_section_ids)
     allowed_result_ids = set(base_plan.referenced_result_ids)
-    seen_action_ids: set[str] = set()
     seen_idempotency_keys: set[str] = set()
     covered_feedback_ids: set[str] = set()
+    proposed_actions: list[ProposedAction] = []
 
-    for action in output.proposed_actions:
-        if action.action_id in seen_action_ids:
-            raise ValueError(f"model action duplicates action_id: {action.action_id}")
-        seen_action_ids.add(action.action_id)
-        if action.idempotency_key in seen_idempotency_keys:
-            raise ValueError(
-                f"model action duplicates idempotency_key: {action.idempotency_key}"
-            )
-        seen_idempotency_keys.add(action.idempotency_key)
+    for index, action in enumerate(output.proposed_actions, start=1):
         _validate_evidence_subset(
             action.evidence,
             allowed_feedback_ids=allowed_feedback_ids,
@@ -99,12 +109,10 @@ def validate_feedback_planning_model_output(
             allowed_section_ids=allowed_section_ids,
             allowed_result_ids=allowed_result_ids,
         )
-        expected_key = deterministic_idempotency_key(action.action_type, action.evidence)
-        if action.idempotency_key != expected_key:
-            raise ValueError(
-                "model action idempotency_key does not match action evidence: "
-                f"{action.action_id}"
-            )
+        idempotency_key = deterministic_idempotency_key(action.action_type, action.evidence)
+        if idempotency_key in seen_idempotency_keys:
+            raise ValueError(f"model action duplicates idempotency_key: {idempotency_key}")
+        seen_idempotency_keys.add(idempotency_key)
         if action.action_type == "corpus_pr" and not (
             action.evidence.source_ids
             or action.evidence.section_ids
@@ -119,10 +127,23 @@ def validate_feedback_planning_model_output(
                 f"{DEFAULT_TARGET_REPO}"
             )
         covered_feedback_ids.update(action.evidence.feedback_ids)
+        proposed_actions.append(
+            ProposedAction(
+                action_id=f"act_model_{index}",
+                action_type=action.action_type,
+                classification=action.classification,
+                idempotency_key=idempotency_key,
+                evidence=action.evidence,
+                target_repo=action.target_repo,
+                validation="accepted",
+                execution="not_executed",
+            )
+        )
 
     missing_feedback_ids = sorted(allowed_feedback_ids - covered_feedback_ids)
     if missing_feedback_ids:
         raise ValueError(f"model actions do not cover included feedback_ids: {missing_feedback_ids}")
+    return proposed_actions
 
 
 def _validate_evidence_subset(

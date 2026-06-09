@@ -6,15 +6,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from curator.model_tasks import (
     FeedbackPlanningModelOutput,
     validate_feedback_planning_model_output,
     validate_model_response_output,
 )
-from curator.models import ActionEvidence, FeedbackPlan, FeedbackWindow, ModelCallResponse
+from curator.models import FeedbackPlan, FeedbackWindow, ModelCallResponse
 from curator.planning import build_feedback_plan
-from curator.state import deterministic_idempotency_key
 
 
 FIXTURE_PATH = Path("fixtures/curator/model-feedback-planning/cases.json")
@@ -52,9 +52,9 @@ def test_model_feedback_planning_eval_rejects_bad_outputs(case: dict[str, Any]) 
         case["feedback_records"],
         soft_action_threshold=case.get("soft_action_threshold", 10),
     )
-    output = _model_output(case["model_output"])
 
-    with pytest.raises(ValueError, match=case["match"]):
+    with pytest.raises((ValueError, ValidationError), match=case["match"]):
+        output = _model_output(case["model_output"])
         validate_feedback_planning_model_output(base_plan, output)
 
 
@@ -94,10 +94,4 @@ def _model_output(raw_output: dict[str, Any]) -> FeedbackPlanningModelOutput:
 
 
 def _materialize_output(raw_output: dict[str, Any]) -> dict[str, Any]:
-    output = copy.deepcopy(raw_output)
-    for action in output.get("proposed_actions", []):
-        if "idempotency_key" in action:
-            continue
-        evidence = ActionEvidence.model_validate(action.get("evidence", {}))
-        action["idempotency_key"] = deterministic_idempotency_key(action["action_type"], evidence)
-    return output
+    return copy.deepcopy(raw_output)

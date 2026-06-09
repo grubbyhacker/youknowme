@@ -15,12 +15,15 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_id": "act_model_positive",
             "action_type": "no_action",
             "classification": "positive",
             "evidence": {
-              "feedback_ids": ["fb_positive"],
-              "source_ids": ["src_home_spa"]
+              "feedback_ids": [
+                "fb_positive"
+              ],
+              "source_ids": [
+                "src_home_spa"
+              ]
             }
           }
         ]
@@ -40,13 +43,16 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_id": "act_model_corpus",
             "action_type": "corpus_pr",
             "classification": "corpus_candidate",
             "target_repo": "grubbyhacker/ykmcorpus",
             "evidence": {
-              "feedback_ids": ["fb_wrong_content"],
-              "source_ids": ["src_thermostat"]
+              "feedback_ids": [
+                "fb_wrong_content"
+              ],
+              "source_ids": [
+                "src_thermostat"
+              ]
             }
           }
         ]
@@ -65,12 +71,13 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_id": "act_model_issue",
             "action_type": "issue",
             "classification": "owner_action",
             "target_repo": "grubbyhacker/ykmcorpus",
             "evidence": {
-              "feedback_ids": ["fb_missing_untargeted"]
+              "feedback_ids": [
+                "fb_missing_untargeted"
+              ]
             }
           }
         ]
@@ -90,12 +97,15 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_id": "act_model_upload",
             "action_type": "link_to_upload",
             "classification": "upload_linked",
             "evidence": {
-              "feedback_ids": ["fb_upload"],
-              "upload_ids": ["upl_home_note"]
+              "feedback_ids": [
+                "fb_upload"
+              ],
+              "upload_ids": [
+                "upl_home_note"
+              ]
             }
           }
         ]
@@ -121,13 +131,17 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_id": "act_model_grouped",
             "action_type": "corpus_pr",
             "classification": "corpus_candidate",
             "target_repo": "grubbyhacker/ykmcorpus",
             "evidence": {
-              "feedback_ids": ["fb_repeat_1", "fb_repeat_2"],
-              "source_ids": ["src_heat_pump"]
+              "feedback_ids": [
+                "fb_repeat_1",
+                "fb_repeat_2"
+              ],
+              "source_ids": [
+                "src_heat_pump"
+              ]
             }
           }
         ]
@@ -162,11 +176,15 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_id": "act_model_agent_notes",
             "action_type": "no_action",
             "classification": "non_actionable",
             "evidence": {
-              "feedback_ids": ["fb_agent_1", "fb_agent_2", "fb_agent_3", "fb_agent_4"]
+              "feedback_ids": [
+                "fb_agent_1",
+                "fb_agent_2",
+                "fb_agent_3",
+                "fb_agent_4"
+              ]
             }
           }
         ]
@@ -188,12 +206,13 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_id": "act_unknown",
             "action_type": "issue",
             "classification": "owner_action",
             "target_repo": "grubbyhacker/ykmcorpus",
             "evidence": {
-              "feedback_ids": ["fb_unknown"]
+              "feedback_ids": [
+                "fb_unknown"
+              ]
             }
           }
         ]
@@ -218,60 +237,58 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_id": "act_one",
             "action_type": "no_action",
             "classification": "positive",
             "evidence": {
-              "feedback_ids": ["fb_one"]
+              "feedback_ids": [
+                "fb_one"
+              ]
             }
           }
         ]
       }
     },
     {
-      "name": "duplicate_action_id",
-      "match": "duplicates action_id",
+      "name": "duplicate_materialized_action",
+      "match": "duplicates idempotency_key",
       "feedback_records": [
         {
           "event": "feedback",
-          "feedback_id": "fb_a",
+          "feedback_id": "fb_duplicate",
           "category": "positive_content"
-        },
-        {
-          "event": "feedback",
-          "feedback_id": "fb_b",
-          "category": "non_actionable"
         }
       ],
       "model_output": {
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_id": "act_duplicate",
             "action_type": "no_action",
             "classification": "positive",
             "evidence": {
-              "feedback_ids": ["fb_a"]
+              "feedback_ids": [
+                "fb_duplicate"
+              ]
             }
           },
           {
-            "action_id": "act_duplicate",
             "action_type": "no_action",
-            "classification": "non_actionable",
+            "classification": "positive",
             "evidence": {
-              "feedback_ids": ["fb_b"]
+              "feedback_ids": [
+                "fb_duplicate"
+              ]
             }
           }
         ]
       }
     },
     {
-      "name": "invalid_idempotency_key",
-      "match": "idempotency_key does not match",
+      "name": "controller_owned_field_rejected",
+      "match": "Extra inputs are not permitted",
       "feedback_records": [
         {
           "event": "feedback",
-          "feedback_id": "fb_bad_key",
+          "feedback_id": "fb_controller_field",
           "category": "needs_owner_action"
         }
       ],
@@ -279,13 +296,14 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_id": "act_bad_key",
             "action_type": "issue",
             "classification": "owner_action",
             "target_repo": "grubbyhacker/ykmcorpus",
             "idempotency_key": "issue:0000000000000000",
             "evidence": {
-              "feedback_ids": ["fb_bad_key"]
+              "feedback_ids": [
+                "fb_controller_field"
+              ]
             }
           }
         ]
@@ -305,12 +323,13 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_id": "act_speculative",
             "action_type": "corpus_pr",
             "classification": "corpus_candidate",
             "target_repo": "grubbyhacker/ykmcorpus",
             "evidence": {
-              "feedback_ids": ["fb_speculative"]
+              "feedback_ids": [
+                "fb_speculative"
+              ]
             }
           }
         ]
@@ -331,12 +350,15 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_id": "act_upload_missing",
             "action_type": "link_to_upload",
             "classification": "upload_linked",
             "evidence": {
-              "feedback_ids": ["fb_upload_missing"],
-              "source_ids": ["src_upload_context"]
+              "feedback_ids": [
+                "fb_upload_missing"
+              ],
+              "source_ids": [
+                "src_upload_context"
+              ]
             }
           }
         ]
@@ -356,12 +378,13 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_id": "act_repo",
             "action_type": "issue",
             "classification": "owner_action",
             "target_repo": "grubbyhacker/aboutmemcp",
             "evidence": {
-              "feedback_ids": ["fb_repo"]
+              "feedback_ids": [
+                "fb_repo"
+              ]
             }
           }
         ]
