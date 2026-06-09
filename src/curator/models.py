@@ -94,6 +94,8 @@ class CuratorTask(BaseModel):
     enabled_actions: list[CuratorEnabledAction] = Field(default_factory=list)
     github_mutation_budget: GithubMutationBudget = Field(default_factory=GithubMutationBudget)
     model_call_budget: ModelCallBudget = Field(default_factory=ModelCallBudget)
+    model_feedback_planning: bool = False
+    feedback_model: str | None = None
     feedback_soft_action_threshold: int = Field(default=10, ge=0)
     stale_lock_timeout_seconds: int = Field(default=DEFAULT_STALE_LOCK_TIMEOUT_SECONDS, ge=1)
 
@@ -508,7 +510,10 @@ class ModelCallRequest(BaseModel):
 
     schema_version: Literal["1"] = CURATOR_SCHEMA_VERSION
     task_name: str
+    run_id: str | None = None
+    model: str | None = None
     input: dict[str, Any] = Field(default_factory=dict)
+    max_tokens: int | None = Field(default=None, ge=1)
 
 
 class ModelUsage(BaseModel):

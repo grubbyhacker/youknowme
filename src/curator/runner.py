@@ -15,6 +15,7 @@ from curator.adapters import (
     HttpModelProxyAdapter,
 )
 from curator.models import (
+    ActionEvidence,
     DEFAULT_LOCK_PATH,
     DEFAULT_STALE_LOCK_TIMEOUT_SECONDS,
     CuratorIssueSnapshot,
@@ -24,13 +25,16 @@ from curator.models import (
     CuratorRunReport,
     CuratorState,
     CuratorTask,
+    FeedbackInputRecord,
     FeedbackPlan,
     ModelCallBudget,
+    ModelCallRequest,
     UploadPlan,
     UploadDecision,
     UploadQueueSnapshot,
     UploadTransitionPreview,
 )
+from curator.model_tasks import FeedbackPlanningModelOutput, validate_model_response_output
 from curator.execution import (
     append_feedback_decisions,
     build_execution_intents,
@@ -85,6 +89,10 @@ def run_curator_dry_run(config: CuratorDryRunConfig) -> CuratorDryRunReport:
     feedback_soft_action_threshold = (
         task_model.feedback_soft_action_threshold if task_model is not None else 10
     )
+    model_feedback_planning = (
+        task_model.model_feedback_planning if task_model is not None else False
+    )
+    feedback_model = task_model.feedback_model if task_model is not None else None
     github_mutation_budget = (
         task_model.github_mutation_budget.model_dump() if task_model is not None else {}
     )
@@ -108,6 +116,8 @@ def run_curator_dry_run(config: CuratorDryRunConfig) -> CuratorDryRunReport:
         "feedback_soft_action_threshold": feedback_soft_action_threshold,
         "github_mutation_budget": github_mutation_budget,
         "model_call_budget": model_call_budget,
+        "model_feedback_planning": model_feedback_planning,
+        "feedback_model": feedback_model,
     }
     _check_forbidden_env(probes)
     if any(probe.name == "task" and probe.status == "fail" for probe in probes):
@@ -147,6 +157,8 @@ def _run_with_lock(
     feedback_soft_action_threshold: int,
     github_mutation_budget: dict[str, int],
     model_call_budget: dict[str, int],
+    model_feedback_planning: bool,
+    feedback_model: str | None,
 ) -> CuratorDryRunReport:
     _check_directory(config.intake, "intake", probes, writable=False)
     _check_directory(config.output, "output", probes, writable=True)
@@ -230,6 +242,20 @@ def _run_with_lock(
         latest_decisions=latest_decisions,
         soft_action_threshold=feedback_soft_action_threshold,
     )
+    model_call_count = 0
+    model_token_count = 0
+    if "plan_feedback" in enabled_actions and model_feedback_planning:
+        feedback_plan, model_probe, model_usage = _apply_model_feedback_planning(
+            config=config,
+            run_id=run_id,
+            model=feedback_model,
+            model_call_budget=ModelCallBudget.model_validate(model_call_budget),
+            base_plan=feedback_plan,
+            feedback_records=feedback_records,
+        )
+        probes.append(model_probe)
+        model_call_count += model_usage["call_count"]
+        model_token_count += model_usage["token_count"]
     if "plan_uploads" in enabled_actions:
         upload_plan = build_upload_plan(run_id=run_id, upload_snapshot=queue_snapshot)
     else:
@@ -360,7 +386,7 @@ def _run_with_lock(
             probes.append(issue_preflight)
     requires_model_proxy = config.required_model_proxy or (
         mode == "manual_live" and model_call_budget.get("max_calls_per_run", 0) > 0
-    )
+    ) or model_feedback_planning
     _probe_model_proxy(config, probes, required=requires_model_proxy)
     _probe_model_budget(config, probes, model_call_budget)
     model_budget_exhausted = any(
@@ -571,6 +597,8 @@ def _run_with_lock(
         ),
         capacity_deferred_feedback_ids=feedback_plan.capacity_deferred_feedback_ids,
         model_call_budget=model_call_budget,
+        model_call_count=model_call_count,
+        model_token_count=model_token_count,
         validation_failure_count=metadata_error_count
         + manifest_error_count
         + branch_collision_count
@@ -603,6 +631,8 @@ def _empty_report(
     feedback_soft_action_threshold: int,
     github_mutation_budget: dict[str, int],
     model_call_budget: dict[str, int],
+    model_feedback_planning: bool,
+    feedback_model: str | None,
 ) -> CuratorDryRunReport:
     completed_at = datetime.now(UTC)
     return CuratorDryRunReport(
@@ -944,6 +974,227 @@ def _requires_broker(feedback_plan: FeedbackPlan, upload_plan: UploadPlan) -> bo
     return any(
         action.action_type in {"issue", "corpus_pr"} for action in feedback_plan.proposed_actions
     ) or bool(upload_plan.review_previews)
+
+
+def _apply_model_feedback_planning(
+    *,
+    config: CuratorDryRunConfig,
+    run_id: str,
+    model: str | None,
+    model_call_budget: ModelCallBudget,
+    base_plan: FeedbackPlan,
+    feedback_records: list[dict[str, Any]],
+) -> tuple[FeedbackPlan, CuratorProbe, dict[str, int]]:
+    empty_usage = {"call_count": 0, "token_count": 0}
+    if not base_plan.included_feedback_ids:
+        return (
+            base_plan,
+            CuratorProbe(
+                name="model-feedback-planning",
+                status="skip",
+                message="model feedback planning skipped because no feedback records are included",
+            ),
+            empty_usage,
+        )
+    if model_call_budget.max_calls_per_run < 1:
+        return (
+            base_plan,
+            CuratorProbe(
+                name="model-feedback-planning",
+                status="fail",
+                message="model feedback planning requires at least one model call",
+            ),
+            empty_usage,
+        )
+    if not model:
+        return (
+            base_plan,
+            CuratorProbe(
+                name="model-feedback-planning",
+                status="fail",
+                message="model feedback planning requires feedback_model in the task contract",
+            ),
+            empty_usage,
+        )
+    response = None
+    try:
+        adapter = _model_adapter(config)
+        request = _feedback_planning_model_request(
+            run_id=run_id,
+            model=model,
+            model_call_budget=model_call_budget,
+            base_plan=base_plan,
+            feedback_records=feedback_records,
+        )
+        response = adapter.call(request)
+        output = validate_model_response_output(
+            response,
+            FeedbackPlanningModelOutput,
+            expected_task_name="feedback_plan",
+        )
+        _validate_model_feedback_actions(base_plan, output)
+    except Exception as exc:  # noqa: BLE001 - model failures must fail closed into the report.
+        usage = empty_usage
+        if response is not None:
+            usage = {
+                "call_count": 1,
+                "token_count": response.usage.input_tokens + response.usage.output_tokens,
+            }
+        return (
+            base_plan,
+            CuratorProbe(
+                name="model-feedback-planning",
+                status="fail",
+                message=f"model feedback planning failed: {exc}",
+            ),
+            usage,
+        )
+    token_count = response.usage.input_tokens + response.usage.output_tokens
+    return (
+        base_plan.model_copy(update={"proposed_actions": output.proposed_actions}),
+        CuratorProbe(
+            name="model-feedback-planning",
+            status="pass",
+            message="model feedback planning completed",
+            details={
+                "model": model,
+                "proposed_action_count": len(output.proposed_actions),
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+            },
+        ),
+        {"call_count": 1, "token_count": token_count},
+    )
+
+
+def _model_adapter(config: CuratorDryRunConfig) -> FixtureModelAdapter | HttpModelProxyAdapter:
+    if config.model_proxy_fixture is not None:
+        return FixtureModelAdapter.from_path(config.model_proxy_fixture)
+    return HttpModelProxyAdapter(
+        config.model_proxy_url or "",
+        token=config.model_proxy_token,
+    )
+
+
+def _feedback_planning_model_request(
+    *,
+    run_id: str,
+    model: str,
+    model_call_budget: ModelCallBudget,
+    base_plan: FeedbackPlan,
+    feedback_records: list[dict[str, Any]],
+) -> ModelCallRequest:
+    included = set(base_plan.included_feedback_ids)
+    records = []
+    for raw_record in feedback_records:
+        try:
+            record = FeedbackInputRecord.model_validate(raw_record)
+        except ValidationError:
+            continue
+        if record.feedback_id not in included:
+            continue
+        records.append(
+            {
+                "feedback_id": record.feedback_id,
+                "category": record.category,
+                "source_id": record.source_id,
+                "section_id": record.section_id,
+                "result_ids": record.result_ids,
+                "upload_id": record.upload_id,
+            }
+        )
+    prompt_input = {
+        "schema_version": "1",
+        "run_id": run_id,
+        "feedback_window": base_plan.feedback_window.model_dump(),
+        "feedback_records": records,
+        "deterministic_proposed_actions": [
+            action.model_dump(mode="json") for action in base_plan.proposed_actions
+        ],
+        "constraints": [
+            "Return only valid JSON matching the response schema.",
+            "Use only durable evidence identifiers present in feedback_records.",
+            "Do not propose GitHub mutations for positive or non-actionable feedback.",
+            "Use action_type no_action, issue, corpus_pr, link_to_upload, or defer.",
+            "Prefix every idempotency_key with the action_type and a colon.",
+        ],
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are the YouKnowMe Curator planning model. Produce conservative "
+                "feedback actions from durable evidence only."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(prompt_input, sort_keys=True),
+        },
+    ]
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "feedback_planning_output",
+            "schema": FeedbackPlanningModelOutput.model_json_schema(),
+            "strict": True,
+        },
+    }
+    max_tokens = model_call_budget.max_tokens_per_run or None
+    return ModelCallRequest(
+        task_name="feedback_plan",
+        run_id=run_id,
+        model=model,
+        input={
+            "messages": messages,
+            "response_format": response_format,
+            "temperature": 0,
+            "metadata": {"feature": "feedback_planning"},
+        },
+        max_tokens=max_tokens,
+    )
+
+
+def _validate_model_feedback_actions(
+    base_plan: FeedbackPlan,
+    output: FeedbackPlanningModelOutput,
+) -> None:
+    allowed_feedback_ids = set(base_plan.included_feedback_ids)
+    allowed_upload_ids = set(base_plan.referenced_upload_ids)
+    allowed_source_ids = set(base_plan.referenced_source_ids)
+    allowed_section_ids = set(base_plan.referenced_section_ids)
+    allowed_result_ids = set(base_plan.referenced_result_ids)
+    for action in output.proposed_actions:
+        _validate_evidence_subset(
+            action.evidence,
+            allowed_feedback_ids=allowed_feedback_ids,
+            allowed_upload_ids=allowed_upload_ids,
+            allowed_source_ids=allowed_source_ids,
+            allowed_section_ids=allowed_section_ids,
+            allowed_result_ids=allowed_result_ids,
+        )
+
+
+def _validate_evidence_subset(
+    evidence: ActionEvidence,
+    *,
+    allowed_feedback_ids: set[str],
+    allowed_upload_ids: set[str],
+    allowed_source_ids: set[str],
+    allowed_section_ids: set[str],
+    allowed_result_ids: set[str],
+) -> None:
+    subsets = {
+        "feedback_ids": (set(evidence.feedback_ids), allowed_feedback_ids),
+        "upload_ids": (set(evidence.upload_ids), allowed_upload_ids),
+        "source_ids": (set(evidence.source_ids), allowed_source_ids),
+        "section_ids": (set(evidence.section_ids), allowed_section_ids),
+        "result_ids": (set(evidence.result_ids), allowed_result_ids),
+    }
+    for name, (actual, allowed) in subsets.items():
+        unknown = sorted(actual - allowed)
+        if unknown:
+            raise ValueError(f"model action cites unknown {name}: {unknown}")
 
 
 def _append_feedback_decisions_safely(

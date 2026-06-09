@@ -2083,6 +2083,244 @@ def test_model_fixture_adapter_rejects_invalid_typed_response_output(tmp_path: P
         )
 
 
+def test_runner_uses_model_feedback_planning_when_task_opts_in(
+    tmp_path: Path, monkeypatch
+) -> None:
+    intake = tmp_path / "intake"
+    feedback = intake / "feedback" / "feedback.jsonl"
+    feedback.parent.mkdir(parents=True)
+    feedback.write_text(
+        (
+            '{"event":"feedback","feedback_id":"fb_1","category":"new_source",'
+            '"source_id":"src_1"}\n'
+        ),
+        encoding="utf-8",
+    )
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "run_id": "run-model-plan",
+                "mode": "dry_run",
+                "enabled_actions": ["plan_feedback"],
+                "model_feedback_planning": True,
+                "feedback_model": "deepseek/deepseek-v4-flash",
+                "model_call_budget": {
+                    "max_calls_per_run": 1,
+                    "max_tokens_per_run": 100,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    evidence = ActionEvidence(feedback_ids=["fb_1"], source_ids=["src_1"])
+    fixture = tmp_path / "model-fixture.json"
+    fixture.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "reachable": True,
+                "max_calls_per_run": 1,
+                "max_tokens_per_run": 100,
+                "responses": {
+                    "feedback_plan": {
+                        "schema_version": "1",
+                        "task_name": "feedback_plan",
+                        "output": {
+                            "schema_version": "1",
+                            "proposed_actions": [
+                                {
+                                    "action_id": "act_model_1",
+                                    "action_type": "corpus_pr",
+                                    "classification": "model_corpus_candidate",
+                                    "idempotency_key": deterministic_idempotency_key(
+                                        "corpus_pr", evidence
+                                    ),
+                                    "evidence": evidence.model_dump(),
+                                    "target_repo": "grubbyhacker/ykmcorpus",
+                                }
+                            ],
+                        },
+                        "usage": {"input_tokens": 21, "output_tokens": 9},
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="ignored",
+            intake=intake,
+            output=tmp_path / "output",
+            task=task,
+            model_proxy_fixture=fixture,
+            required_model_proxy=True,
+        )
+    )
+
+    assert report.status == "pass"
+    assert report.model_call_count == 1
+    assert report.model_token_count == 30
+    assert report.proposed_action_count == 1
+    assert report.proposed_actions[0]["action_id"] == "act_model_1"
+    assert report.proposed_actions[0]["classification"] == "model_corpus_candidate"
+    probe = next(probe for probe in report.probes if probe.name == "model-feedback-planning")
+    assert probe.status == "pass"
+    assert probe.details["model"] == "deepseek/deepseek-v4-flash"
+
+
+def test_runner_fails_closed_when_model_plan_cites_unknown_evidence(
+    tmp_path: Path, monkeypatch
+) -> None:
+    intake = tmp_path / "intake"
+    feedback = intake / "feedback" / "feedback.jsonl"
+    feedback.parent.mkdir(parents=True)
+    feedback.write_text(
+        '{"event":"feedback","feedback_id":"fb_1","category":"needs_owner_action"}\n',
+        encoding="utf-8",
+    )
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "run_id": "run-model-invalid",
+                "mode": "dry_run",
+                "enabled_actions": ["plan_feedback"],
+                "model_feedback_planning": True,
+                "feedback_model": "deepseek/deepseek-v4-flash",
+                "model_call_budget": {
+                    "max_calls_per_run": 1,
+                    "max_tokens_per_run": 100,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    evidence = ActionEvidence(feedback_ids=["fb_2"])
+    fixture = tmp_path / "model-fixture.json"
+    fixture.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "reachable": True,
+                "max_calls_per_run": 1,
+                "max_tokens_per_run": 100,
+                "responses": {
+                    "feedback_plan": {
+                        "schema_version": "1",
+                        "task_name": "feedback_plan",
+                        "output": {
+                            "schema_version": "1",
+                            "proposed_actions": [
+                                {
+                                    "action_id": "act_bad",
+                                    "action_type": "issue",
+                                    "classification": "owner_action",
+                                    "idempotency_key": deterministic_idempotency_key(
+                                        "issue", evidence
+                                    ),
+                                    "evidence": evidence.model_dump(),
+                                    "target_repo": "grubbyhacker/ykmcorpus",
+                                }
+                            ],
+                        },
+                        "usage": {"input_tokens": 13, "output_tokens": 8},
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="ignored",
+            intake=intake,
+            output=tmp_path / "output",
+            task=task,
+            model_proxy_fixture=fixture,
+            required_model_proxy=True,
+        )
+    )
+
+    assert report.status == "fail"
+    assert report.model_call_count == 1
+    assert report.model_token_count == 21
+    assert report.proposed_actions[0]["evidence"]["feedback_ids"] == ["fb_1"]
+    probe = next(probe for probe in report.probes if probe.name == "model-feedback-planning")
+    assert probe.status == "fail"
+    assert "unknown feedback_ids" in probe.message
+
+
+def test_runner_ignores_model_fixture_when_model_planning_is_disabled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    intake = tmp_path / "intake"
+    feedback = intake / "feedback" / "feedback.jsonl"
+    feedback.parent.mkdir(parents=True)
+    feedback.write_text(
+        '{"event":"feedback","feedback_id":"fb_1","category":"needs_owner_action"}\n',
+        encoding="utf-8",
+    )
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "run_id": "run-no-model-plan",
+                "mode": "dry_run",
+                "enabled_actions": ["plan_feedback"],
+                "model_call_budget": {
+                    "max_calls_per_run": 1,
+                    "max_tokens_per_run": 100,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    fixture = tmp_path / "model-fixture.json"
+    fixture.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "reachable": True,
+                "max_calls_per_run": 1,
+                "max_tokens_per_run": 100,
+                "responses": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="ignored",
+            intake=intake,
+            output=tmp_path / "output",
+            task=task,
+            model_proxy_fixture=fixture,
+        )
+    )
+
+    assert report.status == "pass"
+    assert report.model_call_count == 0
+    assert report.proposed_actions[0]["action_id"] == "act_1"
+    assert not any(probe.name == "model-feedback-planning" for probe in report.probes)
+
+
 def test_model_response_output_validates_feedback_plan_actions() -> None:
     evidence = ActionEvidence(feedback_ids=["fb_1"], source_ids=["src_1"])
     response = ModelCallResponse(
@@ -2273,11 +2511,51 @@ def test_http_model_proxy_adapter_missing_config_does_not_expose_token() -> None
     assert "proxy-token" not in probe.model_dump_json()
 
 
-def test_http_model_proxy_adapter_rejects_live_calls() -> None:
-    adapter = HttpModelProxyAdapter("http://model-proxy:8080", token="proxy-token")
+def test_http_model_proxy_adapter_calls_proxy_endpoint() -> None:
+    requests: list[httpx.Request] = []
 
-    with pytest.raises(RuntimeError, match="live model proxy calls are not enabled"):
-        adapter.call(ModelCallRequest(task_name="feedback_plan"))
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "content": {
+                    "schema_version": "1",
+                    "proposed_actions": [],
+                },
+                "usage": {"prompt_tokens": 11, "completion_tokens": 7},
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    adapter = HttpModelProxyAdapter(
+        "http://gh-agent-proxy:8092/v1/model/call",
+        token="proxy-token",
+        client=client,
+    )
+
+    response = adapter.call(
+        ModelCallRequest(
+            task_name="feedback_plan",
+            run_id="run-model",
+            model="deepseek/deepseek-v4-flash",
+            input={
+                "messages": [{"role": "user", "content": "{}"}],
+                "response_format": {"type": "json_object"},
+            },
+            max_tokens=100,
+        )
+    )
+
+    assert response.output == {"schema_version": "1", "proposed_actions": []}
+    assert response.usage.input_tokens == 11
+    assert response.usage.output_tokens == 7
+    assert str(requests[0].url) == "http://gh-agent-proxy:8092/v1/model/call"
+    assert requests[0].headers["authorization"] == "Bearer proxy-token"
+    request_payload = json.loads(requests[0].content)
+    assert request_payload["run_id"] == "run-model"
+    assert request_payload["model"] == "deepseek/deepseek-v4-flash"
+    assert request_payload["max_tokens"] == 100
 
 
 def test_http_broker_adapter_probe_uses_healthz_without_secret_headers() -> None:

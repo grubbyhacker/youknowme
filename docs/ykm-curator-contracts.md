@@ -52,6 +52,8 @@ The Curator task payload is a JSON object:
     "max_calls_per_run": 0,
     "max_tokens_per_run": 0
   },
+  "model_feedback_planning": false,
+  "feedback_model": null,
   "feedback_soft_action_threshold": 10,
   "stale_lock_timeout_seconds": 7200
 }
@@ -70,6 +72,14 @@ Initial modes:
 - `dry_run`: read evidence and emit plans/reports only.
 - `state_only`: update Curator state without GitHub or model mutations.
 - `manual_live`: allow policy-validated GitHub/model operations through broker/proxy boundaries.
+
+`model_feedback_planning` is an explicit opt-in for replacing the deterministic feedback planner's
+proposed actions with a single model-planned feedback action set. It requires a non-empty
+`feedback_model` and a `model_call_budget.max_calls_per_run` of at least `1`. The Curator still
+reads evidence locally, sends model calls only through `gh-agent-proxy`, validates the returned
+action contract, and rejects any model action that cites evidence identifiers outside the current
+feedback window. With the default `model_feedback_planning: false` and zero model budget, feedback
+planning is fully deterministic.
 
 In the deterministic skeleton, `manual_live` is contract-reserved but guarded: a run may load,
 snapshot, write preflight plan artifacts, run policy preflight, and report, but exits with a failure

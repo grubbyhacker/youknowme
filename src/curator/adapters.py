@@ -771,8 +771,59 @@ class HttpModelProxyAdapter:
         )
 
     def call(self, request: ModelCallRequest) -> ModelCallResponse:
-        raise RuntimeError(
-            f"live model proxy calls are not enabled for task: {request.task_name}"
+        if not self.base_url:
+            raise ValueError("model proxy URL is required for live model calls")
+        if not self.token:
+            raise ValueError("model proxy token is required for live model calls")
+        if not request.run_id:
+            raise ValueError("model proxy call requires run_id")
+        if not request.model:
+            raise ValueError("model proxy call requires model")
+        payload: dict[str, Any] = {
+            "run_id": request.run_id,
+            "model": request.model,
+            "messages": request.input.get("messages"),
+            "metadata": {
+                "task_name": request.task_name,
+                **{
+                    str(key): str(value)
+                    for key, value in request.input.get("metadata", {}).items()
+                    if value is not None
+                },
+            },
+        }
+        if not isinstance(payload["messages"], list) or not payload["messages"]:
+            raise ValueError("model proxy call requires non-empty messages")
+        for optional_key in ("response_format", "temperature"):
+            if optional_key in request.input:
+                payload[optional_key] = request.input[optional_key]
+        if request.max_tokens is not None:
+            payload["max_tokens"] = request.max_tokens
+        try:
+            response = self._post("/v1/model/call", payload)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:500]
+            raise RuntimeError(
+                f"model proxy call failed with HTTP {exc.response.status_code}: {body}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"model proxy call failed: {exc}") from exc
+        try:
+            raw = response.json()
+        except ValueError as exc:
+            raise RuntimeError("model proxy returned non-JSON response") from exc
+        if not isinstance(raw, dict):
+            raise RuntimeError("model proxy response must be a JSON object")
+        output = _model_output_from_proxy_content(raw.get("content"))
+        usage = raw.get("usage") if isinstance(raw.get("usage"), dict) else {}
+        return ModelCallResponse(
+            task_name=request.task_name,
+            output=output,
+            usage={
+                "input_tokens": _int_value(usage.get("prompt_tokens")) or 0,
+                "output_tokens": _int_value(usage.get("completion_tokens")) or 0,
+            },
         )
 
     def _get(self, path: str) -> httpx.Response:
@@ -782,11 +833,38 @@ class HttpModelProxyAdapter:
             return self._client.get(url, headers=headers, timeout=self.timeout_seconds)
         return httpx.get(url, headers=headers, timeout=self.timeout_seconds)
 
+    def _post(self, path: str, payload: dict[str, Any]) -> httpx.Response:
+        url = self._url_for(path)
+        headers = {"Authorization": f"Bearer {self.token}"}
+        if self._client is not None:
+            return self._client.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=self.timeout_seconds,
+            )
+        return httpx.post(url, headers=headers, json=payload, timeout=self.timeout_seconds)
+
     def _url_for(self, path: str) -> str:
         base = httpx.URL(self.base_url)
         if path == "/healthz" and base.path.rstrip("/") == "/v1/model/call":
             return str(base.copy_with(path="/healthz", query=None, fragment=None))
+        if path == "/v1/model/call" and base.path.rstrip("/") == "/v1/model/call":
+            return self.base_url
         return f"{self.base_url}{path}"
+
+
+def _model_output_from_proxy_content(content: Any) -> dict[str, Any]:
+    if isinstance(content, dict):
+        return content
+    if isinstance(content, str):
+        try:
+            parsed = httpx.Response(200, content=content.encode("utf-8")).json()
+        except ValueError as exc:
+            raise RuntimeError("model proxy content was not JSON object content") from exc
+        if isinstance(parsed, dict):
+            return parsed
+    raise RuntimeError("model proxy content must be a JSON object")
 
 
 def _split_repo(repo_full_name: str) -> tuple[str, str]:
