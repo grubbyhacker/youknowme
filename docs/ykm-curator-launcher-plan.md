@@ -43,11 +43,11 @@ launch_profiles:
 
 operator_principals:
   ykm-curator-timer:
-    token_env: "SANDBOX_OPERATOR_YKM_CURATOR_TIMER_TOKEN"
+    token_env: "YKM_CURATOR_SANDBOX_TIMER_TOKEN"
     allowed_profiles: ["ykm-curator-dry-run"]
-    allowed_actions: ["launch", "dry_run"]
+    allowed_actions: ["launch"]
   ykm-curator-operator:
-    token_env: "SANDBOX_OPERATOR_YKM_CURATOR_ADMIN_TOKEN"
+    token_env: "YKM_CURATOR_SANDBOX_ADMIN_TOKEN"
     allowed_profiles: ["ykm-curator-dry-run"]
     allowed_actions: ["launch", "dry_run", "status", "logs", "artifacts", "stop", "cleanup"]
 ```
@@ -103,15 +103,30 @@ wrapper run ID.
 `--enable-broker-reads` stays off for the first profile. Add a separate profile or template command
 variant later when live read reconciliation is intentionally being E2E tested.
 
-## Systemd Units
+## Host User And Systemd Units
 
-Store only the timer launch token in `/etc/youknowme/curator-launch.env`:
+Create a dedicated unprivileged host user for the launcher:
 
-```dotenv
-YKM_CURATOR_LAUNCH_TOKEN=...
+```bash
+sudo useradd --system --create-home --home-dir /home/sandbox-curator-timer \
+  --shell /usr/sbin/nologin sandbox-curator-timer
+sudo install -o sandbox-curator-timer -g sandbox-curator-timer -m 0700 -d \
+  /home/sandbox-curator-timer/.config/gh-agent-broker
+sudo install -o sandbox-curator-timer -g sandbox-curator-timer -m 0600 /dev/null \
+  /home/sandbox-curator-timer/.config/gh-agent-broker/operator.env
 ```
 
-Install the one-shot service:
+Store only the timer launch token in the timer user's env file:
+
+```dotenv
+YKM_CURATOR_SANDBOX_TIMER_TOKEN=...
+```
+
+The same token value must also be available to sandbox-broker through its private env/config, such as
+`/docker/gh-agent-broker/.env`, so `token_env: "YKM_CURATOR_SANDBOX_TIMER_TOKEN"` can be resolved at
+sandbox-broker startup. Do not give the timer user the broker's full env file.
+
+Install the one-shot service as `/etc/systemd/system/ykm-curator-launch.service`:
 
 ```ini
 [Unit]
@@ -121,13 +136,19 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-EnvironmentFile=/etc/youknowme/curator-launch.env
-ExecStart=/usr/bin/curl -fsS -X POST \
-  -H "Authorization: Bearer ${YKM_CURATOR_LAUNCH_TOKEN}" \
-  http://127.0.0.1:8091/v1/launch-profiles/ykm-curator-dry-run/launch
+User=sandbox-curator-timer
+EnvironmentFile=/home/sandbox-curator-timer/.config/gh-agent-broker/operator.env
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+TimeoutStartSec=30
+ExecStart=/usr/bin/curl -fsS --max-time 20 -X POST -H "Authorization: Bearer ${YKM_CURATOR_SANDBOX_TIMER_TOKEN}" http://127.0.0.1:8091/v1/launch-profiles/ykm-curator-dry-run/launch
 ```
 
-Install the timer disabled at first, then enable it after the manual smoke passes:
+Install the timer as `/etc/systemd/system/ykm-curator-launch.timer`, disabled at first, then enable it
+after the manual smoke passes:
 
 ```ini
 [Unit]
@@ -145,13 +166,19 @@ WantedBy=timers.target
 Manual operator runs use `sudo systemctl start ykm-curator-launch.service`. The timer token cannot
 read logs/artifacts or stop/cleanup runs; artifact review uses the separate human operator token.
 
+The launcher user cannot directly talk to Docker, read broker secrets, choose images, choose mount
+paths, choose repos or branches, or retrieve GitHub tokens. Its only intended authority is one
+authenticated POST to the fixed host-local launch profile. Sandbox-broker remains responsible for
+Docker execution, template policy, mounts, credentials, artifacts, and audit.
+
 ## Test Plan
 
 - Sandbox-broker side:
-  - validate the profile with the `dry-run` REST endpoint before enabling the timer;
+  - validate the profile with the `dry-run` REST endpoint using the human operator token before
+    enabling the timer;
   - verify the dry-run output shows the Curator task JSON embedded inside broker `TaskContract.task`;
-  - verify the timer token can launch only the Curator profile and cannot read logs/artifacts or
-    stop/cleanup runs;
+  - verify the timer token can launch only the Curator profile and cannot list runs, read status,
+    read logs/artifacts/lessons, or stop/cleanup runs;
   - verify missing or invalid token fails with no container launch.
 - VPS smoke:
   - manually start `ykm-curator-launch.service`;
