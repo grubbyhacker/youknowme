@@ -132,6 +132,45 @@
           }
         ]
       }
+    },
+    {
+      "name": "group_agent_notes_past_deterministic_soft_cap",
+      "soft_action_threshold": 2,
+      "feedback_records": [
+        {
+          "event": "feedback",
+          "feedback_id": "fb_agent_1",
+          "category": "agent_note"
+        },
+        {
+          "event": "feedback",
+          "feedback_id": "fb_agent_2",
+          "category": "agent_note"
+        },
+        {
+          "event": "feedback",
+          "feedback_id": "fb_agent_3",
+          "category": "agent_note"
+        },
+        {
+          "event": "feedback",
+          "feedback_id": "fb_agent_4",
+          "category": "agent_note"
+        }
+      ],
+      "model_output": {
+        "schema_version": "1",
+        "proposed_actions": [
+          {
+            "action_id": "act_model_agent_notes",
+            "action_type": "no_action",
+            "classification": "non_actionable",
+            "evidence": {
+              "feedback_ids": ["fb_agent_1", "fb_agent_2", "fb_agent_3", "fb_agent_4"]
+            }
+          }
+        ]
+      }
     }
   ],
   "invalid_cases": [

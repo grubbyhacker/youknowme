@@ -31,7 +31,11 @@ def _fixture_cases(key: str) -> list[dict[str, Any]]:
     ids=lambda case: case["name"],
 )
 def test_model_feedback_planning_eval_valid_cases(case: dict[str, Any]) -> None:
-    base_plan = _base_plan(case["name"], case["feedback_records"])
+    base_plan = _base_plan(
+        case["name"],
+        case["feedback_records"],
+        soft_action_threshold=case.get("soft_action_threshold", 10),
+    )
     output = _model_output(case["model_output"])
 
     validate_feedback_planning_model_output(base_plan, output)
@@ -43,7 +47,11 @@ def test_model_feedback_planning_eval_valid_cases(case: dict[str, Any]) -> None:
     ids=lambda case: case["name"],
 )
 def test_model_feedback_planning_eval_rejects_bad_outputs(case: dict[str, Any]) -> None:
-    base_plan = _base_plan(case["name"], case["feedback_records"])
+    base_plan = _base_plan(
+        case["name"],
+        case["feedback_records"],
+        soft_action_threshold=case.get("soft_action_threshold", 10),
+    )
     output = _model_output(case["model_output"])
 
     with pytest.raises(ValueError, match=case["match"]):
@@ -66,13 +74,18 @@ def test_model_feedback_planning_eval_uses_model_response_contract() -> None:
     assert output.proposed_actions[0].evidence.feedback_ids == ["fb_positive"]
 
 
-def _base_plan(run_id: str, feedback_records: list[dict[str, Any]]) -> FeedbackPlan:
+def _base_plan(
+    run_id: str,
+    feedback_records: list[dict[str, Any]],
+    *,
+    soft_action_threshold: int,
+) -> FeedbackPlan:
     return build_feedback_plan(
         run_id=f"eval-{run_id}",
         feedback_window=FeedbackWindow(start_offset=0, end_offset=len(feedback_records)),
         feedback_records=feedback_records,
         latest_decisions={},
-        soft_action_threshold=10,
+        soft_action_threshold=soft_action_threshold,
     )
 
 

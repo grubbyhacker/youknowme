@@ -1138,6 +1138,10 @@ def _feedback_planning_model_request(
             "Use corpus_pr only with source_id, section_id, or upload_id evidence.",
             "Use link_to_upload only with upload_id evidence.",
             f"Use target_repo {DEFAULT_CORPUS_REPO} for issue and corpus_pr actions.",
+            "Treat deterministic_proposed_actions as a baseline, not an answer to copy.",
+            "Do not preserve deterministic capacity deferrals when category and evidence support no_action.",
+            "Classify agent_note, non_actionable, and positive_content as no_action unless durable evidence proves otherwise.",
+            "Prefer one grouped action over many identical actions when action_type, classification, target_repo, and evidence kind match.",
         ],
     }
     messages = [
