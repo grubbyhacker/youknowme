@@ -136,6 +136,10 @@ Expected model dry-run safety values:
 The profile mounts only `/credentials/ykm-curator/proxy.env`, which contains the proxy token for
 `gh-agent-proxy`. It must not mount provider keys or the broker `.env`.
 
+Curator model aliases in `/docker/gh-agent-broker/configs/litellm.yaml` should use
+`api_key: os.environ/OPENROUTER_CURATOR_API_KEY`. Keep the general YKM runtime/index keys separate
+from the Curator key in `/docker/gh-agent-broker/.env`.
+
 ## Timer Control
 
 Disable scheduled launches without removing the manual service:
