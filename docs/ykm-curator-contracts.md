@@ -157,7 +157,11 @@ directories or write `curator.json` until queue mutation code is explicitly enab
       "proposed_state": "claimed",
       "branch": "curator/cur_.../upload-upl-1-...",
       "validation": "accepted",
-      "reason": "Deterministic upload review preview only; no queue move or curator.json write."
+      "reason": "Deterministic upload review preview only; no queue move or curator.json write.",
+      "draft_status": "corpus_pr_candidate",
+      "draft_paths": ["homemaint/example.md"],
+      "blocking_reason": null,
+      "warnings": []
     }
   ],
   "proposed_actions": [
@@ -188,6 +192,12 @@ write bundle metadata in dry-run or state-only upload planning.
 Review previews describe the logical transition and future Curator branch/idempotency metadata that
 would be used by a later broker-backed upload review. They are plan data only and do not claim,
 move, reject, archive, or otherwise mutate upload bundles.
+They also include a deterministic draft-readiness classification. `corpus_pr_candidate` means the
+uploaded markdown already has frontmatter that can be normalized into current corpus policy and the
+preview lists the proposed corpus paths. `needs_owner_action` means the upload is well-formed intake
+but cannot safely become a corpus PR without owner input, such as missing frontmatter or unsupported
+document type. Unsupported tags may be dropped in the proposed draft and reported as warnings so the
+operator can review the normalization before any live PR is opened.
 
 When deferred upload metadata exists, deterministic upload planning re-enters it only after a
 satisfied trigger. `reentry_trigger: "next_run"` is ready immediately, and

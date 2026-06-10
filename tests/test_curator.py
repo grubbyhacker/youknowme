@@ -4841,6 +4841,79 @@ def test_upload_plan_proposes_review_deferrals_without_queue_moves(
     assert pr_opened.exists()
 
 
+def test_upload_plan_marks_corpus_ready_upload_draft(tmp_path: Path, monkeypatch) -> None:
+    intake = tmp_path / "intake"
+    pending = intake / "uploads" / "pending" / "upl_hot_tub"
+    files = pending / "files"
+    files.mkdir(parents=True)
+    (pending / "manifest.json").write_text(
+        json.dumps({"upload_id": "upl_hot_tub"}) + "\n",
+        encoding="utf-8",
+    )
+    (files / "hot-tub-note.md").write_text(
+        """---
+id: hot-tub-note
+type: procedure
+tags: [home-maintenance, hot-tub, unsupported-tag]
+---
+
+# Hot Tub Note
+
+Use the documented maintenance procedure.
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(run_id="run-upload-draft", intake=intake, output=tmp_path / "output")
+    )
+    preview = report.upload_review_previews[0]
+
+    assert preview["draft_status"] == "corpus_pr_candidate"
+    assert preview["draft_paths"] == ["homemaint/hot-tub-note.md"]
+    assert preview["blocking_reason"] is None
+    assert preview["warnings"] == ["hot-tub-note.md: dropped unsupported tags: unsupported-tag"]
+    markdown = (tmp_path / "output" / "run-report.md").read_text(encoding="utf-8")
+    assert "draft `corpus_pr_candidate` -> `homemaint/hot-tub-note.md`" in markdown
+
+
+def test_upload_plan_marks_upload_draft_needing_owner_action(
+    tmp_path: Path, monkeypatch
+) -> None:
+    intake = tmp_path / "intake"
+    pending = intake / "uploads" / "pending" / "upl_project"
+    files = pending / "files"
+    files.mkdir(parents=True)
+    (pending / "manifest.json").write_text(
+        json.dumps({"upload_id": "upl_project"}) + "\n",
+        encoding="utf-8",
+    )
+    (files / "project-note.md").write_text(
+        """---
+id: project-note
+type: project
+tags: [tools]
+---
+
+# Project Note
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(run_id="run-upload-blocked", intake=intake, output=tmp_path / "output")
+    )
+    preview = report.upload_review_previews[0]
+
+    assert preview["draft_status"] == "needs_owner_action"
+    assert preview["draft_paths"] == []
+    assert preview["blocking_reason"] == "project-note.md: missing or unsupported frontmatter type"
+    markdown = (tmp_path / "output" / "run-report.md").read_text(encoding="utf-8")
+    assert "draft `needs_owner_action`: project-note.md: missing" in markdown
+
+
 def test_upload_plan_reenters_deferred_metadata_only_when_trigger_is_ready(
     tmp_path: Path,
     monkeypatch,

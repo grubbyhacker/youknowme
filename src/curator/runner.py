@@ -1628,10 +1628,17 @@ def _report_markdown(report: CuratorDryRunReport) -> str:
     if report.upload_review_previews:
         lines.extend(["", "## Upload Review Previews", ""])
         for preview in report.upload_review_previews[:20]:
+            draft_status = preview.get("draft_status", "not_evaluated")
+            draft_paths = preview.get("draft_paths") or []
+            draft_suffix = f"; draft `{draft_status}`"
+            if draft_paths:
+                draft_suffix += " -> " + ", ".join(f"`{path}`" for path in draft_paths[:3])
+            elif preview.get("blocking_reason"):
+                draft_suffix += f": {str(preview['blocking_reason'])[:160]}"
             lines.append(
                 f"- `{preview['upload_id']}` in `{preview['queue']}`: "
                 f"`{preview['current_state']}` -> `{preview['proposed_state']}` "
-                f"on `{preview['branch']}`"
+                f"on `{preview['branch']}`{draft_suffix}"
             )
     branch_previews = report.reconciliation.get("branch_previews", [])
     if branch_previews:

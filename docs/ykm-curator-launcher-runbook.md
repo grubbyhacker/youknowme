@@ -8,11 +8,13 @@ This runbook maintains the live Curator launcher on `hermes-vps`.
 - broker env: `/docker/gh-agent-broker/.env`
 - deterministic Curator image: `youknowme:curator-model-feedback-evals-20260610-fb0e09e`
 - manual model Curator image: `youknowme:curator-model-feedback-evals-20260610-fb0e09e`
+- state-only Curator image: `youknowme:curator-state-only-20260610-f58e0d5`
 - launcher user: `sandbox-curator-timer`
 - timer env: `/home/sandbox-curator-timer/.config/gh-agent-broker/operator.env`
 - systemd service: `ykm-curator-launch.service`
 - systemd timer: `ykm-curator-launch.timer`
 - timer sandbox profile: `ykm-curator-dry-run`
+- manual state-only sandbox profile: `ykm-curator-state-only`
 - manual model sandbox profile: `ykm-curator-dry-run-model`
 
 The timer user has only the scoped launch token. It cannot inspect runs, read artifacts, stop runs,
@@ -103,6 +105,33 @@ Expected dry-run safety values:
 - `upload_metadata_update_count=0`
 - `github_mutation_count=0`
 - `model_call_count=0`
+
+## Manual State-Only Launch
+
+The state-only profile is available for manual operator launches. It may append safe feedback
+decisions and write upload review plans, but it must not call models or mutate GitHub.
+
+```bash
+ssh hermes-vps '
+cd /docker/gh-agent-broker
+set -a; . ./.env; set +a
+curl -fsS -X POST \
+  -H "Authorization: Bearer ${YKM_CURATOR_SANDBOX_ADMIN_TOKEN}" \
+  http://127.0.0.1:8091/v1/launch-profiles/ykm-curator-state-only/launch
+'
+```
+
+Latest smoke results:
+
+- `20260610T055824Z-3469843729f17a9d`: appended `22` safe feedback decisions, made no model calls
+  and no GitHub mutations, wrote `3` upload review previews, and correctly left the feedback
+  checkpoint unadvanced because two actionable feedback records remained unresolved.
+- `20260610T055856Z-4aaf168189c84878`: appended `0` duplicate decisions and saw only those two
+  unresolved feedback records, confirming decision idempotency.
+
+The hourly timer still points at `ykm-curator-dry-run` until the remaining actionable feedback is
+resolved or the state-only report status policy changes. Running state-only on the timer today would
+be safe, but it would produce hourly `fail` reports while those unresolved records remain.
 
 ## Manual Model Launch
 

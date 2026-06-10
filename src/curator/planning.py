@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
+from pathlib import Path
 
 from pydantic import ValidationError
 
@@ -21,6 +22,7 @@ from curator.models import (
     UploadReviewPreview,
 )
 from curator.state import deterministic_idempotency_key
+from curator.upload_draft import draft_upload_corpus_change
 
 
 REENTER_DECISIONS = {"deferred", "capacity_deferred"}
@@ -247,6 +249,7 @@ def _upload_review_preview(
     current_state = bundle.curator_metadata.state if bundle.curator_metadata else _state_from_queue(bundle)
     evidence = ActionEvidence(upload_ids=[bundle.upload_id])
     idempotency_key = deterministic_idempotency_key("upload", evidence)
+    draft = draft_upload_corpus_change(Path(bundle.path))
     return UploadReviewPreview(
         upload_id=bundle.upload_id,
         queue=bundle.queue,
@@ -257,6 +260,10 @@ def _upload_review_preview(
         branch=_deterministic_upload_branch_name(run_id, bundle.upload_id, idempotency_key),
         validation="accepted",
         reason="Deterministic upload review preview only; no queue move or curator.json write.",
+        draft_status=draft.status,
+        draft_paths=[file.target_path for file in draft.files],
+        blocking_reason=draft.reason if draft.status == "needs_owner_action" else None,
+        warnings=draft.warnings,
     )
 
 

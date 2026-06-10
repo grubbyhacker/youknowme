@@ -240,6 +240,14 @@ class UploadReviewPreview(BaseModel):
     branch: str
     validation: CuratorActionValidation = "accepted"
     reason: str
+    draft_status: Literal[
+        "not_evaluated",
+        "corpus_pr_candidate",
+        "needs_owner_action",
+    ] = "not_evaluated"
+    draft_paths: list[str] = Field(default_factory=list)
+    blocking_reason: str | None = None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class UploadPlan(BaseModel):
