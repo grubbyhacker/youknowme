@@ -1,0 +1,417 @@
+{
+  "schema_version": "1",
+  "valid_cases": [
+    {
+      "name": "positive_feedback_no_action",
+      "feedback_records": [
+        {
+          "event": "feedback",
+          "feedback_id": "fb_positive",
+          "category": "positive_content",
+          "source_id": "src_home_spa"
+        }
+      ],
+      "model_output": {
+        "schema_version": "1",
+        "proposed_actions": [
+          {
+            "action_type": "no_action",
+            "classification": "positive",
+            "evidence": {
+              "feedback_ids": [
+                "fb_positive"
+              ],
+              "source_ids": [
+                "src_home_spa"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "targeted_wrong_content_corpus_pr",
+      "feedback_records": [
+        {
+          "event": "feedback",
+          "feedback_id": "fb_wrong_content",
+          "category": "wrong_content",
+          "source_id": "src_thermostat"
+        }
+      ],
+      "model_output": {
+        "schema_version": "1",
+        "proposed_actions": [
+          {
+            "action_type": "corpus_pr",
+            "classification": "corpus_candidate",
+            "target_repo": "grubbyhacker/ykmcorpus",
+            "evidence": {
+              "feedback_ids": [
+                "fb_wrong_content"
+              ],
+              "source_ids": [
+                "src_thermostat"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "untargeted_missing_content_owner_issue",
+      "feedback_records": [
+        {
+          "event": "feedback",
+          "feedback_id": "fb_missing_untargeted",
+          "category": "missing_content"
+        }
+      ],
+      "model_output": {
+        "schema_version": "1",
+        "proposed_actions": [
+          {
+            "action_type": "issue",
+            "classification": "owner_action",
+            "target_repo": "grubbyhacker/ykmcorpus",
+            "evidence": {
+              "feedback_ids": [
+                "fb_missing_untargeted"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "upload_linked_feedback",
+      "feedback_records": [
+        {
+          "event": "feedback",
+          "feedback_id": "fb_upload",
+          "category": "wrong_content",
+          "upload_id": "upl_home_note"
+        }
+      ],
+      "model_output": {
+        "schema_version": "1",
+        "proposed_actions": [
+          {
+            "action_type": "link_to_upload",
+            "classification": "upload_linked",
+            "evidence": {
+              "feedback_ids": [
+                "fb_upload"
+              ],
+              "upload_ids": [
+                "upl_home_note"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "group_repeated_source_feedback",
+      "feedback_records": [
+        {
+          "event": "feedback",
+          "feedback_id": "fb_repeat_1",
+          "category": "stale_content",
+          "source_id": "src_heat_pump"
+        },
+        {
+          "event": "feedback",
+          "feedback_id": "fb_repeat_2",
+          "category": "wrong_content",
+          "source_id": "src_heat_pump"
+        }
+      ],
+      "model_output": {
+        "schema_version": "1",
+        "proposed_actions": [
+          {
+            "action_type": "corpus_pr",
+            "classification": "corpus_candidate",
+            "target_repo": "grubbyhacker/ykmcorpus",
+            "evidence": {
+              "feedback_ids": [
+                "fb_repeat_1",
+                "fb_repeat_2"
+              ],
+              "source_ids": [
+                "src_heat_pump"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "group_agent_notes_past_deterministic_soft_cap",
+      "soft_action_threshold": 2,
+      "feedback_records": [
+        {
+          "event": "feedback",
+          "feedback_id": "fb_agent_1",
+          "category": "agent_note"
+        },
+        {
+          "event": "feedback",
+          "feedback_id": "fb_agent_2",
+          "category": "agent_note"
+        },
+        {
+          "event": "feedback",
+          "feedback_id": "fb_agent_3",
+          "category": "agent_note"
+        },
+        {
+          "event": "feedback",
+          "feedback_id": "fb_agent_4",
+          "category": "agent_note"
+        }
+      ],
+      "model_output": {
+        "schema_version": "1",
+        "proposed_actions": [
+          {
+            "action_type": "no_action",
+            "classification": "non_actionable",
+            "evidence": {
+              "feedback_ids": [
+                "fb_agent_1",
+                "fb_agent_2",
+                "fb_agent_3",
+                "fb_agent_4"
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "invalid_cases": [
+    {
+      "name": "unknown_feedback_id",
+      "match": "unknown feedback_ids",
+      "feedback_records": [
+        {
+          "event": "feedback",
+          "feedback_id": "fb_known",
+          "category": "needs_owner_action"
+        }
+      ],
+      "model_output": {
+        "schema_version": "1",
+        "proposed_actions": [
+          {
+            "action_type": "issue",
+            "classification": "owner_action",
+            "target_repo": "grubbyhacker/ykmcorpus",
+            "evidence": {
+              "feedback_ids": [
+                "fb_unknown"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "missing_feedback_coverage",
+      "match": "do not cover included feedback_ids",
+      "feedback_records": [
+        {
+          "event": "feedback",
+          "feedback_id": "fb_one",
+          "category": "positive_content"
+        },
+        {
+          "event": "feedback",
+          "feedback_id": "fb_two",
+          "category": "non_actionable"
+        }
+      ],
+      "model_output": {
+        "schema_version": "1",
+        "proposed_actions": [
+          {
+            "action_type": "no_action",
+            "classification": "positive",
+            "evidence": {
+              "feedback_ids": [
+                "fb_one"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "duplicate_materialized_action",
+      "match": "duplicates idempotency_key",
+      "feedback_records": [
+        {
+          "event": "feedback",
+          "feedback_id": "fb_duplicate",
+          "category": "positive_content"
+        }
+      ],
+      "model_output": {
+        "schema_version": "1",
+        "proposed_actions": [
+          {
+            "action_type": "no_action",
+            "classification": "positive",
+            "evidence": {
+              "feedback_ids": [
+                "fb_duplicate"
+              ]
+            }
+          },
+          {
+            "action_type": "no_action",
+            "classification": "positive",
+            "evidence": {
+              "feedback_ids": [
+                "fb_duplicate"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "controller_owned_field_rejected",
+      "match": "Extra inputs are not permitted",
+      "feedback_records": [
+        {
+          "event": "feedback",
+          "feedback_id": "fb_controller_field",
+          "category": "needs_owner_action"
+        }
+      ],
+      "model_output": {
+        "schema_version": "1",
+        "proposed_actions": [
+          {
+            "action_type": "issue",
+            "classification": "owner_action",
+            "target_repo": "grubbyhacker/ykmcorpus",
+            "idempotency_key": "issue:0000000000000000",
+            "evidence": {
+              "feedback_ids": [
+                "fb_controller_field"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "defer_non_mutating_feedback_rejected",
+      "match": "defers feedback already classified as non-mutating",
+      "feedback_records": [
+        {
+          "event": "feedback",
+          "feedback_id": "fb_agent_note",
+          "category": "agent_note"
+        }
+      ],
+      "model_output": {
+        "schema_version": "1",
+        "proposed_actions": [
+          {
+            "action_type": "defer",
+            "classification": "capacity",
+            "evidence": {
+              "feedback_ids": ["fb_agent_note"]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "corpus_pr_without_target_evidence",
+      "match": "corpus_pr action must cite",
+      "feedback_records": [
+        {
+          "event": "feedback",
+          "feedback_id": "fb_speculative",
+          "category": "missing_content"
+        }
+      ],
+      "model_output": {
+        "schema_version": "1",
+        "proposed_actions": [
+          {
+            "action_type": "corpus_pr",
+            "classification": "corpus_candidate",
+            "target_repo": "grubbyhacker/ykmcorpus",
+            "evidence": {
+              "feedback_ids": [
+                "fb_speculative"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "link_to_upload_without_upload_evidence",
+      "match": "link_to_upload action must cite upload evidence",
+      "feedback_records": [
+        {
+          "event": "feedback",
+          "feedback_id": "fb_upload_missing",
+          "category": "wrong_content",
+          "source_id": "src_upload_context"
+        }
+      ],
+      "model_output": {
+        "schema_version": "1",
+        "proposed_actions": [
+          {
+            "action_type": "link_to_upload",
+            "classification": "upload_linked",
+            "evidence": {
+              "feedback_ids": [
+                "fb_upload_missing"
+              ],
+              "source_ids": [
+                "src_upload_context"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "wrong_target_repo",
+      "match": "allowed corpus repo",
+      "feedback_records": [
+        {
+          "event": "feedback",
+          "feedback_id": "fb_repo",
+          "category": "needs_owner_action"
+        }
+      ],
+      "model_output": {
+        "schema_version": "1",
+        "proposed_actions": [
+          {
+            "action_type": "issue",
+            "classification": "owner_action",
+            "target_repo": "grubbyhacker/aboutmemcp",
+            "evidence": {
+              "feedback_ids": [
+                "fb_repo"
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

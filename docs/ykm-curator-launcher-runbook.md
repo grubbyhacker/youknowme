@@ -6,13 +6,15 @@ This runbook maintains the live Curator launcher on `hermes-vps`.
 
 - sandbox-broker config: `/docker/gh-agent-broker/configs/sandbox-beta.yaml`
 - broker env: `/docker/gh-agent-broker/.env`
-- deterministic Curator image: `youknowme:curator-launcher-20260609`
-- manual model Curator image: `youknowme:curator-model-planning-20260609-ec1b842`
+- deterministic Curator image: `youknowme:curator-upload-readiness-20260610-60ee09b`
+- manual model Curator image: `youknowme:curator-upload-readiness-20260610-60ee09b`
+- state-only Curator image: `youknowme:curator-upload-readiness-20260610-60ee09b`
 - launcher user: `sandbox-curator-timer`
 - timer env: `/home/sandbox-curator-timer/.config/gh-agent-broker/operator.env`
 - systemd service: `ykm-curator-launch.service`
 - systemd timer: `ykm-curator-launch.timer`
 - timer sandbox profile: `ykm-curator-dry-run`
+- manual state-only sandbox profile: `ykm-curator-state-only`
 - manual model sandbox profile: `ykm-curator-dry-run-model`
 
 The timer user has only the scoped launch token. It cannot inspect runs, read artifacts, stop runs,
@@ -104,6 +106,39 @@ Expected dry-run safety values:
 - `github_mutation_count=0`
 - `model_call_count=0`
 
+## Manual State-Only Launch
+
+The state-only profile is available for manual operator launches. It may append safe feedback
+decisions and write upload review plans, but it must not call models or mutate GitHub.
+
+```bash
+ssh hermes-vps '
+cd /docker/gh-agent-broker
+set -a; . ./.env; set +a
+curl -fsS -X POST \
+  -H "Authorization: Bearer ${YKM_CURATOR_SANDBOX_ADMIN_TOKEN}" \
+  http://127.0.0.1:8091/v1/launch-profiles/ykm-curator-state-only/launch
+'
+```
+
+Latest smoke results:
+
+- `20260610T055824Z-3469843729f17a9d`: appended `22` safe feedback decisions, made no model calls
+  and no GitHub mutations, wrote `3` upload review previews, and correctly left the feedback
+  checkpoint unadvanced because two actionable feedback records remained unresolved.
+- `20260610T055856Z-4aaf168189c84878`: appended `0` duplicate decisions and saw only those two
+  unresolved feedback records, confirming decision idempotency.
+- `20260610T060525Z-362130b4bb7a6567`: confirmed the upload draft-readiness classifier on the real
+  queue. The smoke upload needs owner action because it has no frontmatter, the dev-environment
+  upload needs owner action because `type: project` is not in corpus policy, and the Santa Cruz hot
+  tub manual is a `corpus_pr_candidate` for
+  `homemaint/santa-cruz-freeflow-excursion-owner-manual.md` with unsupported tags dropped for
+  review.
+
+The hourly timer still points at `ykm-curator-dry-run` until the remaining actionable feedback is
+resolved or the state-only report status policy changes. Running state-only on the timer today would
+be safe, but it would produce hourly `fail` reports while those unresolved records remain.
+
 ## Manual Model Launch
 
 The model-backed profile is intentionally manual-only. The timer principal must not list
@@ -133,12 +168,36 @@ Expected model dry-run safety values:
 - `model_call_count=1`
 - `partial_failures=[]`
 
+Inspect model planning quality before trusting the run:
+
+- compare `proposed_actions` with deterministic feedback categories and evidence;
+- confirm every included feedback ID is covered by at least one action;
+- confirm no positive or non-actionable feedback became an issue or PR;
+- confirm every `corpus_pr` cites source, section, or upload evidence;
+- confirm every `link_to_upload` cites upload evidence;
+- check `model_token_count` for unexpected prompt growth.
+
+Run the committed offline model-planning evals locally after prompt or schema changes:
+
+```bash
+mise run curator-model-eval
+```
+
 The profile mounts only `/credentials/ykm-curator/proxy.env`, which contains the proxy token for
 `gh-agent-proxy`. It must not mount provider keys or the broker `.env`.
 
 Curator model aliases in `/docker/gh-agent-broker/configs/litellm.yaml` should use
 `api_key: os.environ/OPENROUTER_CURATOR_API_KEY`. Keep the general YKM runtime/index keys separate
 from the Curator key in `/docker/gh-agent-broker/.env`.
+
+Latest model-planning finding:
+
+- `20260610T005317Z-563dd947d9bf42ef` failed closed on invalid model output while preserving a
+  safer deterministic fallback plan.
+- The fallback plan had `capacity=0`, `19` no-action records, `3` upload-linked records, and `2`
+  corpus candidates.
+- Treat model-backed planning as not ready for state advancement; deterministic planning is the
+  current useful path.
 
 ## Timer Control
 

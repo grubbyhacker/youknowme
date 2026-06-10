@@ -54,6 +54,8 @@ The Curator task payload is a JSON object:
   },
   "model_feedback_planning": false,
   "feedback_model": null,
+  "model_upload_review": false,
+  "upload_review_model": null,
   "feedback_soft_action_threshold": 10,
   "stale_lock_timeout_seconds": 7200
 }
@@ -81,10 +83,23 @@ action contract, and rejects any model action that cites evidence identifiers ou
 feedback window. With the default `model_feedback_planning: false` and zero model budget, feedback
 planning is fully deterministic.
 
-In the deterministic skeleton, `manual_live` is contract-reserved but guarded: a run may load,
-snapshot, write preflight plan artifacts, run policy preflight, and report, but exits with a failure
-status before any live execution until broker, model, and mutation adapters are implemented and
-tested.
+`model_upload_review` is an explicit opt-in for sending included upload-review previews to the
+upload-review model. It requires a non-empty `upload_review_model`, one remaining
+`model_call_budget.max_calls_per_run` entry per included upload preview, and a configured corpus
+checkout path supplied to the worker, for example through `curator run --corpus-checkout` or
+`YKM_CORPUS_CHECKOUT`. Integrated model drafts are applied only to a temporary checkout copy. The
+Curator then runs `mise run validate` in that copy and records a structured observation with status,
+command, exit code, bounded stdout/stderr tails, draft paths, and policy additions. Failed
+observations fail the run and increase `validation_failure_count`; skipped non-integrated model
+decisions are reported but do not apply draft files.
+
+For upload review only, `manual_live` can now turn passing integrated observations into review PRs.
+The Curator clones `ykmcorpus` through the broker Git remote, creates the deterministic
+`curator/<run_id>/...` branch, reapplies the validated model draft, runs `mise run validate` again in
+that exact checkout, commits, pushes through broker credentials, and opens a PR through broker
+`pull.create` with Curator metadata. It does not move upload queue directories or write bundle
+`curator.json` as part of PR creation. Feedback issue/PR execution and PR maintenance writes remain
+guarded until their execution contracts are enabled.
 
 The package also exposes native CLI entrypoints as `curator run`, `curator inspect-task`, and
 `curator inspect-report`. `inspect-task` validates a task contract without acquiring the run lock or
@@ -157,7 +172,11 @@ directories or write `curator.json` until queue mutation code is explicitly enab
       "proposed_state": "claimed",
       "branch": "curator/cur_.../upload-upl-1-...",
       "validation": "accepted",
-      "reason": "Deterministic upload review preview only; no queue move or curator.json write."
+      "reason": "Deterministic upload review preview only; no queue move or curator.json write.",
+      "draft_status": "corpus_pr_candidate",
+      "draft_paths": ["homemaint/example.md"],
+      "blocking_reason": null,
+      "warnings": []
     }
   ],
   "proposed_actions": [
@@ -188,6 +207,12 @@ write bundle metadata in dry-run or state-only upload planning.
 Review previews describe the logical transition and future Curator branch/idempotency metadata that
 would be used by a later broker-backed upload review. They are plan data only and do not claim,
 move, reject, archive, or otherwise mutate upload bundles.
+They also include a deterministic draft-readiness classification. `corpus_pr_candidate` means the
+uploaded markdown already has frontmatter that can be normalized into current corpus policy and the
+preview lists the proposed corpus paths. `needs_owner_action` means the upload is well-formed intake
+but cannot safely become a corpus PR without owner input, such as missing frontmatter or unsupported
+document type. Unsupported tags may be dropped in the proposed draft and reported as warnings so the
+operator can review the normalization before any live PR is opened.
 
 When deferred upload metadata exists, deterministic upload planning re-enters it only after a
 satisfied trigger. `reentry_trigger: "next_run"` is ready immediately, and
@@ -370,6 +395,7 @@ Every run writes `/output/run-report.json` and `/output/run-report.md`. Reports 
 - feedback window and checkpoint advancement;
 - upload queue counts;
 - upload review preview counts;
+- upload review validation observations when model upload review is enabled;
 - explicit referenced upload/source/section/result ID lists where present;
 - PR reconciliation summaries when PR snapshots are supplied;
 - proposed and executed action counts;
@@ -497,8 +523,7 @@ Guarded `manual_live` runs that contain proposed GitHub-object actions (`issue` 
 upload review previews must also prove the broker boundary is configured. Non-mutating actions do not
 require a broker probe.
 Guarded `manual_live` runs with a non-zero `model_call_budget.max_calls_per_run` must prove the
-model proxy boundary is configured, even though the deterministic skeleton still makes zero model
-calls.
+model proxy boundary is configured.
 
 The initial offline execution policy validates:
 
@@ -516,7 +541,8 @@ the action id, idempotency key, target repo, branch when applicable, durable evi
 bounded deterministic title/body previews. Issue intents also include deterministic labels and
 assignees where the Phase 4 routing policy defines them. Owner-action feedback issues carry
 `ykm-curator`, `feedback`, and `needs-owner-input`, and are assigned to `grubbyhacker` by default.
-Execution intents remain `not_executed` until live adapters are enabled.
+Upload-review `pull.create` intents may be executed in `manual_live` after corpus validation passes;
+other execution intents remain `not_executed` until their live adapters are enabled.
 
 `--simulate-execution` is an offline test aid. It requires `--broker-fixture` and records simulated
 execution results in the run report without changing GitHub, queues, corpus files, feedback

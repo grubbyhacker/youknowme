@@ -154,6 +154,16 @@ class FixtureBrokerAdapter:
             )
         return probes
 
+    def create_pull(self, intent: ExecutionIntent) -> ExecutionResult:
+        return ExecutionResult(
+            action_id=intent.action_id,
+            operation=intent.operation,
+            idempotency_key=intent.idempotency_key,
+            status="simulated",
+            target_repo=intent.target_repo,
+            branch=intent.branch,
+        )
+
     def simulate_intents(self, intents: list[ExecutionIntent]) -> list[ExecutionResult]:
         return [
             ExecutionResult(
@@ -450,6 +460,77 @@ class HttpBrokerAdapter:
                 details={"requests": [request.model_dump(mode="json") for request in requests]},
             )
         ]
+
+    def create_pull(self, intent: ExecutionIntent) -> ExecutionResult:
+        if intent.operation != "pull.create":
+            return ExecutionResult(
+                action_id=intent.action_id,
+                operation=intent.operation,
+                idempotency_key=intent.idempotency_key,
+                status="failed",
+                target_repo=intent.target_repo,
+                branch=intent.branch,
+                message=f"unsupported broker operation for create_pull: {intent.operation}",
+            )
+        if not intent.branch:
+            return ExecutionResult(
+                action_id=intent.action_id,
+                operation=intent.operation,
+                idempotency_key=intent.idempotency_key,
+                status="failed",
+                target_repo=intent.target_repo,
+                message="pull.create intent requires a branch",
+            )
+        try:
+            response = self._request(
+                "POST",
+                f"/v1/repos/{intent.target_repo}/pulls",
+                authenticated=True,
+                json_body={
+                    "title": intent.title or "YouKnowMe Curator upload review",
+                    "head": intent.branch,
+                    "base": "main",
+                    "body": intent.body or "",
+                    "draft": False,
+                    "metadata": _curator_metadata(intent),
+                    "permissions": ["contents:write", "pull_requests:write"],
+                },
+            )
+            if response.status_code >= 400:
+                return ExecutionResult(
+                    action_id=intent.action_id,
+                    operation=intent.operation,
+                    idempotency_key=intent.idempotency_key,
+                    status="failed",
+                    target_repo=intent.target_repo,
+                    branch=intent.branch,
+                    message=(
+                        "broker pull.create failed with HTTP "
+                        f"{response.status_code}: {response.text[:500]}"
+                    ),
+                )
+            raw = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            return ExecutionResult(
+                action_id=intent.action_id,
+                operation=intent.operation,
+                idempotency_key=intent.idempotency_key,
+                status="failed",
+                target_repo=intent.target_repo,
+                branch=intent.branch,
+                message=f"broker pull.create failed: {exc}",
+            )
+        return ExecutionResult(
+            action_id=intent.action_id,
+            operation=intent.operation,
+            idempotency_key=intent.idempotency_key,
+            status="executed",
+            target_repo=intent.target_repo,
+            branch=intent.branch,
+            pr_number=_int_value(raw.get("number")) if isinstance(raw, dict) else None,
+            url=_str_value(raw.get("html_url")) if isinstance(raw, dict) else None,
+            message="broker pull.create succeeded",
+        )
 
     def _pr_detail_read_requests(
         self,
@@ -872,6 +953,28 @@ def _split_repo(repo_full_name: str) -> tuple[str, str]:
     if len(parts) != 2 or not parts[0] or not parts[1]:
         raise ValueError(f"repository must be in owner/name form: {repo_full_name}")
     return parts[0], parts[1]
+
+
+def _curator_metadata(intent: ExecutionIntent) -> dict[str, str]:
+    action_scope = "maintenance"
+    if intent.evidence.upload_ids:
+        action_scope = "upload"
+    elif intent.evidence.feedback_ids:
+        action_scope = "feedback"
+    metadata = {"YKM-Curator-Action": action_scope}
+    run_id = _run_id_from_branch(intent.branch)
+    if run_id:
+        metadata["YKM-Curator-Run"] = run_id
+    return metadata
+
+
+def _run_id_from_branch(branch: str | None) -> str | None:
+    if branch is None:
+        return None
+    parts = branch.split("/", 2)
+    if len(parts) < 3 or parts[0] != "curator":
+        return None
+    return parts[1] or None
 
 
 def _issue_snapshot_from_raw(raw: dict[str, Any]) -> CuratorIssueSnapshot:

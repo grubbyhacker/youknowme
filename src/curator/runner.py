@@ -15,7 +15,6 @@ from curator.adapters import (
     HttpModelProxyAdapter,
 )
 from curator.models import (
-    ActionEvidence,
     DEFAULT_LOCK_PATH,
     DEFAULT_STALE_LOCK_TIMEOUT_SECONDS,
     CuratorIssueSnapshot,
@@ -25,7 +24,10 @@ from curator.models import (
     CuratorRunReport,
     CuratorState,
     CuratorTask,
+    ExecutionIntent,
+    ExecutionResult,
     FeedbackInputRecord,
+    FeedbackDecision,
     FeedbackPlan,
     ModelCallBudget,
     ModelCallRequest,
@@ -34,7 +36,14 @@ from curator.models import (
     UploadQueueSnapshot,
     UploadTransitionPreview,
 )
-from curator.model_tasks import FeedbackPlanningModelOutput, validate_model_response_output
+from curator.model_tasks import (
+    FeedbackPlanningModelOutput,
+    UploadReviewModelOutput,
+    build_feedback_planning_proposed_actions,
+    strict_model_json_schema,
+    validate_feedback_planning_model_output,
+    validate_model_response_output,
+)
 from curator.execution import (
     append_feedback_decisions,
     build_execution_intents,
@@ -58,6 +67,9 @@ from curator.state import (
     snapshot_upload_queue,
     write_curator_state,
 )
+from curator.upload_draft import ALLOWED_TAGS, ALLOWED_TYPES
+from curator.upload_observe import UploadReviewObservation, observe_upload_review_draft
+from curator.upload_pr import execute_upload_review_pr, upload_review_pull_intent
 from curator.upload_state import transition_upload_metadata
 
 
@@ -71,6 +83,9 @@ DEFAULT_FORBIDDEN_ENV = (
     "YKM_CF_ACCESS_CLIENT_SECRET",
 )
 DEFAULT_CORPUS_REPO = "grubbyhacker/ykmcorpus"
+MAX_UPLOAD_REVIEW_FILES = 5
+MAX_UPLOAD_REVIEW_FILE_CHARS = 20000
+MAX_UPLOAD_REVIEW_MANIFEST_CHARS = 20000
 
 
 CuratorDryRunConfig = CuratorRunConfig
@@ -93,6 +108,8 @@ def run_curator_dry_run(config: CuratorDryRunConfig) -> CuratorDryRunReport:
         task_model.model_feedback_planning if task_model is not None else False
     )
     feedback_model = task_model.feedback_model if task_model is not None else None
+    model_upload_review = task_model.model_upload_review if task_model is not None else False
+    upload_review_model = task_model.upload_review_model if task_model is not None else None
     github_mutation_budget = (
         task_model.github_mutation_budget.model_dump() if task_model is not None else {}
     )
@@ -118,6 +135,8 @@ def run_curator_dry_run(config: CuratorDryRunConfig) -> CuratorDryRunReport:
         "model_call_budget": model_call_budget,
         "model_feedback_planning": model_feedback_planning,
         "feedback_model": feedback_model,
+        "model_upload_review": model_upload_review,
+        "upload_review_model": upload_review_model,
     }
     _check_forbidden_env(probes)
     if any(probe.name == "task" and probe.status == "fail" for probe in probes):
@@ -159,6 +178,8 @@ def _run_with_lock(
     model_call_budget: dict[str, int],
     model_feedback_planning: bool,
     feedback_model: str | None,
+    model_upload_review: bool,
+    upload_review_model: str | None,
 ) -> CuratorDryRunReport:
     _check_directory(config.intake, "intake", probes, writable=False)
     _check_directory(config.output, "output", probes, writable=True)
@@ -260,6 +281,27 @@ def _run_with_lock(
         upload_plan = build_upload_plan(run_id=run_id, upload_snapshot=queue_snapshot)
     else:
         upload_plan = UploadPlan(run_id=run_id, created_at=datetime.now(UTC))
+    upload_review_observations: list[UploadReviewObservation] = []
+    if "plan_uploads" in enabled_actions and model_upload_review:
+        (
+            observations,
+            upload_model_outputs,
+            upload_model_probe,
+            upload_model_usage,
+        ) = _apply_model_upload_review(
+            config=config,
+            upload_plan=upload_plan,
+            upload_snapshot=queue_snapshot,
+            model=upload_review_model,
+            model_call_budget=ModelCallBudget.model_validate(model_call_budget),
+            used_model_calls=model_call_count,
+        )
+        upload_review_observations = observations
+        probes.append(upload_model_probe)
+        model_call_count += upload_model_usage["call_count"]
+        model_token_count += upload_model_usage["token_count"]
+    else:
+        upload_model_outputs = {}
     pr_snapshots: list[CuratorPrSnapshot] = []
     issue_snapshots: list[CuratorIssueSnapshot] = []
     if "reconcile" in enabled_actions:
@@ -287,6 +329,13 @@ def _run_with_lock(
     )
     execution_intents = build_execution_intents(
         run_id, feedback_plan.proposed_actions, policy_decisions
+    )
+    execution_intents.extend(
+        _upload_review_execution_intents(
+            run_id=run_id,
+            upload_plan=upload_plan,
+            observations=upload_review_observations,
+        )
     )
     metadata_error_count = sum(1 for bundle in queue_snapshot.bundles if bundle.metadata_error)
     manifest_error_count = sum(1 for bundle in queue_snapshot.bundles if bundle.manifest_error)
@@ -320,6 +369,7 @@ def _run_with_lock(
             )
         )
     simulated_execution_results = []
+    live_execution_results = []
     policy_denial_count = sum(1 for decision in policy_decisions if decision.status == "denied")
     if policy_denial_count:
         probes.append(
@@ -386,13 +436,16 @@ def _run_with_lock(
             probes.append(issue_preflight)
     requires_model_proxy = config.required_model_proxy or (
         mode == "manual_live" and model_call_budget.get("max_calls_per_run", 0) > 0
-    ) or model_feedback_planning
+    ) or model_feedback_planning or model_upload_review
     _probe_model_proxy(config, probes, required=requires_model_proxy)
     _probe_model_budget(config, probes, model_call_budget)
     model_budget_exhausted = any(
         probe.name == "model-budget" and probe.status == "fail" for probe in probes
     )
     state_preflight_failure_count = _state_only_preflight_failure_count(probes)
+    upload_review_validation_failure_count = sum(
+        1 for observation in upload_review_observations if observation.status == "fail"
+    )
 
     proposed_state = advanced_state(run_id, state, feedback_window)
     checkpoint_advanced = False
@@ -458,6 +511,19 @@ def _run_with_lock(
             )
             if decision_append_probe is not None:
                 probes.append(decision_append_probe)
+            unresolved_feedback_ids = _state_only_unresolved_feedback_ids(
+                feedback_plan,
+                state_only_decisions,
+            )
+            if unresolved_feedback_ids:
+                probes.append(
+                    CuratorProbe(
+                        name="state-only",
+                        status="fail",
+                        message="state_only checkpoint not advanced because feedback remains without a state-only decision",
+                        details={"feedback_ids": unresolved_feedback_ids},
+                    )
+                )
             if "reconcile" in enabled_actions:
                 upload_metadata_update_paths, upload_metadata_update_probes = (
                     _apply_upload_transition_previews(
@@ -521,13 +587,56 @@ def _run_with_lock(
             upload_plan_paths,
             probes,
         )
-        probes.append(
-            CuratorProbe(
-                name="manual-live",
-                status="fail",
-                message="manual_live adapters are not enabled; policy preflight only was performed",
+        if upload_review_validation_failure_count:
+            probes.append(
+                CuratorProbe(
+                    name="manual-live-upload-pr",
+                    status="fail",
+                    message="upload PR creation skipped because upload-review validation failed",
+                )
             )
-        )
+        elif model_upload_review and upload_review_observations:
+            live_execution_results = _execute_upload_review_prs(
+                config=config,
+                run_id=run_id,
+                task_payload=task_payload,
+                upload_plan=upload_plan,
+                observations=upload_review_observations,
+                outputs=upload_model_outputs,
+            )
+            probes.append(
+                CuratorProbe(
+                    name="manual-live-upload-pr",
+                    status=(
+                        "fail"
+                        if any(result.status == "failed" for result in live_execution_results)
+                        else "pass"
+                    ),
+                    message="manual_live upload PR execution completed",
+                    details={
+                        "result_count": len(live_execution_results),
+                        "failed_count": sum(
+                            1 for result in live_execution_results if result.status == "failed"
+                        ),
+                    },
+                )
+            )
+        else:
+            probes.append(
+                CuratorProbe(
+                    name="manual-live",
+                    status="fail",
+                    message="manual_live adapters are not enabled; policy preflight only was performed",
+                )
+            )
+        if any(intent.operation != "pull.create" for intent in execution_intents):
+            probes.append(
+                CuratorProbe(
+                    name="manual-live",
+                    status="fail",
+                    message="manual_live feedback issue/PR adapters are not enabled",
+                )
+            )
 
     feedback_count = _count_jsonl(feedback_path, "feedback", probes)
     query_log_count = _count_query_logs(config.logs, probes) if config.logs is not None else 0
@@ -575,6 +684,11 @@ def _run_with_lock(
             preview.model_dump(mode="json") for preview in upload_plan.review_previews
         ],
         upload_review_preview_count=len(upload_plan.review_previews),
+        upload_review_observations=[
+            observation.model_dump(mode="json") for observation in upload_review_observations
+        ],
+        upload_review_observation_count=len(upload_review_observations),
+        upload_review_validation_failure_count=upload_review_validation_failure_count,
         upload_metadata_update_count=len(upload_metadata_update_paths),
         upload_metadata_update_paths=upload_metadata_update_paths,
         referenced_upload_ids=sorted(
@@ -589,9 +703,12 @@ def _run_with_lock(
         execution_intents=[intent.model_dump(mode="json") for intent in execution_intents],
         execution_intent_count=len(execution_intents),
         simulated_execution_results=[
-            result.model_dump(mode="json") for result in simulated_execution_results
+            result.model_dump(mode="json")
+            for result in [*simulated_execution_results, *live_execution_results]
         ],
         simulated_execution_count=len(simulated_execution_results),
+        executed_action_count=sum(1 for result in live_execution_results if result.status == "executed"),
+        github_mutation_count=sum(1 for result in live_execution_results if result.status == "executed"),
         capacity_deferral_count=sum(
             1 for action in feedback_plan.proposed_actions if action.classification == "capacity"
         ),
@@ -602,7 +719,8 @@ def _run_with_lock(
         validation_failure_count=metadata_error_count
         + manifest_error_count
         + branch_collision_count
-        + input_error_count,
+        + input_error_count
+        + upload_review_validation_failure_count,
         input_error_count=input_error_count,
         input_errors=input_errors,
         feedback_count=feedback_count,
@@ -633,6 +751,8 @@ def _empty_report(
     model_call_budget: dict[str, int],
     model_feedback_planning: bool,
     feedback_model: str | None,
+    model_upload_review: bool,
+    upload_review_model: str | None,
 ) -> CuratorDryRunReport:
     completed_at = datetime.now(UTC)
     return CuratorDryRunReport(
@@ -670,6 +790,9 @@ def _empty_report(
         upload_proposed_action_count=0,
         upload_review_previews=[],
         upload_review_preview_count=0,
+        upload_review_observations=[],
+        upload_review_observation_count=0,
+        upload_review_validation_failure_count=0,
         upload_metadata_update_count=0,
         upload_metadata_update_paths=[],
         referenced_upload_ids=[],
@@ -831,6 +954,10 @@ def _read_task(
             "model_call_budget",
             "feedback_soft_action_threshold",
             "stale_lock_timeout_seconds",
+            "model_feedback_planning",
+            "feedback_model",
+            "model_upload_review",
+            "upload_review_model",
         }
         if contract_keys.intersection(payload):
             probes.append(
@@ -1032,26 +1159,38 @@ def _apply_model_feedback_planning(
             FeedbackPlanningModelOutput,
             expected_task_name="feedback_plan",
         )
-        _validate_model_feedback_actions(base_plan, output)
+        proposed_actions = build_feedback_planning_proposed_actions(output, base_plan=base_plan)
     except Exception as exc:  # noqa: BLE001 - model failures must fail closed into the report.
         usage = empty_usage
+        details: dict[str, Any] = {"model": model, "error": str(exc)}
         if response is not None:
             usage = {
                 "call_count": 1,
                 "token_count": response.usage.input_tokens + response.usage.output_tokens,
             }
+            details.update(
+                {
+                    "input_tokens": response.usage.input_tokens,
+                    "output_tokens": response.usage.output_tokens,
+                }
+            )
+            if isinstance(response.output, dict):
+                proposed_actions = response.output.get("proposed_actions")
+                if isinstance(proposed_actions, list):
+                    details["proposed_action_count"] = len(proposed_actions)
         return (
             base_plan,
             CuratorProbe(
                 name="model-feedback-planning",
                 status="fail",
                 message=f"model feedback planning failed: {exc}",
+                details=details,
             ),
             usage,
         )
     token_count = response.usage.input_tokens + response.usage.output_tokens
     return (
-        base_plan.model_copy(update={"proposed_actions": output.proposed_actions}),
+        base_plan.model_copy(update={"proposed_actions": proposed_actions}),
         CuratorProbe(
             name="model-feedback-planning",
             status="pass",
@@ -1093,10 +1232,12 @@ def _feedback_planning_model_request(
             continue
         if record.feedback_id not in included:
             continue
+        comment = raw_record.get("comment")
         records.append(
             {
                 "feedback_id": record.feedback_id,
                 "category": record.category,
+                "comment": str(comment)[:2000] if comment is not None else "",
                 "source_id": record.source_id,
                 "section_id": record.section_id,
                 "result_ids": record.result_ids,
@@ -1108,15 +1249,26 @@ def _feedback_planning_model_request(
         "run_id": run_id,
         "feedback_window": base_plan.feedback_window.model_dump(),
         "feedback_records": records,
-        "deterministic_proposed_actions": [
-            action.model_dump(mode="json") for action in base_plan.proposed_actions
-        ],
         "constraints": [
             "Return only valid JSON matching the response schema.",
             "Use only durable evidence identifiers present in feedback_records.",
             "Do not propose GitHub mutations for positive or non-actionable feedback.",
             "Use action_type no_action, issue, corpus_pr, link_to_upload, or defer.",
-            "Prefix every idempotency_key with the action_type and a colon.",
+            "Use classification positive, non_actionable, owner_action, corpus_candidate, upload_linked, capacity, or insufficient_evidence.",
+            "Do not include action_id, idempotency_key, validation, or execution fields; the controller assigns them.",
+            "Cover every included feedback_id in at least one proposed action.",
+            "A feedback_id is durable evidence for issue, no_action, and defer actions.",
+            "Use issue with classification owner_action for needs_owner_action feedback.",
+            "Use issue with classification owner_action for untargeted missing_content, wrong_content, stale_content, and unclear_content feedback.",
+            "Use corpus_pr with classification corpus_candidate for missing_content, wrong_content, stale_content, and unclear_content feedback when source_id, section_id, or upload_id evidence identifies the corpus target.",
+            "Use no_action with classification non_actionable for agent_note and non_actionable feedback.",
+            "Use no_action with classification positive for positive_content feedback.",
+            "Use corpus_pr only with source_id, section_id, or upload_id evidence.",
+            "Use link_to_upload only with upload_id evidence.",
+            f"Use target_repo {DEFAULT_CORPUS_REPO} for issue and corpus_pr actions.",
+            "Use defer only when a record cannot be safely classified from its category and evidence.",
+            "Classify agent_note, non_actionable, and positive_content as no_action unless durable evidence proves otherwise.",
+            "Prefer one grouped action over many identical actions when action_type, classification, target_repo, and evidence kind match.",
         ],
     }
     messages = [
@@ -1136,7 +1288,7 @@ def _feedback_planning_model_request(
         "type": "json_schema",
         "json_schema": {
             "name": "feedback_planning_output",
-            "schema": FeedbackPlanningModelOutput.model_json_schema(),
+            "schema": strict_model_json_schema(FeedbackPlanningModelOutput),
             "strict": True,
         },
     }
@@ -1155,46 +1307,340 @@ def _feedback_planning_model_request(
     )
 
 
-def _validate_model_feedback_actions(
+def _apply_model_upload_review(
+    *,
+    config: CuratorDryRunConfig,
+    upload_plan: UploadPlan,
+    upload_snapshot: UploadQueueSnapshot,
+    model: str | None,
+    model_call_budget: ModelCallBudget,
+    used_model_calls: int,
+) -> tuple[list[UploadReviewObservation], dict[str, UploadReviewModelOutput], CuratorProbe, dict[str, int]]:
+    empty_usage = {"call_count": 0, "token_count": 0}
+    if not upload_plan.review_previews:
+        return (
+            [],
+            {},
+            CuratorProbe(
+                name="model-upload-review",
+                status="skip",
+                message="model upload review skipped because no upload review previews are included",
+            ),
+            empty_usage,
+        )
+    if not model:
+        return (
+            [],
+            {},
+            CuratorProbe(
+                name="model-upload-review",
+                status="fail",
+                message="model upload review requires upload_review_model in the task contract",
+            ),
+            empty_usage,
+        )
+    if config.corpus_checkout is None:
+        return (
+            [],
+            {},
+            CuratorProbe(
+                name="model-upload-review",
+                status="fail",
+                message="model upload review requires a corpus checkout for validation observe",
+            ),
+            empty_usage,
+        )
+    remaining_calls = model_call_budget.max_calls_per_run - used_model_calls
+    required_calls = len(upload_plan.review_previews)
+    if remaining_calls < required_calls:
+        return (
+            [],
+            {},
+            CuratorProbe(
+                name="model-upload-review",
+                status="fail",
+                message="model upload review requires one model call per upload review preview",
+                details={"required_calls": required_calls, "remaining_calls": max(remaining_calls, 0)},
+            ),
+            empty_usage,
+        )
+
+    observations: list[UploadReviewObservation] = []
+    outputs: dict[str, UploadReviewModelOutput] = {}
+    call_count = 0
+    token_count = 0
+    bundles_by_upload = {bundle.upload_id: bundle for bundle in upload_snapshot.bundles}
+    for preview in upload_plan.review_previews:
+        bundle = bundles_by_upload.get(preview.upload_id)
+        if bundle is None:
+            observations.append(
+                UploadReviewObservation(
+                    upload_id=preview.upload_id,
+                    action_id=preview.action_id,
+                    status="fail",
+                    message="upload review bundle disappeared before model review",
+                )
+            )
+            continue
+        response = None
+        try:
+            request = _upload_review_model_request(
+                run_id=upload_plan.run_id,
+                model=model,
+                model_call_budget=model_call_budget,
+                bundle=bundle,
+            )
+            call_count += 1
+            response = _model_adapter(config).call(request)
+            output = validate_model_response_output(
+                response,
+                UploadReviewModelOutput,
+                expected_task_name="upload_review",
+            )
+            if output.upload_id != preview.upload_id:
+                raise ValueError(
+                    f"model upload review returned upload_id {output.upload_id!r} "
+                    f"for {preview.upload_id!r}"
+                )
+            outputs[preview.upload_id] = output
+            observations.append(
+                observe_upload_review_draft(
+                    corpus_checkout=config.corpus_checkout,
+                    output=output,
+                    action_id=preview.action_id,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - model/observe failures must fail closed.
+            observations.append(
+                UploadReviewObservation(
+                    upload_id=preview.upload_id,
+                    action_id=preview.action_id,
+                    status="fail",
+                    message=f"model upload review failed: {exc}",
+                )
+            )
+        finally:
+            if response is not None:
+                token_count += response.usage.input_tokens + response.usage.output_tokens
+
+    failures = [observation for observation in observations if observation.status == "fail"]
+    passes = [observation for observation in observations if observation.status == "pass"]
+    skips = [observation for observation in observations if observation.status == "skip"]
+    return (
+        observations,
+        outputs,
+        CuratorProbe(
+            name="model-upload-review",
+            status="fail" if failures else "pass",
+            message=(
+                f"model upload review observed {len(passes)} passing, "
+                f"{len(failures)} failing, and {len(skips)} skipped drafts"
+            ),
+            details={
+                "model": model,
+                "observation_count": len(observations),
+                "pass_count": len(passes),
+                "fail_count": len(failures),
+                "skip_count": len(skips),
+            },
+        ),
+        {"call_count": call_count, "token_count": token_count},
+    )
+
+
+def _upload_review_execution_intents(
+    *,
+    run_id: str,
+    upload_plan: UploadPlan,
+    observations: list[UploadReviewObservation],
+) -> list[ExecutionIntent]:
+    passing_upload_ids = {
+        observation.upload_id for observation in observations if observation.status == "pass"
+    }
+    return [
+        upload_review_pull_intent(run_id=run_id, preview=preview)
+        for preview in upload_plan.review_previews
+        if preview.upload_id in passing_upload_ids
+    ]
+
+
+def _execute_upload_review_prs(
+    *,
+    config: CuratorDryRunConfig,
+    run_id: str,
+    task_payload: dict[str, Any] | None,
+    upload_plan: UploadPlan,
+    observations: list[UploadReviewObservation],
+    outputs: dict[str, UploadReviewModelOutput],
+) -> list[ExecutionResult]:
+    if config.corpus_checkout is None:
+        results = []
+        for preview in upload_plan.review_previews:
+            intent = upload_review_pull_intent(run_id=run_id, preview=preview)
+            results.append(
+                ExecutionResult(
+                    action_id=intent.action_id,
+                    operation=intent.operation,
+                    idempotency_key=intent.idempotency_key,
+                    status="failed",
+                    target_repo=intent.target_repo,
+                    branch=intent.branch,
+                    message="corpus checkout is required for upload PR execution",
+                )
+            )
+        return results
+    broker_remote_url = _broker_remote_url(config, task_payload)
+    adapter = (
+        FixtureBrokerAdapter.from_path(config.broker_fixture)
+        if config.broker_fixture is not None
+        else HttpBrokerAdapter(config.broker_url or "")
+    )
+    previews_by_upload = {preview.upload_id: preview for preview in upload_plan.review_previews}
+    results = []
+    for observation in observations:
+        if observation.status != "pass":
+            continue
+        preview = previews_by_upload.get(observation.upload_id)
+        output = outputs.get(observation.upload_id)
+        if preview is None or output is None:
+            continue
+        results.append(
+            execute_upload_review_pr(
+                run_id=run_id,
+                broker_remote_url=broker_remote_url,
+                broker_adapter=adapter,
+                preview=preview,
+                output=output,
+            )
+        )
+    return results
+
+
+def _broker_remote_url(config: CuratorDryRunConfig, task_payload: dict[str, Any] | None) -> str:
+    if task_payload is not None:
+        broker_remote_url = task_payload.get("broker_remote_url")
+        if isinstance(broker_remote_url, str) and broker_remote_url:
+            return broker_remote_url
+    if config.broker_url:
+        return f"{config.broker_url.rstrip('/')}/git/{DEFAULT_CORPUS_REPO}.git"
+    return ""
+
+
+def _upload_review_model_request(
+    *,
+    run_id: str,
+    model: str,
+    model_call_budget: ModelCallBudget,
+    bundle: Any,
+) -> ModelCallRequest:
+    manifest = _read_upload_manifest_for_model(Path(bundle.path))
+    files = _read_upload_files_for_model(Path(bundle.path))
+    prompt_input = {
+        "schema_version": "1",
+        "run_id": run_id,
+        "upload_id": bundle.upload_id,
+        "manifest": manifest,
+        "files": files,
+        "corpus_policy": {
+            "allowed_types": sorted(ALLOWED_TYPES),
+            "allowed_tags": sorted(ALLOWED_TAGS),
+            "corpus_roots": [
+                "homemaint",
+                "preferences",
+                "skills",
+                "substack",
+                "workhistory",
+                "writingsamples",
+            ],
+        },
+        "constraints": [
+            "Return only valid JSON matching the response schema.",
+            "Produce reviewable corpus markdown files; do not merge or publish anything.",
+            "Every output file must be complete markdown with a frontmatter block whose delimiter lines are exactly three hyphens: ---.",
+            "Output frontmatter may contain only id, type, tags, aliases, and related; choose the corpus root through the file path, not a root frontmatter field.",
+            "Prefer existing corpus types and tags when they fit.",
+            "When existing vocabulary does not fit, propose a small policy_patch instead of misclassifying the document.",
+            "Do not weaken validation limits, remove existing policy values, or include secrets.",
+            "Use decision integrated only when files contain normalized corpus markdown for review.",
+            "Use decision needs_owner_action when the upload cannot be safely normalized from the supplied context.",
+            "Keep rationale short and state why any policy additions are needed.",
+        ],
+    }
+    return ModelCallRequest(
+        task_name="upload_review",
+        run_id=run_id,
+        model=model,
+        input={
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are the YouKnowMe Curator upload-review model. Normalize staged "
+                        "markdown into reviewable corpus files and propose minimal policy additions "
+                        "when the current corpus vocabulary is missing needed terms."
+                    ),
+                },
+                {"role": "user", "content": json.dumps(prompt_input, sort_keys=True)},
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "upload_review_output",
+                    "schema": strict_model_json_schema(UploadReviewModelOutput),
+                    "strict": True,
+                },
+            },
+            "temperature": 0,
+            "metadata": {"feature": "upload_review"},
+        },
+        max_tokens=model_call_budget.max_tokens_per_run or None,
+    )
+
+
+def _read_upload_manifest_for_model(bundle_path: Path) -> dict[str, Any]:
+    path = bundle_path / "manifest.json"
+    if not path.exists():
+        return {}
+    text = path.read_text(encoding="utf-8")
+    if len(text) > MAX_UPLOAD_REVIEW_MANIFEST_CHARS:
+        raise ValueError("upload manifest is too large for model review")
+    payload = json.loads(text)
+    if not isinstance(payload, dict):
+        raise ValueError("upload manifest must be a JSON object")
+    return payload
+
+
+def _read_upload_files_for_model(bundle_path: Path) -> list[dict[str, str]]:
+    files_dir = bundle_path / "files"
+    if not files_dir.exists() or not files_dir.is_dir():
+        raise ValueError("upload bundle has no files directory for model review")
+    paths = sorted(path for path in files_dir.iterdir() if path.is_file())
+    if len(paths) > MAX_UPLOAD_REVIEW_FILES:
+        raise ValueError(f"upload bundle exceeds {MAX_UPLOAD_REVIEW_FILES} files for model review")
+    files: list[dict[str, str]] = []
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        if len(text) > MAX_UPLOAD_REVIEW_FILE_CHARS:
+            raise ValueError(f"{path.name} is too large for model review")
+        files.append({"filename": path.name, "content": text})
+    if not files:
+        raise ValueError("upload bundle contains no files for model review")
+    return files
+
+
+def _validate_feedback_planning_model_output(
     base_plan: FeedbackPlan,
     output: FeedbackPlanningModelOutput,
 ) -> None:
-    allowed_feedback_ids = set(base_plan.included_feedback_ids)
-    allowed_upload_ids = set(base_plan.referenced_upload_ids)
-    allowed_source_ids = set(base_plan.referenced_source_ids)
-    allowed_section_ids = set(base_plan.referenced_section_ids)
-    allowed_result_ids = set(base_plan.referenced_result_ids)
-    for action in output.proposed_actions:
-        _validate_evidence_subset(
-            action.evidence,
-            allowed_feedback_ids=allowed_feedback_ids,
-            allowed_upload_ids=allowed_upload_ids,
-            allowed_source_ids=allowed_source_ids,
-            allowed_section_ids=allowed_section_ids,
-            allowed_result_ids=allowed_result_ids,
-        )
+    validate_feedback_planning_model_output(base_plan, output)
 
 
-def _validate_evidence_subset(
-    evidence: ActionEvidence,
-    *,
-    allowed_feedback_ids: set[str],
-    allowed_upload_ids: set[str],
-    allowed_source_ids: set[str],
-    allowed_section_ids: set[str],
-    allowed_result_ids: set[str],
-) -> None:
-    subsets = {
-        "feedback_ids": (set(evidence.feedback_ids), allowed_feedback_ids),
-        "upload_ids": (set(evidence.upload_ids), allowed_upload_ids),
-        "source_ids": (set(evidence.source_ids), allowed_source_ids),
-        "section_ids": (set(evidence.section_ids), allowed_section_ids),
-        "result_ids": (set(evidence.result_ids), allowed_result_ids),
-    }
-    for name, (actual, allowed) in subsets.items():
-        unknown = sorted(actual - allowed)
-        if unknown:
-            raise ValueError(f"model action cites unknown {name}: {unknown}")
+def _state_only_unresolved_feedback_ids(
+    plan: FeedbackPlan,
+    decisions: list[FeedbackDecision],
+) -> list[str]:
+    decided = {decision.feedback_id for decision in decisions}
+    return sorted(feedback_id for feedback_id in plan.included_feedback_ids if feedback_id not in decided)
 
 
 def _append_feedback_decisions_safely(
@@ -1578,6 +2024,8 @@ def _report_markdown(report: CuratorDryRunReport) -> str:
         f"- Proposed actions: `{report.proposed_action_count}`",
         f"- Upload proposed actions: `{report.upload_proposed_action_count}`",
         f"- Upload review previews: `{report.upload_review_preview_count}`",
+        f"- Upload review observations: `{report.upload_review_observation_count}`",
+        f"- Upload review validation failures: `{report.upload_review_validation_failure_count}`",
         f"- Upload metadata updates: `{report.upload_metadata_update_count}`",
         f"- Executed actions: `{report.executed_action_count}`",
         f"- GitHub mutations: `{report.github_mutation_count}`",
@@ -1611,10 +2059,30 @@ def _report_markdown(report: CuratorDryRunReport) -> str:
     if report.upload_review_previews:
         lines.extend(["", "## Upload Review Previews", ""])
         for preview in report.upload_review_previews[:20]:
+            draft_status = preview.get("draft_status", "not_evaluated")
+            draft_paths = preview.get("draft_paths") or []
+            draft_suffix = f"; draft `{draft_status}`"
+            if draft_paths:
+                draft_suffix += " -> " + ", ".join(f"`{path}`" for path in draft_paths[:3])
+            elif preview.get("blocking_reason"):
+                draft_suffix += f": {str(preview['blocking_reason'])[:160]}"
             lines.append(
                 f"- `{preview['upload_id']}` in `{preview['queue']}`: "
                 f"`{preview['current_state']}` -> `{preview['proposed_state']}` "
-                f"on `{preview['branch']}`"
+                f"on `{preview['branch']}`{draft_suffix}"
+            )
+    if report.upload_review_observations:
+        lines.extend(["", "## Upload Review Observations", ""])
+        for observation in report.upload_review_observations[:20]:
+            draft_paths = observation.get("draft_paths") or []
+            suffix = ""
+            if draft_paths:
+                suffix = " -> " + ", ".join(f"`{path}`" for path in draft_paths[:3])
+            returncode = observation.get("returncode")
+            code_suffix = f" (exit `{returncode}`)" if returncode is not None else ""
+            lines.append(
+                f"- `{observation['upload_id']}`: `{observation['status']}`{code_suffix} - "
+                f"{str(observation['message'])[:200]}{suffix}"
             )
     branch_previews = report.reconciliation.get("branch_previews", [])
     if branch_previews:

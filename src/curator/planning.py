@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
+from pathlib import Path
 
 from pydantic import ValidationError
 
@@ -11,6 +12,7 @@ from curator.models import (
     FeedbackInputRecord,
     FeedbackPlan,
     FeedbackWindow,
+    DEFAULT_TARGET_REPO,
     ProposedAction,
     UploadBundleSnapshot,
     UploadCuratorMetadata,
@@ -20,9 +22,9 @@ from curator.models import (
     UploadReviewPreview,
 )
 from curator.state import deterministic_idempotency_key
+from curator.upload_draft import draft_upload_corpus_change
 
 
-DEFAULT_TARGET_REPO = "grubbyhacker/ykmcorpus"
 REENTER_DECISIONS = {"deferred", "capacity_deferred"}
 IMMEDIATE_REENTRY_TRIGGERS = {"next_run"}
 
@@ -65,6 +67,7 @@ def build_feedback_plan(
     referenced_result_ids: set[str] = set()
     capacity_deferred_feedback_ids: list[str] = []
     action_index = 1
+    github_object_action_count = 0
 
     for raw_record in feedback_records:
         try:
@@ -84,12 +87,18 @@ def build_feedback_plan(
         if record.section_id:
             referenced_section_ids.add(record.section_id)
         referenced_result_ids.update(record.result_ids)
-        if len(proposed_actions) >= soft_action_threshold:
+        action = _action_for_record(run_id, action_index, record)
+        if (
+            action.action_type in {"issue", "corpus_pr"}
+            and github_object_action_count >= soft_action_threshold
+        ):
             capacity_deferred_feedback_ids.append(record.feedback_id)
             proposed_actions.append(_action_for_record(run_id, action_index, record, force_defer=True))
             action_index += 1
             continue
-        proposed_actions.append(_action_for_record(run_id, action_index, record))
+        proposed_actions.append(action)
+        if action.action_type in {"issue", "corpus_pr"}:
+            github_object_action_count += 1
         action_index += 1
     proposed_actions = _merge_groupable_actions(proposed_actions)
 
@@ -240,6 +249,7 @@ def _upload_review_preview(
     current_state = bundle.curator_metadata.state if bundle.curator_metadata else _state_from_queue(bundle)
     evidence = ActionEvidence(upload_ids=[bundle.upload_id])
     idempotency_key = deterministic_idempotency_key("upload", evidence)
+    draft = draft_upload_corpus_change(Path(bundle.path))
     return UploadReviewPreview(
         upload_id=bundle.upload_id,
         queue=bundle.queue,
@@ -250,6 +260,10 @@ def _upload_review_preview(
         branch=_deterministic_upload_branch_name(run_id, bundle.upload_id, idempotency_key),
         validation="accepted",
         reason="Deterministic upload review preview only; no queue move or curator.json write.",
+        draft_status=draft.status,
+        draft_paths=[file.target_path for file in draft.files],
+        blocking_reason=draft.reason if draft.status == "needs_owner_action" else None,
+        warnings=draft.warnings,
     )
 
 

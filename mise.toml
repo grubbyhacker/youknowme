@@ -22,6 +22,18 @@ run = "scripts/local-demo.sh"
 description = "Build the synthetic corpus and run committed retrieval eval cases"
 run = "rm -rf .ykm/eval-index && YKM_EMBEDDING_PROVIDER=fake uv run ykm build --corpus fixtures/corpus --out .ykm/eval-index >/dev/null && YKM_EMBEDDING_PROVIDER=fake uv run ykm eval --index .ykm/eval-index --cases fixtures/eval/synthetic.json"
 
+[tasks.curator-model-eval]
+description = "Run offline Curator model feedback-planning fixture evals"
+run = "uv run pytest tests/test_curator_model_eval.py tests/test_curator_upload_model_eval.py -q"
+
+[tasks.curator-feedback-model-live-eval]
+description = "Run live Curator feedback-planning model scenario evals through a configured model proxy"
+run = "uv run scripts/eval-curator-feedback-models.py"
+
+[tasks.curator-upload-model-live-eval]
+description = "Run live Curator upload-review model scenario evals through a configured model proxy"
+run = "uv run scripts/eval-curator-upload-models.py"
+
 [tasks.real-smoke]
 description = "Build the private local corpus checkout into an ignored local index"
 run = "scripts/real-corpus-smoke.sh"

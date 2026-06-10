@@ -49,6 +49,14 @@ source of truth remains `docs/ykm-phase4-curator.md` and `docs/ykm-curator-contr
   only `BROKER_AGENT_ID` and `BROKER_AGENT_SECRET`.
 - HTTP model proxy health probing only; no live model calls.
 - Model fixture budget preflight and typed fixture response validation.
+- Upload-review model evals with sanitized dev-environment and hot-tub/manual scenarios. Live eval
+  evidence currently supports Sonnet for the first upload-review implementation.
+- Bounded upload-review observe for integrated model drafts. The Curator applies model-produced
+  markdown and additive type/tag policy changes to a temporary corpus checkout copy, runs
+  `mise run validate`, and records structured pass/fail observations in JSON and Markdown reports.
+- Broker-backed upload review PR creation for `manual_live` runs after validation passes. The worker
+  clones through the broker Git remote, reapplies the draft, re-runs corpus validation, pushes a
+  deterministic Curator branch, and opens a broker `pull.create` PR with Curator metadata.
 - Run reports in JSON and Markdown with plans, summaries, failures, preflights, policy results,
   reconciliation, referenced evidence, capacity deferrals, and model budget fields.
 
@@ -62,24 +70,24 @@ mise run lint
 mise run test
 ```
 
-Observed result at this handoff:
+Observed result at the latest Curator handoff:
 
-- `tests/test_curator.py`: 121 passed.
-- Full suite: 200 passed.
+- Full suite: 243 passed.
 - Lint: passed.
 - Full suite has one existing Starlette/httpx deprecation warning in `tests/test_server.py`.
-- `git status --short POC` was clean.
 
 ## Contract-Blocked Or Future Work
 
 - Broker-backed GitHub reads for PR and issue reconciliation are implemented behind explicit
   `--enable-broker-reads` opt-in. They remain read-only and do not create branches, PRs, issues, or
   comments.
-- Broker-backed PR and issue creation remains disabled. The Curator emits policy-checked execution
-  intents and fixture simulation results only; real creation requires a future execution contract.
-- Model-backed feedback planning and upload review remains disabled. The Curator validates model
-  proxy health, budgets, and typed fixture responses only; live model calls require a future planning
-  execution contract.
+- Broker-backed upload review PR creation is enabled only for validated `manual_live` upload-review
+  observations. Feedback issue/PR creation, PR comments, and branch maintenance remain disabled.
+- Model-backed feedback planning and upload-review observe remain explicit opt-ins. Offline and
+  live-proxy eval harnesses exist; production live model calls require a future planning execution
+  contract.
+- Upload-review PR creation does not move upload queue directories or write upload `curator.json`.
+  Reconciliation can still discover the PR later from Curator markers and branch naming.
 - Add real upload claim/process/reject/archive queue movement only after the queue mutation contract is
   explicitly enabled.
 - Add PR maintenance actions for owner comments, requested changes, failed checks, and stale/blocked
@@ -97,9 +105,10 @@ Observed result at this handoff:
 - Deterministic controller: satisfied for the contracted initial manual workflow. It validates task
   contracts, locks runs, freezes feedback windows, plans feedback/uploads, reconciles fixture and
   opt-in broker-read snapshots, applies state-only safe decisions, and writes JSON/Markdown reports.
-- Broker boundary: satisfied for reads and preflight. Live reads are opt-in and authenticated through
-  broker agent credentials only. Mutations are represented as policy-checked intents or fixture
-  simulations until a future execution contract enables them.
+- Broker boundary: satisfied for reads, preflight, and upload PR creation. Live reads are opt-in and
+  authenticated through broker agent credentials only. Upload PR mutations use broker Git and
+  broker `pull.create`; other mutations remain represented as policy-checked intents or fixture
+  simulations until their future execution contracts enable them.
 - Model boundary: satisfied for health, budgets, and typed fixture validation. Live model planning is
   intentionally closed until a future model execution contract enables it.
 - Upload queue mutation: intentionally deferred by contract. Upload plans and reconciliation previews
@@ -109,8 +118,8 @@ Observed result at this handoff:
 
 1. Wire the VPS Curator launcher: sandbox-broker template plus an owner-controlled `systemd` timer or
    manual wrapper that invokes sandbox-broker and collects `/output/run-report.json`.
-2. Define the future broker mutation execution contract for PR/issue creation, comments, branch
-   edits, idempotency reuse, and budget-denial persistence.
+2. Define the future broker mutation execution contract for feedback PR/issue creation, comments,
+   branch edits, idempotency reuse, and budget-denial persistence.
 3. Define the future model execution contract for feedback planning, upload review, PR comment
    classification, and PR body drafting.
 4. Define the future queue movement contract before any upload directory moves are enabled.
