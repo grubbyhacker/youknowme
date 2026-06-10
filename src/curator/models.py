@@ -97,6 +97,8 @@ class CuratorTask(BaseModel):
     model_call_budget: ModelCallBudget = Field(default_factory=ModelCallBudget)
     model_feedback_planning: bool = False
     feedback_model: str | None = None
+    model_upload_review: bool = False
+    upload_review_model: str | None = None
     feedback_soft_action_threshold: int = Field(default=10, ge=0)
     stale_lock_timeout_seconds: int = Field(default=DEFAULT_STALE_LOCK_TIMEOUT_SECONDS, ge=1)
 
@@ -120,6 +122,7 @@ class CuratorRunConfig(BaseModel):
     recover_stale_lock: bool = False
     simulate_execution: bool = False
     enable_broker_reads: bool = False
+    corpus_checkout: Path | None = None
 
 
 class FeedbackCheckpoint(BaseModel):
@@ -483,9 +486,13 @@ class ExecutionResult(BaseModel):
     action_id: str
     operation: ExecutionOperation
     idempotency_key: str
-    status: Literal["simulated"]
+    status: Literal["simulated", "executed", "failed"]
     target_repo: str
     branch: str | None = None
+    pr_number: int | None = None
+    issue_number: int | None = None
+    url: str | None = None
+    message: str | None = None
 
 
 class BrokerReadRequest(BaseModel):
@@ -604,6 +611,9 @@ class CuratorRunReport(BaseModel):
     upload_proposed_action_count: int = 0
     upload_review_previews: list[dict[str, Any]] = Field(default_factory=list)
     upload_review_preview_count: int = 0
+    upload_review_observations: list[dict[str, Any]] = Field(default_factory=list)
+    upload_review_observation_count: int = 0
+    upload_review_validation_failure_count: int = 0
     upload_metadata_update_count: int = 0
     upload_metadata_update_paths: list[str] = Field(default_factory=list)
     referenced_upload_ids: list[str] = Field(default_factory=list)

@@ -58,6 +58,7 @@ from curator.upload_state import (
     transition_upload_metadata,
     validate_upload_transition,
 )
+from curator.upload_observe import observe_upload_review_draft
 from ykm.curator import CuratorDryRunConfig, run_curator_dry_run
 from curator.runner import write_curator_reports
 
@@ -2732,6 +2733,56 @@ def test_http_broker_adapter_generates_upload_review_read_descriptors() -> None:
     assert requests[1]["params"]["q"] == "upload:abc123"
 
 
+def test_http_broker_adapter_creates_pull_with_curator_metadata() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["auth"] = request.headers.get("authorization")
+        captured["body"] = json.loads(request.content.decode("utf-8"))
+        return httpx.Response(
+            201,
+            json={
+                "number": 12,
+                "html_url": "https://github.invalid/grubbyhacker/ykmcorpus/pull/12",
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    intent = ExecutionIntent(
+        action_id="upl_act_1",
+        operation="pull.create",
+        idempotency_key="upload:abc123",
+        target_repo="grubbyhacker/ykmcorpus",
+        branch="curator/run-upload/upload-upl-1-abc123",
+        evidence=ActionEvidence(upload_ids=["upl_1"]),
+        title="Upload review",
+        body="body",
+    )
+
+    result = HttpBrokerAdapter(
+        "http://broker:8080",
+        client=client,
+        agent_id="ykm-curator",
+        agent_secret="secret",
+    ).create_pull(intent)
+
+    assert result.status == "executed"
+    assert result.pr_number == 12
+    assert result.url == "https://github.invalid/grubbyhacker/ykmcorpus/pull/12"
+    assert captured["path"] == "/v1/repos/grubbyhacker/ykmcorpus/pulls"
+    assert captured["auth"] is not None
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body["head"] == "curator/run-upload/upload-upl-1-abc123"
+    assert body["base"] == "main"
+    assert body["metadata"] == {
+        "YKM-Curator-Run": "run-upload",
+        "YKM-Curator-Action": "upload",
+    }
+    assert body["permissions"] == ["contents:write", "pull_requests:write"]
+
+
 def test_http_broker_adapter_generates_issue_reconciliation_read_descriptors() -> None:
     probe = HttpBrokerAdapter("http://broker:8080").issue_reconciliation_preflight(
         target_repo="grubbyhacker/ykmcorpus",
@@ -4917,6 +4968,305 @@ tags: [tools]
     assert "draft `needs_owner_action`: project-note.md: missing" in markdown
 
 
+def test_upload_review_observe_applies_model_draft_to_temp_checkout_and_validates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    corpus = _fake_corpus_checkout(tmp_path)
+    _fake_mise(tmp_path, monkeypatch, exit_code=0, stdout="validated draft\n")
+    output = UploadReviewModelOutput(
+        upload_id="upl_tooling",
+        decision="integrated",
+        files=[
+            {
+                "path": "homemaint/tooling-note.md",
+                "content": (
+                    "---\n"
+                    "id: tooling-note\n"
+                    "type: procedure\n"
+                    "tags: [home-maintenance, uv]\n"
+                    "---\n\n"
+                    "# Tooling Note\n"
+                ),
+            }
+        ],
+        policy_patch={"allowed_types_add": [], "allowed_tags_add": ["uv"]},
+        rationale="The note is normalized into corpus markdown.",
+        reason="ready for validation",
+    )
+
+    observation = observe_upload_review_draft(
+        corpus_checkout=corpus,
+        output=output,
+        action_id="upl_act_1",
+    )
+
+    assert observation.status == "pass"
+    assert observation.command == ["mise", "run", "validate"]
+    assert observation.returncode == 0
+    assert observation.draft_paths == ["homemaint/tooling-note.md"]
+    assert observation.policy_tags_add == ["uv"]
+    assert "validated draft" in observation.stdout_tail
+    assert not (corpus / "homemaint" / "tooling-note.md").exists()
+
+
+def test_upload_review_observe_records_validation_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    corpus = _fake_corpus_checkout(tmp_path)
+    _fake_mise(tmp_path, monkeypatch, exit_code=7, stderr="bad frontmatter\n")
+    output = UploadReviewModelOutput(
+        upload_id="upl_bad",
+        decision="integrated",
+        files=[
+            {
+                "path": "homemaint/bad-note.md",
+                "content": "---\nid: bad-note\ntype: procedure\ntags: [home]\n---\n\n# Bad\n",
+            }
+        ],
+        policy_patch={"allowed_types_add": [], "allowed_tags_add": []},
+        rationale="The note is normalized into corpus markdown.",
+        reason="ready for validation",
+    )
+
+    observation = observe_upload_review_draft(corpus_checkout=corpus, output=output)
+
+    assert observation.status == "fail"
+    assert observation.returncode == 7
+    assert observation.message == "corpus validation failed"
+    assert "bad frontmatter" in observation.stderr_tail
+
+
+def test_runner_observes_model_upload_review_draft_validation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    intake = tmp_path / "intake"
+    pending = intake / "uploads" / "pending" / "upl_tooling"
+    files = pending / "files"
+    files.mkdir(parents=True)
+    (pending / "manifest.json").write_text(
+        json.dumps({"upload_id": "upl_tooling"}) + "\n",
+        encoding="utf-8",
+    )
+    (files / "tooling.md").write_text(
+        "---\nid: tooling\ntype: procedure\ntags: [home]\n---\n\n# Tooling\n",
+        encoding="utf-8",
+    )
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "run_id": "run-upload-model",
+                "mode": "dry_run",
+                "enabled_actions": ["plan_uploads"],
+                "model_upload_review": True,
+                "upload_review_model": "anthropic/claude-sonnet-4.6",
+                "model_call_budget": {"max_calls_per_run": 1, "max_tokens_per_run": 1000},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    model_fixture = tmp_path / "model-fixture.json"
+    model_fixture.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "reachable": True,
+                "max_calls_per_run": 1,
+                "max_tokens_per_run": 1000,
+                "responses": {
+                    "upload_review": {
+                        "schema_version": "1",
+                        "task_name": "upload_review",
+                        "output": {
+                            "schema_version": "1",
+                            "upload_id": "upl_tooling",
+                            "decision": "integrated",
+                            "files": [
+                                {
+                                    "path": "homemaint/tooling.md",
+                                    "content": (
+                                        "---\n"
+                                        "id: tooling\n"
+                                        "type: procedure\n"
+                                        "tags: [home-maintenance]\n"
+                                        "---\n\n"
+                                        "# Tooling\n"
+                                    ),
+                                }
+                            ],
+                            "policy_patch": {
+                                "allowed_types_add": [],
+                                "allowed_tags_add": [],
+                            },
+                            "rationale": "The upload can be normalized.",
+                            "reason": "ready for validation",
+                        },
+                        "usage": {"input_tokens": 12, "output_tokens": 8},
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    corpus = _fake_corpus_checkout(tmp_path)
+    _fake_mise(tmp_path, monkeypatch, exit_code=0, stdout="validation ok\n")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="ignored",
+            intake=intake,
+            output=tmp_path / "output",
+            task=task,
+            model_proxy_fixture=model_fixture,
+            corpus_checkout=corpus,
+        )
+    )
+
+    assert report.status == "pass"
+    assert report.model_call_count == 1
+    assert report.model_token_count == 20
+    assert report.upload_review_observation_count == 1
+    assert report.upload_review_validation_failure_count == 0
+    observation = report.upload_review_observations[0]
+    assert observation["status"] == "pass"
+    assert observation["draft_paths"] == ["homemaint/tooling.md"]
+    assert observation["command"] == ["mise", "run", "validate"]
+    markdown = (tmp_path / "output" / "run-report.md").read_text(encoding="utf-8")
+    assert "## Upload Review Observations" in markdown
+    assert "`upl_tooling`: `pass`" in markdown
+
+
+def test_runner_manual_live_creates_upload_review_pr_after_validation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    intake = tmp_path / "intake"
+    pending = intake / "uploads" / "pending" / "upl_tooling"
+    files = pending / "files"
+    files.mkdir(parents=True)
+    (pending / "manifest.json").write_text(
+        json.dumps({"upload_id": "upl_tooling"}) + "\n",
+        encoding="utf-8",
+    )
+    (files / "tooling.md").write_text(
+        "---\nid: tooling\ntype: procedure\ntags: [home]\n---\n\n# Tooling\n",
+        encoding="utf-8",
+    )
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "run_id": "run-upload-pr",
+                "mode": "manual_live",
+                "enabled_actions": ["plan_uploads"],
+                "github_mutation_budget": {
+                    "max_new_objects_per_run": 2,
+                    "upload": 2,
+                    "feedback": 0,
+                },
+                "model_upload_review": True,
+                "upload_review_model": "anthropic/claude-sonnet-4.6",
+                "model_call_budget": {"max_calls_per_run": 1, "max_tokens_per_run": 1000},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    model_fixture = tmp_path / "model-fixture.json"
+    model_fixture.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "reachable": True,
+                "max_calls_per_run": 1,
+                "max_tokens_per_run": 1000,
+                "responses": {
+                    "upload_review": {
+                        "schema_version": "1",
+                        "task_name": "upload_review",
+                        "output": {
+                            "schema_version": "1",
+                            "upload_id": "upl_tooling",
+                            "decision": "integrated",
+                            "files": [
+                                {
+                                    "path": "homemaint/tooling.md",
+                                    "content": (
+                                        "---\n"
+                                        "id: tooling\n"
+                                        "type: procedure\n"
+                                        "tags: [home-maintenance]\n"
+                                        "---\n\n"
+                                        "# Tooling\n"
+                                    ),
+                                }
+                            ],
+                            "policy_patch": {
+                                "allowed_types_add": [],
+                                "allowed_tags_add": [],
+                            },
+                            "rationale": "The upload can be normalized.",
+                            "reason": "ready for validation",
+                        },
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    broker_fixture = tmp_path / "broker-fixture.json"
+    broker_fixture.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "reachable": True,
+                "existing_branches": [],
+                "existing_idempotency_keys": [],
+                "allowed_operations": ["pull.create"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _fake_mise(tmp_path, monkeypatch, exit_code=0, stdout="validation ok\n")
+    _fake_git(tmp_path, monkeypatch)
+    monkeypatch.setenv("BROKER_AGENT_ID", "ykm-curator")
+    monkeypatch.setenv("BROKER_AGENT_SECRET", "broker-secret")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="ignored",
+            intake=intake,
+            output=tmp_path / "output",
+            task=task,
+            broker_url="http://broker:8080",
+            broker_fixture=broker_fixture,
+            model_proxy_fixture=model_fixture,
+            corpus_checkout=_fake_corpus_checkout(tmp_path),
+        )
+    )
+
+    assert report.status == "pass"
+    assert report.upload_review_observation_count == 1
+    assert report.execution_intent_count == 1
+    assert report.execution_intents[0]["operation"] == "pull.create"
+    assert report.simulated_execution_results[0]["status"] == "simulated"
+    assert report.simulated_execution_results[0]["branch"].startswith(
+        "curator/run-upload-pr/upload-upl-tooling-"
+    )
+    assert any(probe.name == "manual-live-upload-pr" and probe.status == "pass" for probe in report.probes)
+
+
 def test_upload_plan_reenters_deferred_metadata_only_when_trigger_is_ready(
     tmp_path: Path,
     monkeypatch,
@@ -5713,3 +6063,83 @@ def test_curator_task_rejects_unknown_schema_version() -> None:
             run_id="run-bad-schema",
             enabled_actions=["plan_feedback"],
         )
+
+
+def _fake_corpus_checkout(tmp_path: Path) -> Path:
+    corpus = tmp_path / "corpus"
+    (corpus / ".ykm").mkdir(parents=True)
+    (corpus / "homemaint").mkdir()
+    (corpus / "scripts").mkdir()
+    (corpus / "tests").mkdir()
+    (corpus / ".ykm" / "corpus-policy.yaml").write_text(
+        (
+            "corpus_roots:\n"
+            "  - homemaint\n"
+            "allowed_types:\n"
+            "  - procedure\n"
+            "allowed_tags:\n"
+            "  - home\n"
+            "  - home-maintenance\n"
+        ),
+        encoding="utf-8",
+    )
+    (corpus / "mise.toml").write_text("[tasks.validate]\nrun = 'true'\n", encoding="utf-8")
+    (corpus / "pyproject.toml").write_text("[project]\nname = 'fake-corpus'\n", encoding="utf-8")
+    (corpus / "scripts" / "validate_corpus.py").write_text("print('ok')\n", encoding="utf-8")
+    return corpus
+
+
+def _fake_mise(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    exit_code: int,
+    stdout: str = "",
+    stderr: str = "",
+) -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    script = bin_dir / "mise"
+    script.write_text(
+        (
+            "#!/usr/bin/env python3\n"
+            "import sys\n"
+            f"sys.stdout.write({stdout!r})\n"
+            f"sys.stderr.write({stderr!r})\n"
+            f"raise SystemExit({exit_code})\n"
+        ),
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    return script
+
+
+def _fake_git(tmp_path: Path, monkeypatch) -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    script = bin_dir / "git"
+    script.write_text(
+        (
+            "#!/usr/bin/env python3\n"
+            "import pathlib\n"
+            "import sys\n"
+            "args = sys.argv[1:]\n"
+            "if args[:1] == ['clone']:\n"
+            "    target = pathlib.Path(args[-1])\n"
+            "    (target / '.ykm').mkdir(parents=True, exist_ok=True)\n"
+            "    (target / 'homemaint').mkdir(parents=True, exist_ok=True)\n"
+            "    (target / '.git').mkdir(parents=True, exist_ok=True)\n"
+            "    (target / '.ykm' / 'corpus-policy.yaml').write_text("
+            "\"corpus_roots:\\n  - homemaint\\nallowed_types:\\n  - procedure\\n"
+            "allowed_tags:\\n  - home\\n  - home-maintenance\\n\")\n"
+            "    raise SystemExit(0)\n"
+            "if args == ['diff', '--cached', '--quiet']:\n"
+            "    raise SystemExit(1)\n"
+            "raise SystemExit(0)\n"
+        ),
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    return script

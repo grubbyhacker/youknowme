@@ -32,6 +32,7 @@ def main() -> None:
     run.add_argument("--recover-stale-lock", action="store_true")
     run.add_argument("--simulate-execution", action="store_true")
     run.add_argument("--enable-broker-reads", action="store_true")
+    run.add_argument("--corpus-checkout", type=Path, default=os.getenv("YKM_CORPUS_CHECKOUT"))
 
     inspect_task = subparsers.add_parser("inspect-task")
     inspect_task.add_argument("task", type=Path)
@@ -59,6 +60,7 @@ def main() -> None:
                 recover_stale_lock=args.recover_stale_lock,
                 simulate_execution=args.simulate_execution,
                 enable_broker_reads=args.enable_broker_reads,
+                corpus_checkout=args.corpus_checkout,
             )
         )
         print(report.model_dump_json(indent=2))
@@ -110,6 +112,8 @@ def _report_summary(report: CuratorRunReport) -> dict[str, object]:
         "proposed_action_count": report.proposed_action_count,
         "upload_proposed_action_count": report.upload_proposed_action_count,
         "upload_review_preview_count": report.upload_review_preview_count,
+        "upload_review_observation_count": report.upload_review_observation_count,
+        "upload_review_validation_failure_count": report.upload_review_validation_failure_count,
         "policy_denial_count": report.policy_denial_count,
         "execution_intent_count": report.execution_intent_count,
         "pr_reconciliation_count": int(
