@@ -25,6 +25,7 @@ from curator.models import (
     CuratorState,
     CuratorTask,
     FeedbackInputRecord,
+    FeedbackDecision,
     FeedbackPlan,
     ModelCallBudget,
     ModelCallRequest,
@@ -462,6 +463,19 @@ def _run_with_lock(
             )
             if decision_append_probe is not None:
                 probes.append(decision_append_probe)
+            unresolved_feedback_ids = _state_only_unresolved_feedback_ids(
+                feedback_plan,
+                state_only_decisions,
+            )
+            if unresolved_feedback_ids:
+                probes.append(
+                    CuratorProbe(
+                        name="state-only",
+                        status="fail",
+                        message="state_only checkpoint not advanced because feedback remains without a state-only decision",
+                        details={"feedback_ids": unresolved_feedback_ids},
+                    )
+                )
             if "reconcile" in enabled_actions:
                 upload_metadata_update_paths, upload_metadata_update_probes = (
                     _apply_upload_transition_previews(
@@ -1180,6 +1194,14 @@ def _validate_feedback_planning_model_output(
     output: FeedbackPlanningModelOutput,
 ) -> None:
     validate_feedback_planning_model_output(base_plan, output)
+
+
+def _state_only_unresolved_feedback_ids(
+    plan: FeedbackPlan,
+    decisions: list[FeedbackDecision],
+) -> list[str]:
+    decided = {decision.feedback_id for decision in decisions}
+    return sorted(feedback_id for feedback_id in plan.included_feedback_ids if feedback_id not in decided)
 
 
 def _append_feedback_decisions_safely(

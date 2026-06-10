@@ -1144,8 +1144,11 @@ def test_state_only_appends_only_noop_link_and_defer_feedback_decisions(
         .splitlines()
     ]
 
-    assert report.status == "pass"
+    assert report.status == "fail"
+    assert report.checkpoint_advanced is False
     assert report.feedback_decisions_appended == 3
+    assert any(failure["name"] == "state-only" for failure in report.partial_failures)
+    assert not (intake / "feedback" / "curator-state.json").exists()
     assert [decision["feedback_id"] for decision in decisions] == [
         "fb_positive",
         "fb_upload",
@@ -4407,7 +4410,9 @@ def test_state_only_does_not_apply_reconciliation_when_disabled(
         )
     )
 
-    assert report.status == "pass"
+    assert report.status == "fail"
+    assert report.checkpoint_advanced is False
+    assert any(failure["name"] == "state-only" for failure in report.partial_failures)
     assert report.reconciliation["pr_reconciliation_count"] == 0
     assert report.reconciliation["feedback_decision_preview_count"] == 0
     assert report.upload_metadata_update_count == 0
