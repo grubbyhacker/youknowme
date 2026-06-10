@@ -65,6 +65,7 @@ def build_feedback_plan(
     referenced_result_ids: set[str] = set()
     capacity_deferred_feedback_ids: list[str] = []
     action_index = 1
+    github_object_action_count = 0
 
     for raw_record in feedback_records:
         try:
@@ -84,12 +85,18 @@ def build_feedback_plan(
         if record.section_id:
             referenced_section_ids.add(record.section_id)
         referenced_result_ids.update(record.result_ids)
-        if len(proposed_actions) >= soft_action_threshold:
+        action = _action_for_record(run_id, action_index, record)
+        if (
+            action.action_type in {"issue", "corpus_pr"}
+            and github_object_action_count >= soft_action_threshold
+        ):
             capacity_deferred_feedback_ids.append(record.feedback_id)
             proposed_actions.append(_action_for_record(run_id, action_index, record, force_defer=True))
             action_index += 1
             continue
-        proposed_actions.append(_action_for_record(run_id, action_index, record))
+        proposed_actions.append(action)
+        if action.action_type in {"issue", "corpus_pr"}:
+            github_object_action_count += 1
         action_index += 1
     proposed_actions = _merge_groupable_actions(proposed_actions)
 

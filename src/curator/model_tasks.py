@@ -96,6 +96,7 @@ def build_feedback_planning_proposed_actions(
     allowed_source_ids = set(base_plan.referenced_source_ids)
     allowed_section_ids = set(base_plan.referenced_section_ids)
     allowed_result_ids = set(base_plan.referenced_result_ids)
+    deterministic_action_type_by_feedback_id = _deterministic_action_types(base_plan)
     seen_idempotency_keys: set[str] = set()
     covered_feedback_ids: set[str] = set()
     proposed_actions: list[ProposedAction] = []
@@ -126,6 +127,18 @@ def build_feedback_planning_proposed_actions(
                 "model GitHub-object action must target the allowed corpus repo: "
                 f"{DEFAULT_TARGET_REPO}"
             )
+        if action.action_type == "defer":
+            downgraded = sorted(
+                feedback_id
+                for feedback_id in action.evidence.feedback_ids
+                if deterministic_action_type_by_feedback_id.get(feedback_id)
+                in {"no_action", "link_to_upload"}
+            )
+            if downgraded:
+                raise ValueError(
+                    "model action defers feedback already classified as non-mutating: "
+                    f"{downgraded}"
+                )
         covered_feedback_ids.update(action.evidence.feedback_ids)
         proposed_actions.append(
             ProposedAction(
@@ -144,6 +157,14 @@ def build_feedback_planning_proposed_actions(
     if missing_feedback_ids:
         raise ValueError(f"model actions do not cover included feedback_ids: {missing_feedback_ids}")
     return proposed_actions
+
+
+def _deterministic_action_types(base_plan: FeedbackPlan) -> dict[str, CuratorActionType]:
+    result: dict[str, CuratorActionType] = {}
+    for action in base_plan.proposed_actions:
+        for feedback_id in action.evidence.feedback_ids:
+            result[feedback_id] = action.action_type
+    return result
 
 
 def _validate_evidence_subset(

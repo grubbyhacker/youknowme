@@ -968,6 +968,52 @@ def test_feedback_plan_capacity_defers_after_soft_threshold(
     assert "- Capacity-deferred feedback IDs: `1`" in markdown
 
 
+def test_feedback_plan_soft_threshold_does_not_defer_no_action_feedback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    intake = tmp_path / "intake"
+    feedback = intake / "feedback" / "feedback.jsonl"
+    feedback.parent.mkdir(parents=True)
+    feedback.write_text(
+        "".join(
+            json.dumps(
+                {
+                    "event": "feedback",
+                    "feedback_id": f"fb_note_{index}",
+                    "category": "agent_note",
+                }
+            )
+            + "\n"
+            for index in range(5)
+        ),
+        encoding="utf-8",
+    )
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "run_id": "run-no-action-capacity",
+                "mode": "dry_run",
+                "enabled_actions": ["plan_feedback"],
+                "feedback_soft_action_threshold": 1,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(run_id="ignored", intake=intake, output=tmp_path / "output", task=task)
+    )
+
+    assert report.capacity_deferral_count == 0
+    assert report.capacity_deferred_feedback_ids == []
+    assert [action["action_type"] for action in report.proposed_actions] == ["no_action"] * 5
+    assert {action["classification"] for action in report.proposed_actions} == {"non_actionable"}
+
+
 def test_state_only_advances_feedback_checkpoint(tmp_path: Path, monkeypatch) -> None:
     intake = tmp_path / "intake"
     feedback = intake / "feedback" / "feedback.jsonl"
@@ -1080,7 +1126,7 @@ def test_state_only_appends_only_noop_link_and_defer_feedback_decisions(
                     "upload": 0,
                     "feedback": 0,
                 },
-                "feedback_soft_action_threshold": 4,
+                "feedback_soft_action_threshold": 2,
             }
         )
         + "\n",

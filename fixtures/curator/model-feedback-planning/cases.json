@@ -310,6 +310,29 @@
       }
     },
     {
+      "name": "defer_non_mutating_feedback_rejected",
+      "match": "defers feedback already classified as non-mutating",
+      "feedback_records": [
+        {
+          "event": "feedback",
+          "feedback_id": "fb_agent_note",
+          "category": "agent_note"
+        }
+      ],
+      "model_output": {
+        "schema_version": "1",
+        "proposed_actions": [
+          {
+            "action_type": "defer",
+            "classification": "capacity",
+            "evidence": {
+              "feedback_ids": ["fb_agent_note"]
+            }
+          }
+        ]
+      }
+    },
+    {
       "name": "corpus_pr_without_target_evidence",
       "match": "corpus_pr action must cite",
       "feedback_records": [
