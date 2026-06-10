@@ -23,6 +23,7 @@ from curator.model_tasks import FeedbackPlanningModelOutput, validate_model_resp
 DEFAULT_MODELS = [
     "deepseek/deepseek-v4-flash",
     "google/gemini-3.1-flash-lite",
+    "anthropic/claude-haiku-4.5",
     "nvidia/nemotron-3-super-120b-a12b",
     "anthropic/claude-sonnet-4.6",
 ]

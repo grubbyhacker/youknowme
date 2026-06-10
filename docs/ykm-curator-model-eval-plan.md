@@ -148,6 +148,7 @@ The live runner defaults to:
 
 - `deepseek/deepseek-v4-flash`
 - `google/gemini-3.1-flash-lite`
+- `anthropic/claude-haiku-4.5`
 - `nvidia/nemotron-3-super-120b-a12b`
 - `anthropic/claude-sonnet-4.6`
 
@@ -163,6 +164,9 @@ Latest local live scenario run through the VPS model proxy:
 - `deepseek/deepseek-v4-flash`: passed 26 of 28 expected feedback outcomes; failed only the two
   untargeted `missing_content` examples by returning `no_action`/`insufficient_evidence`
 - `google/gemini-3.1-flash-lite`: passed 28 of 28 expected feedback outcomes
+- `anthropic/claude-haiku-4.5`: passed 24 of 28 expected feedback outcomes; failed targeted
+  `unclear_content` cleanup by routing those records to owner-action issues instead of
+  `corpus_candidate`
 - `anthropic/claude-sonnet-4.6`: passed 28 of 28 expected feedback outcomes
 - `nvidia/nemotron-3-super-120b-a12b`: still failed the initial safe no-action gate by returning
   the wrong top-level response shape
@@ -170,6 +174,13 @@ Latest local live scenario run through the VPS model proxy:
 Early signal: strict schema and explicit routing rules removed the earlier broad quality failures.
 The remaining open question is whether Gemini/Claude continue to hold up on larger, mixed windows
 and real production feedback, not whether the current prompt can elicit valid JSON for simple cases.
+
+Do not assume all Curator model tasks should use the same model. Feedback planning, upload review,
+PR comment classification, and PR body drafting have different cost and quality profiles. Choose
+per task from eval evidence: use the cheapest model that passes that task's suite, keep a stronger
+model as an escalation path, and avoid adding fallback complexity until a concrete failure mode needs
+it. Haiku 4.5 is a plausible cheaper candidate for narrower classification tasks, but this feedback
+planning suite does not yet support using it as the general last-resort model.
 
 ## Manual Inspection Workflow
 
