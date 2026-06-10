@@ -59,6 +59,7 @@ from curator.upload_state import (
     validate_upload_transition,
 )
 from curator.upload_observe import observe_upload_review_draft
+from curator.upload_pr import upload_review_pull_intent
 from ykm.curator import CuratorDryRunConfig, run_curator_dry_run
 from curator.runner import write_curator_reports
 
@@ -2733,6 +2734,26 @@ def test_http_broker_adapter_generates_upload_review_read_descriptors() -> None:
     assert requests[1]["params"]["q"] == "upload:abc123"
 
 
+def test_upload_review_pull_intent_surfaces_draft_page_context() -> None:
+    preview = UploadReviewPreview(
+        upload_id="upl_dev_env",
+        queue="pending",
+        action_id="upl_act_1",
+        idempotency_key="upload:abc123",
+        current_state="pending",
+        proposed_state="claimed",
+        branch="curator/run-upload/upload-upl-dev-env-abc123",
+        reason="preview",
+        draft_paths=["preferences/dev-environment.md"],
+    )
+
+    intent = upload_review_pull_intent(run_id="run-upload", preview=preview)
+
+    assert intent.title == "YouKnowMe Curator upload review: preferences/dev-environment.md"
+    assert "- Upload: `upl_dev_env`" in intent.body
+    assert "- Page: `preferences/dev-environment.md`" in intent.body
+
+
 def test_http_broker_adapter_creates_pull_with_curator_metadata() -> None:
     captured: dict[str, object] = {}
 
@@ -5260,6 +5281,10 @@ def test_runner_manual_live_creates_upload_review_pr_after_validation(
     assert report.upload_review_observation_count == 1
     assert report.execution_intent_count == 1
     assert report.execution_intents[0]["operation"] == "pull.create"
+    assert report.execution_intents[0]["title"] == (
+        "YouKnowMe Curator upload review: homemaint/tooling.md"
+    )
+    assert "- Page: `homemaint/tooling.md`" in report.execution_intents[0]["body"]
     assert report.simulated_execution_results[0]["status"] == "simulated"
     assert report.simulated_execution_results[0]["branch"].startswith(
         "curator/run-upload-pr/upload-upl-tooling-"
