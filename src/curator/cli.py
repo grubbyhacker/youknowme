@@ -24,6 +24,14 @@ def main() -> None:
     run.add_argument("--broker-url", default=os.getenv("BROKER_URL"))
     run.add_argument("--model-proxy-url", default=os.getenv("GH_AGENT_PROXY_URL"))
     run.add_argument("--model-proxy-token", default=os.getenv("GH_AGENT_PROXY_TOKEN"))
+    run.add_argument(
+        "--codex-proxy-base-url",
+        default=os.getenv("CODEX_PROXY_BASE_URL") or os.getenv("GH_AGENT_PROXY_URL"),
+    )
+    run.add_argument(
+        "--codex-proxy-token",
+        default=os.getenv("CODEX_PROXY_TOKEN") or os.getenv("GH_AGENT_PROXY_TOKEN"),
+    )
     run.add_argument("--broker-fixture", type=Path)
     run.add_argument("--model-proxy-fixture", type=Path)
     run.add_argument("--require-broker", action="store_true")
@@ -52,6 +60,8 @@ def main() -> None:
                 broker_url=args.broker_url,
                 model_proxy_url=args.model_proxy_url,
                 model_proxy_token=args.model_proxy_token,
+                codex_proxy_base_url=args.codex_proxy_base_url,
+                codex_proxy_token=args.codex_proxy_token,
                 broker_fixture=args.broker_fixture,
                 model_proxy_fixture=args.model_proxy_fixture,
                 required_broker=args.require_broker,
@@ -114,6 +124,8 @@ def _report_summary(report: CuratorRunReport) -> dict[str, object]:
         "upload_review_preview_count": report.upload_review_preview_count,
         "upload_review_observation_count": report.upload_review_observation_count,
         "upload_review_validation_failure_count": report.upload_review_validation_failure_count,
+        "pr_repair_result_count": report.pr_repair_result_count,
+        "pr_repair_validation_failure_count": report.pr_repair_validation_failure_count,
         "policy_denial_count": report.policy_denial_count,
         "execution_intent_count": report.execution_intent_count,
         "pr_reconciliation_count": int(

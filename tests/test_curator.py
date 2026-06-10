@@ -25,6 +25,8 @@ from curator.model_tasks import (
 from curator.models import (
     ActionEvidence,
     CuratorIssueSnapshot,
+    CuratorPrReviewSnapshot,
+    CuratorPrReviewThreadSnapshot,
     CuratorPrSnapshot,
     CuratorProbe,
     CuratorRunReport,
@@ -37,6 +39,7 @@ from curator.models import (
     ModelCallRequest,
     ModelCallResponse,
     ModelCallBudget,
+    PrRepairResult,
     ProposedAction,
     UploadBundleSnapshot,
     UploadQueueSnapshot,
@@ -49,6 +52,7 @@ from curator.execution import (
 )
 from curator.planning import deterministic_branch_name
 from curator.policy import evaluate_feedback_action_policy, policy_from_budget
+from curator.pr_repair import _codex_config, _has_workflow_changed_file
 from curator.pr_reconcile import reconcile_pr_snapshots
 from curator.pr_state import PrStateTransitionError, validate_pr_transition
 from curator.reconcile import build_reconciliation_summary
@@ -60,7 +64,7 @@ from curator.upload_state import (
 )
 from curator.upload_observe import observe_upload_review_draft
 from ykm.curator import CuratorDryRunConfig, run_curator_dry_run
-from curator.runner import write_curator_reports
+from curator.runner import _complete_pr_repair_handoffs, write_curator_reports
 
 
 @pytest.fixture(autouse=True)
@@ -1235,6 +1239,7 @@ def test_state_only_broker_fixture_preflight_failure_blocks_state_commits(
             intake=intake,
             output=tmp_path / "output",
             task=task,
+            broker_url="http://broker:8080",
             broker_fixture=broker_fixture,
         )
     )
@@ -2783,6 +2788,130 @@ def test_http_broker_adapter_creates_pull_with_curator_metadata() -> None:
     assert body["permissions"] == ["contents:write", "pull_requests:write"]
 
 
+def test_http_broker_adapter_posts_issue_comment_with_agent_auth() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["auth"] = request.headers.get("authorization")
+        captured["body"] = json.loads(request.content.decode("utf-8"))
+        return httpx.Response(
+            201,
+            json={
+                "html_url": "https://github.invalid/grubbyhacker/ykmcorpus/pull/5#issuecomment-1",
+            },
+        )
+
+    result = HttpBrokerAdapter(
+        "http://broker:8080",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        agent_id="ykm-curator",
+        agent_secret="secret",
+    ).add_issue_comment(
+        target_repo="grubbyhacker/ykmcorpus",
+        issue_number=5,
+        body="Curator repair completed and this PR is ready for review again.",
+        action_id="pr_repair_comment_5",
+        idempotency_key="pr-repair-comment:5:curator/run",
+    )
+
+    assert result.status == "executed"
+    assert result.operation == "issue.comment"
+    assert result.pr_number == 5
+    assert result.url == "https://github.invalid/grubbyhacker/ykmcorpus/pull/5#issuecomment-1"
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/v1/repos/grubbyhacker/ykmcorpus/issues/5/comments"
+    assert captured["auth"] is not None
+    assert captured["body"] == {
+        "body": "Curator repair completed and this PR is ready for review again."
+    }
+
+
+def test_http_broker_adapter_posts_pr_repair_handoff_mutations() -> None:
+    requests: list[tuple[str, str, str | None, dict[str, object] | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8")) if request.content else None
+        requests.append(
+            (
+                request.method,
+                request.url.path,
+                request.headers.get("idempotency-key"),
+                body,
+            )
+        )
+        return httpx.Response(200, json={"html_url": "https://github.invalid/result"})
+
+    adapter = HttpBrokerAdapter(
+        "http://broker:8080",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        agent_id="ykm-curator",
+        agent_secret="secret",
+    )
+
+    results = [
+        adapter.dismiss_pull_review(
+            target_repo="grubbyhacker/ykmcorpus",
+            pr_number=5,
+            review_id="123",
+            message="dismissed",
+            action_id="dismiss",
+            idempotency_key="dismiss-key",
+        ),
+        adapter.resolve_review_thread(
+            target_repo="grubbyhacker/ykmcorpus",
+            pr_number=5,
+            thread_id="PRRT_123",
+            message="resolved",
+            action_id="resolve",
+            idempotency_key="resolve-key",
+        ),
+        adapter.add_issue_label(
+            target_repo="grubbyhacker/ykmcorpus",
+            issue_number=5,
+            label="ym-curator: waiting-review",
+            action_id="add-label",
+            idempotency_key="add-label-key",
+        ),
+        adapter.remove_issue_label(
+            target_repo="grubbyhacker/ykmcorpus",
+            issue_number=5,
+            label="ym-curator: needs work",
+            action_id="remove-label",
+            idempotency_key="remove-label-key",
+        ),
+    ]
+
+    assert [result.status for result in results] == ["executed"] * 4
+    assert requests == [
+        (
+            "PUT",
+            "/v1/repos/grubbyhacker/ykmcorpus/pulls/5/reviews/123/dismissal",
+            "dismiss-key",
+            {"message": "dismissed"},
+        ),
+        (
+            "PUT",
+            "/v1/repos/grubbyhacker/ykmcorpus/pulls/5/review-threads/PRRT_123/resolve",
+            "resolve-key",
+            {"message": "resolved"},
+        ),
+        (
+            "POST",
+            "/v1/repos/grubbyhacker/ykmcorpus/issues/5/labels",
+            "add-label-key",
+            {"labels": ["ym-curator: waiting-review"]},
+        ),
+        (
+            "DELETE",
+            "/v1/repos/grubbyhacker/ykmcorpus/issues/5/labels/ym-curator: needs work",
+            "remove-label-key",
+            None,
+        ),
+    ]
+
+
 def test_http_broker_adapter_generates_issue_reconciliation_read_descriptors() -> None:
     probe = HttpBrokerAdapter("http://broker:8080").issue_reconciliation_preflight(
         target_repo="grubbyhacker/ykmcorpus",
@@ -2821,17 +2950,68 @@ def test_http_broker_adapter_reads_pr_and_issue_snapshots_with_agent_auth() -> N
                         "head_ref": "curator/run-live-read/test",
                         "head_sha": "abc123",
                         "merged": False,
-                    }
+                        "labels": [{"name": "ym-curator: needs work"}],
+                    },
+                    {
+                        "number": 45,
+                        "state": "open",
+                        "title": "Curator PR missing checks",
+                        "body": "YKM-Curator-Run: run-missing-checks",
+                        "head_ref": "curator/run-missing-checks/test",
+                        "head_sha": "def456",
+                        "merged": False,
+                        "labels": [],
+                    },
                 ],
             )
         if request.url.path.endswith("/pulls/44/reviews"):
-            return httpx.Response(200, json=[{"state": "CHANGES_REQUESTED"}])
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 123,
+                        "node_id": "PRR_123",
+                        "state": "CHANGES_REQUESTED",
+                        "author": {"login": "grubbyhacker"},
+                        "body": "needs repair",
+                    }
+                ],
+            )
+        if request.url.path.endswith("/pulls/45/reviews"):
+            return httpx.Response(200, json=[])
         if request.url.path.endswith("/pulls/44/review-threads"):
-            return httpx.Response(200, json=[{"id": "thread-1", "is_resolved": False}])
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": "PRRT_123",
+                        "database_id": 456,
+                        "is_resolved": False,
+                        "path": "preferences/dev-environment.md",
+                        "line": 1,
+                        "comments": [
+                            {
+                                "id": "PRRC_123",
+                                "database_id": 789,
+                                "body": "fix this",
+                                "path": "preferences/dev-environment.md",
+                                "line": 1,
+                                "author": {"login": "grubbyhacker"},
+                            }
+                        ],
+                    }
+                ],
+            )
+        if request.url.path.endswith("/pulls/45/review-threads"):
+            return httpx.Response(200, json=[])
         if request.url.path.endswith("/commits/abc123/status"):
             return httpx.Response(200, json={"state": "success"})
+        if request.url.path.endswith("/commits/def456/status"):
+            return httpx.Response(200, json={"state": "pending", "statuses": []})
         if request.url.path.endswith("/commits/abc123/check-runs"):
             return httpx.Response(200, json={"check_runs": [{"conclusion": "success"}]})
+        if request.url.path.endswith("/commits/def456/check-runs"):
+            return httpx.Response(200, json={"check_runs": []})
         if request.url.path.endswith("/issues/77"):
             return httpx.Response(
                 200,
@@ -2858,12 +3038,22 @@ def test_http_broker_adapter_reads_pr_and_issue_snapshots_with_agent_auth() -> N
     )
 
     assert pr_probe.status == "pass"
-    assert pr_probe.details == {"count": 1}
+    assert pr_probe.details == {"count": 2}
     assert pr_snapshots[0].number == 44
     assert pr_snapshots[0].state == "open"
+    assert pr_snapshots[0].labels == ["ym-curator: needs work"]
     assert pr_snapshots[0].review_decision == "changes_requested"
+    assert pr_snapshots[0].reviews[0].id == "PRR_123"
+    assert pr_snapshots[0].reviews[0].database_id == 123
+    assert pr_snapshots[0].reviews[0].author_login == "grubbyhacker"
+    assert pr_snapshots[0].review_threads[0].id == "PRRT_123"
+    assert pr_snapshots[0].review_threads[0].database_id == 456
+    assert pr_snapshots[0].review_threads[0].comments[0].id == "PRRC_123"
+    assert pr_snapshots[0].review_threads[0].comments[0].database_id == 789
     assert pr_snapshots[0].unresolved_thread_count == 1
     assert pr_snapshots[0].checks_conclusion == "success"
+    assert pr_snapshots[1].number == 45
+    assert pr_snapshots[1].checks_conclusion == "missing"
     assert issue_probe is not None
     assert issue_probe.status == "pass"
     assert issue_snapshots[0].number == 77
@@ -3432,6 +3622,7 @@ def test_broker_fixture_preflight_reports_existing_idempotency_key(
             intake=intake,
             output=tmp_path / "output",
             task=task,
+            broker_url="http://broker:8080",
             broker_fixture=broker_fixture,
         )
     )
@@ -3876,6 +4067,7 @@ def test_pr_state_transitions_allow_documented_paths() -> None:
         ("open_waiting_review", "commented_needs_triage"),
         ("open_waiting_review", "changes_requested"),
         ("open_waiting_review", "checks_failed"),
+        ("open_waiting_review", "checks_missing"),
         ("open_waiting_review", "merged"),
         ("open_waiting_review", "closed_unmerged"),
         ("commented_needs_triage", "changes_requested"),
@@ -3889,6 +4081,9 @@ def test_pr_state_transitions_allow_documented_paths() -> None:
         ("checks_failed", "ready_for_owner"),
         ("checks_failed", "merged"),
         ("checks_failed", "closed_unmerged"),
+        ("checks_missing", "ready_for_owner"),
+        ("checks_missing", "merged"),
+        ("checks_missing", "closed_unmerged"),
         ("ready_for_owner", "open_waiting_review"),
         ("ready_for_owner", "merged"),
         ("ready_for_owner", "closed_unmerged"),
@@ -3924,6 +4119,7 @@ def test_pr_snapshot_reconciliation_classifies_curator_pr_markers() -> None:
             body=body,
             branch="curator/run-pr/corpus-pr-fb-1",
             review_decision="changes_requested",
+            labels=["ym-curator: needs work"],
         ),
         CuratorPrSnapshot(
             number=43,
@@ -3938,9 +4134,334 @@ def test_pr_snapshot_reconciliation_classifies_curator_pr_markers() -> None:
     assert len(reconciliations) == 1
     assert reconciliations[0].pr_number == 42
     assert reconciliations[0].pr_state == "changes_requested"
+    assert reconciliations[0].labels == ["ym-curator: needs work"]
     assert reconciliations[0].run_id == "run-pr"
     assert reconciliations[0].feedback_ids == ["fb_1"]
     assert reconciliations[0].upload_ids == ["upl_1"]
+
+
+def test_pr_snapshot_reconciliation_uses_curator_needs_work_label() -> None:
+    reconciliations = reconcile_pr_snapshots(
+        [
+            CuratorPrSnapshot(
+                number=5,
+                state="open",
+                body="YKM-Curator-Run: run-pr\nYKM-Curator-Upload: upl_1\n",
+                branch="curator/run-pr/upload-upl-1",
+                labels=["ym-curator: needs work"],
+                review_decision="none",
+                checks_conclusion="success",
+            )
+        ]
+    )
+
+    assert len(reconciliations) == 1
+    assert reconciliations[0].pr_state == "changes_requested"
+    assert reconciliations[0].labels == ["ym-curator: needs work"]
+    assert "ym-curator: needs work" in reconciliations[0].reason
+
+
+def test_pr_snapshot_reconciliation_uses_curator_waiting_review_label() -> None:
+    reconciliations = reconcile_pr_snapshots(
+        [
+            CuratorPrSnapshot(
+                number=5,
+                state="open",
+                body="YKM-Curator-Run: run-pr\nYKM-Curator-Upload: upl_1\n",
+                branch="curator/run-pr/upload-upl-1",
+                labels=["ym-curator: waiting-review"],
+                review_decision="changes_requested",
+                checks_conclusion="success",
+            )
+        ]
+    )
+
+    assert len(reconciliations) == 1
+    assert reconciliations[0].pr_state == "ready_for_owner"
+    assert "ym-curator: waiting-review" in reconciliations[0].reason
+
+
+def test_pr_snapshot_reconciliation_reports_missing_validation_checks() -> None:
+    reconciliations = reconcile_pr_snapshots(
+        [
+            CuratorPrSnapshot(
+                number=6,
+                state="open",
+                body="YKM-Curator-Run: run-pr\nYKM-Curator-Upload: upl_2\n",
+                branch="curator/run-pr/upload-upl-2",
+                checks_conclusion="missing",
+            )
+        ]
+    )
+
+    assert len(reconciliations) == 1
+    assert reconciliations[0].pr_state == "checks_missing"
+    assert "validation checks are missing" in reconciliations[0].reason
+
+
+def test_pr_five_regression_shape_is_actionable() -> None:
+    body = "\n".join(
+        [
+            "YKM-Curator-Run: 20260610T072256Z-723466d21e81712e",
+            "YKM-Curator-Action: upload",
+            "YKM-Curator-Action-Type: corpus_pr",
+            "YKM-Curator-Action-ID: upl_act_2",
+            "YKM-Curator-Idempotency-Key: upload:f1e0690ef65a9593",
+            "YKM-Curator-Upload: upl_20260606_051912_4edc604c",
+        ]
+    )
+
+    reconciliations = reconcile_pr_snapshots(
+        [
+            CuratorPrSnapshot(
+                number=5,
+                state="open",
+                body=body,
+                branch=(
+                    "curator/20260610T072256Z-723466d21e81712e/"
+                    "upload-upl-20260606-051912-4edc604c-f1e0690ef65a"
+                ),
+                labels=["ym-curator: needs work"],
+                review_decision="changes_requested",
+                checks_conclusion="missing",
+            )
+        ]
+    )
+
+    assert len(reconciliations) == 1
+    assert reconciliations[0].pr_number == 5
+    assert reconciliations[0].pr_state == "changes_requested"
+    assert reconciliations[0].upload_ids == ["upl_20260606_051912_4edc604c"]
+
+
+def test_codex_proxy_config_uses_responses_wire_api_and_run_header() -> None:
+    config = _codex_config(
+        model="ykm-codex-haiku",
+        proxy_base_url="http://gh-agent-proxy:8092/v1",
+    )
+
+    assert 'model = "ykm-codex-haiku"' in config
+    assert 'base_url = "http://gh-agent-proxy:8092/v1"' in config
+    assert 'wire_api = "responses"' in config
+    assert '"X-GH-Agent-Run-ID" = "YKM_CURATOR_RUN_ID"' in config
+
+
+def test_pr_repair_classifies_workflow_file_changes_as_permission_blocked() -> None:
+    assert _has_workflow_changed_file(
+        [
+            ".github/workflows/corpus-validation.yml",
+            ".ykm/corpus-policy.yaml",
+        ]
+    )
+    assert not _has_workflow_changed_file(
+        [
+            ".github/dependabot.yml",
+            "preferences/dev-environment.md",
+        ]
+    )
+
+
+def test_runner_fixture_repairs_actionable_curator_pr(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    intake = tmp_path / "intake"
+    (intake / "feedback").mkdir(parents=True)
+    (intake / "feedback" / "feedback.jsonl").write_text("", encoding="utf-8")
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "run_id": "run-pr-repair",
+                "mode": "dry_run",
+                "enabled_actions": ["reconcile", "repair_prs"],
+                "pr_repair_executor": "fixture",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    broker_fixture = tmp_path / "broker-fixture.json"
+    broker_fixture.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "reachable": True,
+                "pr_snapshots": [
+                    {
+                        "number": 5,
+                        "state": "open",
+                        "body": (
+                            "YKM-Curator-Run: run-pr-repair\n"
+                            "YKM-Curator-Upload: upl_20260606_051912_4edc604c\n"
+                        ),
+                        "branch": "curator/run-pr-repair/upload-upl-20260606",
+                        "labels": ["ym-curator: needs work"],
+                        "review_decision": "changes_requested",
+                        "checks_conclusion": "missing",
+                        "review_comments": [
+                            "Validation is not actually running for this PR.",
+                        ],
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="ignored",
+            intake=intake,
+            output=tmp_path / "output",
+            task=task,
+            broker_fixture=broker_fixture,
+        )
+    )
+
+    assert report.status == "pass"
+    assert report.enabled_actions == ["reconcile", "repair_prs"]
+    assert report.pr_repair_result_count == 1
+    assert report.pr_repair_validation_failure_count == 0
+    assert report.pr_repair_results[0]["pr_number"] == 5
+    assert report.pr_repair_results[0]["status"] == "validated"
+    assert "ready for review again" in report.pr_repair_results[0]["review_request_comment"]
+    assert any(probe.name == "pr-repair" and probe.status == "pass" for probe in report.probes)
+    markdown = (tmp_path / "output" / "run-report.md").read_text(encoding="utf-8")
+    assert "## PR Repair Results" in markdown
+    assert "PR `#5`: `validated`" in markdown
+
+
+def test_pr_repair_handoff_posts_comment_dismisses_reviews_resolves_threads_and_labels(
+    tmp_path: Path,
+) -> None:
+    broker_fixture = tmp_path / "broker-fixture.json"
+    broker_fixture.write_text(
+        json.dumps({"schema_version": "1", "reachable": True}) + "\n",
+        encoding="utf-8",
+    )
+    repair = PrRepairResult(
+        pr_number=5,
+        branch="curator/run/upload",
+        pr_state="changes_requested",
+        executor="codex_proxy",
+        model="ykm-codex-gpt-5-mini",
+        status="pushed",
+        message="pushed",
+        changed_files=[".ykm/corpus-policy.yaml", "preferences/dev-environment.md"],
+        review_request_comment="Curator repair completed and this PR is ready for review again.",
+        review_request_comment_status="pending",
+        pushed=True,
+    )
+    snapshot = CuratorPrSnapshot(
+        number=5,
+        state="open",
+        body="YKM-Curator-Run: run\n",
+        branch="curator/run/upload",
+        labels=["ym-curator: needs work"],
+        reviews=[
+            CuratorPrReviewSnapshot(
+                database_id=123,
+                state="CHANGES_REQUESTED",
+                author_login="grubbyhacker",
+            )
+        ],
+        review_threads=[
+            CuratorPrReviewThreadSnapshot(
+                id="PRRT_123",
+                is_resolved=False,
+                path="preferences/dev-environment.md",
+            )
+        ],
+    )
+
+    results = _complete_pr_repair_handoffs(
+        config=CuratorDryRunConfig(
+            run_id="run",
+            intake=tmp_path / "intake",
+            output=tmp_path / "output",
+            broker_fixture=broker_fixture,
+        ),
+        results=[repair],
+        snapshots=[snapshot],
+    )
+
+    assert [result.operation for result in results] == [
+        "issue.comment",
+        "pull.review.dismiss",
+        "pull.review_thread.resolve",
+        "issue.label.add",
+        "issue.label.remove",
+    ]
+    assert all(result.status == "simulated" for result in results)
+    assert repair.review_request_comment_status == "posted"
+    assert repair.dismissed_review_count == 1
+    assert repair.resolved_thread_count == 1
+    assert repair.label_update_count == 2
+
+
+def test_runner_codex_proxy_repair_requires_proxy_credentials(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    intake = tmp_path / "intake"
+    (intake / "feedback").mkdir(parents=True)
+    (intake / "feedback" / "feedback.jsonl").write_text("", encoding="utf-8")
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "run_id": "run-pr-repair",
+                "mode": "dry_run",
+                "enabled_actions": ["reconcile", "repair_prs"],
+                "pr_repair_executor": "codex_proxy",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    broker_fixture = tmp_path / "broker-fixture.json"
+    broker_fixture.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "reachable": True,
+                "pr_snapshots": [
+                    {
+                        "number": 5,
+                        "state": "open",
+                        "body": "YKM-Curator-Run: run-pr-repair\n",
+                        "branch": "curator/run-pr-repair/upload-upl-20260606",
+                        "labels": ["ym-curator: needs work"],
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="ignored",
+            intake=intake,
+            output=tmp_path / "output",
+            task=task,
+            broker_url="http://broker:8080",
+            broker_fixture=broker_fixture,
+        )
+    )
+
+    assert report.status == "fail"
+    assert report.pr_repair_result_count == 1
+    assert report.pr_repair_results[0]["status"] == "executor_failed"
+    assert "Codex proxy base URL and token" in report.pr_repair_results[0]["message"]
+    assert any(probe.name == "model-proxy" and probe.status == "fail" for probe in report.probes)
 
 
 def test_reconciliation_summary_includes_pr_marker_reconciliations() -> None:

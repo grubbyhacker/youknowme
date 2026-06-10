@@ -31,6 +31,7 @@ from curator.models import (
     FeedbackPlan,
     ModelCallBudget,
     ModelCallRequest,
+    PrRepairResult,
     UploadPlan,
     UploadDecision,
     UploadQueueSnapshot,
@@ -53,6 +54,8 @@ from curator.execution import (
 )
 from curator.planning import build_feedback_plan, build_upload_plan, ready_reentry_feedback_ids
 from curator.policy import evaluate_feedback_action_policy, policy_from_budget
+from curator.pr_repair import execute_pr_repairs
+from curator.pr_reconcile import CURATOR_NEEDS_WORK_LABEL, CURATOR_WAITING_REVIEW_LABEL
 from curator.reconcile import build_reconciliation_summary
 from curator.state import (
     CuratorLiveLockError,
@@ -110,6 +113,16 @@ def run_curator_dry_run(config: CuratorDryRunConfig) -> CuratorDryRunReport:
     feedback_model = task_model.feedback_model if task_model is not None else None
     model_upload_review = task_model.model_upload_review if task_model is not None else False
     upload_review_model = task_model.upload_review_model if task_model is not None else None
+    pr_repair_executor = task_model.pr_repair_executor if task_model is not None else None
+    pr_repair_model = (
+        task_model.pr_repair_model if task_model is not None else "ykm-codex-gpt-5-mini"
+    )
+    pr_repair_max_per_run = task_model.pr_repair_max_per_run if task_model is not None else 1
+    pr_repair_validation_command = (
+        task_model.pr_repair_validation_command
+        if task_model is not None
+        else ["mise", "run", "validate"]
+    )
     github_mutation_budget = (
         task_model.github_mutation_budget.model_dump() if task_model is not None else {}
     )
@@ -137,6 +150,10 @@ def run_curator_dry_run(config: CuratorDryRunConfig) -> CuratorDryRunReport:
         "feedback_model": feedback_model,
         "model_upload_review": model_upload_review,
         "upload_review_model": upload_review_model,
+        "pr_repair_executor": pr_repair_executor,
+        "pr_repair_model": pr_repair_model,
+        "pr_repair_max_per_run": pr_repair_max_per_run,
+        "pr_repair_validation_command": pr_repair_validation_command,
     }
     _check_forbidden_env(probes)
     if any(probe.name == "task" and probe.status == "fail" for probe in probes):
@@ -180,6 +197,10 @@ def _run_with_lock(
     feedback_model: str | None,
     model_upload_review: bool,
     upload_review_model: str | None,
+    pr_repair_executor: str | None,
+    pr_repair_model: str,
+    pr_repair_max_per_run: int,
+    pr_repair_validation_command: list[str],
 ) -> CuratorDryRunReport:
     _check_directory(config.intake, "intake", probes, writable=False)
     _check_directory(config.output, "output", probes, writable=True)
@@ -323,6 +344,86 @@ def _run_with_lock(
         pr_snapshots=pr_snapshots,
         issue_snapshots=issue_snapshots,
     )
+    pr_repair_results = []
+    pr_repair_handoff_results: list[ExecutionResult] = []
+    if "repair_prs" in enabled_actions:
+        if pr_repair_executor is None:
+            probes.append(
+                CuratorProbe(
+                    name="pr-repair",
+                    status="fail",
+                    message="repair_prs requires pr_repair_executor in the task contract",
+                )
+            )
+        elif "reconcile" not in enabled_actions:
+            probes.append(
+                CuratorProbe(
+                    name="pr-repair",
+                    status="fail",
+                    message="repair_prs requires reconcile so actionable PRs can be selected",
+                )
+            )
+        else:
+            pr_repair_results = execute_pr_repairs(
+                run_id=run_id,
+                mode=mode,
+                reconciliations=reconciliation.pr_reconciliations,
+                snapshots=pr_snapshots,
+                executor=pr_repair_executor,
+                model=pr_repair_model,
+                validation_command=pr_repair_validation_command,
+                max_repairs=pr_repair_max_per_run,
+                output=config.output,
+                broker_remote_url=_broker_remote_url(config, task_payload)
+                if (config.broker_url or _task_broker_remote_url(task_payload))
+                else None,
+                codex_proxy_base_url=(
+                    config.codex_proxy_base_url
+                    or config.model_proxy_url
+                    or "http://gh-agent-proxy:8092"
+                ),
+                codex_proxy_token=config.codex_proxy_token or config.model_proxy_token,
+            )
+            failed_repairs = [
+                result
+                for result in pr_repair_results
+                if result.status
+                in {"validation_failed", "executor_failed", "push_failed", "rejected"}
+            ]
+            probes.append(
+                CuratorProbe(
+                    name="pr-repair",
+                    status="fail" if failed_repairs else "pass",
+                    message="PR repair execution completed",
+                    details={
+                        "result_count": len(pr_repair_results),
+                        "failed_count": len(failed_repairs),
+                    },
+                )
+            )
+            if mode == "manual_live":
+                pr_repair_handoff_results = _complete_pr_repair_handoffs(
+                    config=config,
+                    results=pr_repair_results,
+                    snapshots=pr_snapshots,
+                )
+                if pr_repair_handoff_results:
+                    failed_comments = [
+                        result
+                        for result in pr_repair_handoff_results
+                        if result.status == "failed"
+                    ]
+                    probes.append(
+                        CuratorProbe(
+                            name="pr-repair-handoff",
+                            status="fail" if failed_comments else "pass",
+                            message="PR repair handoff mutations processed",
+                            details={
+                                "result_count": len(pr_repair_handoff_results),
+                                "failed_count": len(failed_comments),
+                            },
+                        )
+                    )
     policy_decisions = evaluate_feedback_action_policy(
         feedback_plan.proposed_actions,
         policy_from_budget(github_mutation_budget),
@@ -382,7 +483,9 @@ def _run_with_lock(
 
     requires_broker = config.required_broker or (
         mode == "manual_live" and _requires_broker(feedback_plan, upload_plan)
-    ) or config.enable_broker_reads
+    ) or config.enable_broker_reads or (
+        "repair_prs" in enabled_actions and pr_repair_executor == "codex_proxy"
+    )
     _probe_broker(config, probes, required=requires_broker)
     if config.broker_fixture is not None:
         try:
@@ -436,7 +539,9 @@ def _run_with_lock(
             probes.append(issue_preflight)
     requires_model_proxy = config.required_model_proxy or (
         mode == "manual_live" and model_call_budget.get("max_calls_per_run", 0) > 0
-    ) or model_feedback_planning or model_upload_review
+    ) or model_feedback_planning or model_upload_review or (
+        "repair_prs" in enabled_actions and pr_repair_executor == "codex_proxy"
+    )
     _probe_model_proxy(config, probes, required=requires_model_proxy)
     _probe_model_budget(config, probes, model_call_budget)
     model_budget_exhausted = any(
@@ -621,7 +726,7 @@ def _run_with_lock(
                     },
                 )
             )
-        else:
+        elif "repair_prs" not in enabled_actions:
             probes.append(
                 CuratorProbe(
                     name="manual-live",
@@ -689,6 +794,11 @@ def _run_with_lock(
         ],
         upload_review_observation_count=len(upload_review_observations),
         upload_review_validation_failure_count=upload_review_validation_failure_count,
+        pr_repair_results=[result.model_dump(mode="json") for result in pr_repair_results],
+        pr_repair_result_count=len(pr_repair_results),
+        pr_repair_validation_failure_count=sum(
+            1 for result in pr_repair_results if result.status == "validation_failed"
+        ),
         upload_metadata_update_count=len(upload_metadata_update_paths),
         upload_metadata_update_paths=upload_metadata_update_paths,
         referenced_upload_ids=sorted(
@@ -704,11 +814,19 @@ def _run_with_lock(
         execution_intent_count=len(execution_intents),
         simulated_execution_results=[
             result.model_dump(mode="json")
-            for result in [*simulated_execution_results, *live_execution_results]
+            for result in [
+                *simulated_execution_results,
+                *live_execution_results,
+                *pr_repair_handoff_results,
+            ]
         ],
         simulated_execution_count=len(simulated_execution_results),
-        executed_action_count=sum(1 for result in live_execution_results if result.status == "executed"),
-        github_mutation_count=sum(1 for result in live_execution_results if result.status == "executed"),
+        executed_action_count=sum(1 for result in live_execution_results if result.status == "executed")
+        + sum(1 for result in pr_repair_results if result.pushed)
+        + sum(1 for result in pr_repair_handoff_results if result.status == "executed"),
+        github_mutation_count=sum(1 for result in live_execution_results if result.status == "executed")
+        + sum(1 for result in pr_repair_results if result.pushed)
+        + sum(1 for result in pr_repair_handoff_results if result.status == "executed"),
         capacity_deferral_count=sum(
             1 for action in feedback_plan.proposed_actions if action.classification == "capacity"
         ),
@@ -720,7 +838,8 @@ def _run_with_lock(
         + manifest_error_count
         + branch_collision_count
         + input_error_count
-        + upload_review_validation_failure_count,
+        + upload_review_validation_failure_count
+        + sum(1 for result in pr_repair_results if result.status == "validation_failed"),
         input_error_count=input_error_count,
         input_errors=input_errors,
         feedback_count=feedback_count,
@@ -753,6 +872,10 @@ def _empty_report(
     feedback_model: str | None,
     model_upload_review: bool,
     upload_review_model: str | None,
+    pr_repair_executor: str | None,
+    pr_repair_model: str,
+    pr_repair_max_per_run: int,
+    pr_repair_validation_command: list[str],
 ) -> CuratorDryRunReport:
     completed_at = datetime.now(UTC)
     return CuratorDryRunReport(
@@ -793,6 +916,9 @@ def _empty_report(
         upload_review_observations=[],
         upload_review_observation_count=0,
         upload_review_validation_failure_count=0,
+        pr_repair_results=[],
+        pr_repair_result_count=0,
+        pr_repair_validation_failure_count=0,
         upload_metadata_update_count=0,
         upload_metadata_update_paths=[],
         referenced_upload_ids=[],
@@ -958,6 +1084,10 @@ def _read_task(
             "feedback_model",
             "model_upload_review",
             "upload_review_model",
+            "pr_repair_executor",
+            "pr_repair_model",
+            "pr_repair_max_per_run",
+            "pr_repair_validation_command",
         }
         if contract_keys.intersection(payload):
             probes.append(
@@ -1516,14 +1646,135 @@ def _execute_upload_review_prs(
     return results
 
 
+def _complete_pr_repair_handoffs(
+    *,
+    config: CuratorDryRunConfig,
+    results: list[PrRepairResult],
+    snapshots: list[CuratorPrSnapshot],
+) -> list[ExecutionResult]:
+    adapter = (
+        FixtureBrokerAdapter.from_path(config.broker_fixture)
+        if config.broker_fixture is not None
+        else HttpBrokerAdapter(config.broker_url or "")
+    )
+    snapshots_by_number = {snapshot.number: snapshot for snapshot in snapshots}
+    handoff_results: list[ExecutionResult] = []
+    for result in results:
+        if not result.pushed or not result.review_request_comment:
+            continue
+        snapshot = snapshots_by_number.get(result.pr_number)
+        action_id = f"pr_repair_comment_{result.pr_number}"
+        idempotency_key = f"pr-repair-comment:{result.pr_number}:{result.branch or 'unknown'}"
+        comment_result = adapter.add_issue_comment(
+            target_repo=DEFAULT_CORPUS_REPO,
+            issue_number=result.pr_number,
+            body=result.review_request_comment,
+            action_id=action_id,
+            idempotency_key=idempotency_key,
+        )
+        result.review_request_comment_status = (
+            "posted" if comment_result.status != "failed" else "failed"
+        )
+        result.review_request_comment_message = comment_result.message
+        handoff_results.append(comment_result)
+
+        for review in (snapshot.reviews if snapshot else []):
+            if review.state.lower() != "changes_requested":
+                continue
+            review_id = str(review.database_id or review.id or "")
+            if not review_id:
+                continue
+            dismiss_result = adapter.dismiss_pull_review(
+                target_repo=DEFAULT_CORPUS_REPO,
+                pr_number=result.pr_number,
+                review_id=review_id,
+                message=_repair_resolution_message(result),
+                action_id=f"pr_repair_dismiss_review_{result.pr_number}_{review_id}",
+                idempotency_key=(
+                    f"pr-repair-dismiss-review:{result.pr_number}:{result.branch or 'unknown'}:"
+                    f"{review_id}"
+                ),
+            )
+            if dismiss_result.status != "failed":
+                result.dismissed_review_count += 1
+            handoff_results.append(dismiss_result)
+
+        for thread in (snapshot.review_threads if snapshot else []):
+            if thread.is_resolved or not thread.id:
+                continue
+            resolve_result = adapter.resolve_review_thread(
+                target_repo=DEFAULT_CORPUS_REPO,
+                pr_number=result.pr_number,
+                thread_id=thread.id,
+                message=_repair_resolution_message(result),
+                action_id=f"pr_repair_resolve_thread_{result.pr_number}_{thread.id}",
+                idempotency_key=(
+                    f"pr-repair-resolve-thread:{result.pr_number}:{result.branch or 'unknown'}:"
+                    f"{thread.id}"
+                ),
+            )
+            if resolve_result.status != "failed":
+                result.resolved_thread_count += 1
+            handoff_results.append(resolve_result)
+
+        labels = set(snapshot.labels if snapshot else [])
+        if CURATOR_WAITING_REVIEW_LABEL not in labels:
+            label_result = adapter.add_issue_label(
+                target_repo=DEFAULT_CORPUS_REPO,
+                issue_number=result.pr_number,
+                label=CURATOR_WAITING_REVIEW_LABEL,
+                action_id=f"pr_repair_add_waiting_review_{result.pr_number}",
+                idempotency_key=(
+                    f"pr-repair-label-add:{result.pr_number}:{result.branch or 'unknown'}:"
+                    f"{CURATOR_WAITING_REVIEW_LABEL}"
+                ),
+            )
+            if label_result.status != "failed":
+                result.label_update_count += 1
+            handoff_results.append(label_result)
+        if CURATOR_NEEDS_WORK_LABEL in labels:
+            label_result = adapter.remove_issue_label(
+                target_repo=DEFAULT_CORPUS_REPO,
+                issue_number=result.pr_number,
+                label=CURATOR_NEEDS_WORK_LABEL,
+                action_id=f"pr_repair_remove_needs_work_{result.pr_number}",
+                idempotency_key=(
+                    f"pr-repair-label-remove:{result.pr_number}:{result.branch or 'unknown'}:"
+                    f"{CURATOR_NEEDS_WORK_LABEL}"
+                ),
+            )
+            if label_result.status != "failed":
+                result.label_update_count += 1
+            handoff_results.append(label_result)
+    return handoff_results
+
+
+def _repair_resolution_message(result: PrRepairResult) -> str:
+    return (
+        "Dismissed after Curator repair push.\n\n"
+        f"What was fixed: {', '.join(result.changed_files) or 'Curator branch changes'}.\n\n"
+        "Why it broke: the original PR did not fully account for the validation and policy impact "
+        "of the requested corpus changes.\n\n"
+        "How it should not break again: the Curator repair path validates the repaired branch before "
+        "pushing, treats missing validation as actionable, and posts an explicit owner-review handoff."
+    )
+
+
 def _broker_remote_url(config: CuratorDryRunConfig, task_payload: dict[str, Any] | None) -> str:
+    task_remote_url = _task_broker_remote_url(task_payload)
+    if task_remote_url:
+        return task_remote_url
+    if config.broker_url:
+        return f"{config.broker_url.rstrip('/')}/git/{DEFAULT_CORPUS_REPO}.git"
+    return ""
+
+
+def _task_broker_remote_url(task_payload: dict[str, Any] | None) -> str | None:
     if task_payload is not None:
         broker_remote_url = task_payload.get("broker_remote_url")
         if isinstance(broker_remote_url, str) and broker_remote_url:
             return broker_remote_url
-    if config.broker_url:
-        return f"{config.broker_url.rstrip('/')}/git/{DEFAULT_CORPUS_REPO}.git"
-    return ""
+    return None
 
 
 def _upload_review_model_request(
@@ -1972,12 +2223,9 @@ def _probe_model_proxy(
                 )
             )
         return
-    probes.append(
-        HttpModelProxyAdapter(
-            config.model_proxy_url or "",
-            token=config.model_proxy_token,
-        ).probe(required=required)
-    )
+    proxy_url = config.model_proxy_url or config.codex_proxy_base_url or ""
+    proxy_token = config.model_proxy_token or config.codex_proxy_token
+    probes.append(HttpModelProxyAdapter(proxy_url, token=proxy_token).probe(required=required))
 
 
 def _probe_model_budget(
@@ -2026,6 +2274,8 @@ def _report_markdown(report: CuratorDryRunReport) -> str:
         f"- Upload review previews: `{report.upload_review_preview_count}`",
         f"- Upload review observations: `{report.upload_review_observation_count}`",
         f"- Upload review validation failures: `{report.upload_review_validation_failure_count}`",
+        f"- PR repair results: `{report.pr_repair_result_count}`",
+        f"- PR repair validation failures: `{report.pr_repair_validation_failure_count}`",
         f"- Upload metadata updates: `{report.upload_metadata_update_count}`",
         f"- Executed actions: `{report.executed_action_count}`",
         f"- GitHub mutations: `{report.github_mutation_count}`",
@@ -2084,6 +2334,33 @@ def _report_markdown(report: CuratorDryRunReport) -> str:
                 f"- `{observation['upload_id']}`: `{observation['status']}`{code_suffix} - "
                 f"{str(observation['message'])[:200]}{suffix}"
             )
+    if report.pr_repair_results:
+        lines.extend(["", "## PR Repair Results", ""])
+        for result in report.pr_repair_results[:20]:
+            changed_files = result.get("changed_files") or []
+            suffix = ""
+            if changed_files:
+                suffix = " -> " + ", ".join(f"`{path}`" for path in changed_files[:5])
+            comment_status = result.get("review_request_comment_status")
+            comment_suffix = (
+                f" comment: `{comment_status}`"
+                if comment_status and comment_status != "not_applicable"
+                else ""
+            )
+            handoff_counts = []
+            if result.get("dismissed_review_count"):
+                handoff_counts.append(f"dismissed reviews: `{result['dismissed_review_count']}`")
+            if result.get("resolved_thread_count"):
+                handoff_counts.append(f"resolved threads: `{result['resolved_thread_count']}`")
+            if result.get("label_update_count"):
+                handoff_counts.append(f"label updates: `{result['label_update_count']}`")
+            if handoff_counts:
+                comment_suffix += " " + ", ".join(handoff_counts)
+            lines.append(
+                f"- PR `#{result['pr_number']}`: `{result['status']}` on "
+                f"`{result.get('branch') or 'unknown'}` - "
+                f"{str(result['message'])[:200]}{comment_suffix}{suffix}"
+            )
     branch_previews = report.reconciliation.get("branch_previews", [])
     if branch_previews:
         lines.extend(["", "## Branch Previews", ""])
@@ -2099,8 +2376,13 @@ def _report_markdown(report: CuratorDryRunReport) -> str:
             )
             lines.append(f"- State counts: {rendered_counts}")
         for item in pr_reconciliations[:20]:
+            labels = item.get("labels") or []
+            label_suffix = ""
+            if isinstance(labels, list) and labels:
+                label_suffix = " labels: " + ", ".join(f"`{label}`" for label in labels[:5])
             lines.append(
-                f"- PR `#{item['pr_number']}`: `{item['pr_state']}` - {item['reason']}"
+                f"- PR `#{item['pr_number']}`: `{item['pr_state']}`{label_suffix} - "
+                f"{item['reason']}"
             )
     upload_transition_previews = report.reconciliation.get("upload_transition_previews", [])
     if upload_transition_previews:

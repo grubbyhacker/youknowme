@@ -56,6 +56,10 @@ The Curator task payload is a JSON object:
   "feedback_model": null,
   "model_upload_review": false,
   "upload_review_model": null,
+  "pr_repair_executor": null,
+  "pr_repair_model": "ykm-codex-gpt-5-mini",
+  "pr_repair_max_per_run": 1,
+  "pr_repair_validation_command": ["mise", "run", "validate"],
   "feedback_soft_action_threshold": 10,
   "stale_lock_timeout_seconds": 7200
 }
@@ -92,6 +96,26 @@ Curator then runs `mise run validate` in that copy and records a structured obse
 command, exit code, bounded stdout/stderr tails, draft paths, and policy additions. Failed
 observations fail the run and increase `validation_failure_count`; skipped non-integrated model
 decisions are reported but do not apply draft files.
+
+`repair_prs` is an explicit `enabled_actions` value for maintaining open Curator-authored PRs after
+owner feedback. It requires `reconcile` plus `pr_repair_executor`. The `fixture` executor is for
+tests only. The `codex_proxy` executor clones the existing Curator branch through broker Git, writes
+a task-local Codex config, runs `codex exec` against the scoped Codex proxy, validates the changed
+checkout with `pr_repair_validation_command`, and records `pr_repair_results`. In `dry_run`, a
+validated repair is reported but not pushed. In `manual_live`, a validated repair is committed and
+pushed back to the existing Curator branch. The Curator remains responsible for selecting actionable
+PRs, validation, branch ownership, and push decisions.
+
+After a successful `manual_live` repair push, the Curator must post a PR conversation comment that
+says the repair is complete and owner review is needed again. The comment must summarize what was
+fixed, why the original PR broke, and what guard prevents the same class of failure from silently
+repeating. It then dismisses addressed stale `CHANGES_REQUESTED` reviews, resolves addressed review
+threads, adds `ym-curator: waiting-review`, and removes `ym-curator: needs work`. Labels are routing
+metadata only; they are not sufficient GitHub-facing communication.
+
+Codex PR repair must not push `.github/workflows/*` edits unless the Curator GitHub App installation
+has explicit workflow write permission. With the current least-privilege App scope, workflow changes
+are reported as rejected repair results so repository-maintenance fixes can be handled separately.
 
 For upload review only, `manual_live` can now turn passing integrated observations into review PRs.
 The Curator clones `ykmcorpus` through the broker Git remote, creates the deterministic
@@ -408,8 +432,9 @@ Every run writes `/output/run-report.json` and `/output/run-report.md`. Reports 
 
 The implementation exposes pure validation for the documented Curator PR states and transitions:
 `open_waiting_review`, `changes_requested`, `commented_needs_triage`, `checks_failed`,
-`ready_for_owner`, `merged`, `closed_unmerged`, and `stale_or_blocked`. This validation does not read
-GitHub or mutate PRs yet; live PR reconciliation remains behind broker read/write contracts.
+`checks_missing`, `ready_for_owner`, `merged`, `closed_unmerged`, and `stale_or_blocked`. This
+validation does not read GitHub or mutate PRs yet; live PR reconciliation remains behind broker
+read/write contracts.
 
 Offline PR snapshot reconciliation is available for fixture and broker-read data. Given
 broker-supplied PR snapshots, the Curator can parse markers, identify Curator PRs by marker or
@@ -418,6 +443,13 @@ the run reconciliation model. Broker fixtures may include `pr_snapshots` to exer
 dry runs. When `--enable-broker-reads` is set with `--broker-url`, the runner may also read live PR
 and issue snapshots through the broker using `BROKER_AGENT_ID` and `BROKER_AGENT_SECRET`; it never
 receives direct GitHub tokens.
+PR snapshots include labels, review IDs, and review-thread IDs. Because GitHub Apps cannot be PR assignees, the label
+`ym-curator: needs work` is the explicit human reassignment signal for open Curator PRs. If present,
+reconciliation classifies the PR as actionable by the Curator. The label
+`ym-curator: waiting-review` is the post-repair handoff signal; reconciliation classifies that PR as
+`ready_for_owner` even when GitHub still reports an older `CHANGES_REQUESTED` review decision. If
+expected validation checks are absent for a Curator PR, reconciliation classifies the PR as
+`checks_missing` rather than treating an unknown status as healthy.
 PR reconciliation summaries include per-state counts for operator triage. When a terminal PR
 snapshot references an upload, reconciliation may also emit an upload transition preview such as
 `pr_opened -> processed` for merged PRs or `pr_opened -> deferred` for closed-unmerged PRs. These
@@ -489,11 +521,11 @@ When upload planning is enabled and upload review previews exist, the runner may
 before a future broker-backed upload PR can be opened. These descriptors do not execute live reads or
 create branches.
 
-The HTTP model proxy adapter currently performs only a bounded `/healthz` reachability probe using
-the model proxy token. It must not receive provider API keys, and live model calls through this
-adapter raise a closed error until model-backed planning is explicitly enabled. `model_proxy_url` may
-be either the proxy service base URL or the `/v1/model/call` endpoint; health probing maps the latter
-back to service `/healthz`.
+The HTTP model proxy adapter performs bounded `/healthz` reachability probes and typed model calls
+through `/v1/model/call`. It must not receive provider API keys. `model_proxy_url` may be the proxy
+service base URL, `/v1/model/call`, or for Codex proxy probing the OpenAI-compatible `/v1` base;
+health probing maps endpoint paths back to service `/healthz`. Codex PR repair uses the same proxy
+token boundary but invokes Codex directly with `OPENAI_API_KEY` set only inside the subprocess.
 
 Offline fixture adapters are supported for tests and local dry verification. `--broker-fixture` and
 `--model-proxy-fixture` point at JSON files with the same schema version as the Curator contracts.
@@ -519,9 +551,9 @@ When a task requests a nonzero model-call or token budget, model proxy fixtures 
 or larger limits. Otherwise the run fails closed with a `model-budget` preflight failure before any
 model call can be attempted, and `model_budget_exhausted` is set in the run report.
 
-Guarded `manual_live` runs that contain proposed GitHub-object actions (`issue` or `corpus_pr`) or
-upload review previews must also prove the broker boundary is configured. Non-mutating actions do not
-require a broker probe.
+Guarded `manual_live` runs that contain proposed GitHub-object actions (`issue` or `corpus_pr`),
+upload review previews, or `codex_proxy` PR repair must also prove the broker boundary is configured.
+Non-mutating actions do not require a broker probe.
 Guarded `manual_live` runs with a non-zero `model_call_budget.max_calls_per_run` must prove the
 model proxy boundary is configured.
 

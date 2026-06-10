@@ -139,6 +139,29 @@ The hourly timer still points at `ykm-curator-dry-run` until the remaining actio
 resolved or the state-only report status policy changes. Running state-only on the timer today would
 be safe, but it would produce hourly `fail` reports while those unresolved records remain.
 
+## Curator PR Reassignment
+
+GitHub does not allow assigning pull requests to GitHub Apps, so Curator PR ownership is indicated
+with labels and review state instead of assignees.
+
+Use the label exactly as created in `grubbyhacker/ykmcorpus`:
+
+```text
+ym-curator: needs work
+ym-curator: waiting-review
+```
+
+Applying that label to an open Curator-authored PR means the Curator should pick the PR back up on
+the next reconciliation-capable run. A submitted `CHANGES_REQUESTED` review is also an automatic
+Curator work signal; the label is the explicit manual wake-up signal. After the Curator pushes a
+repair, it must also post a PR conversation comment saying the fix is complete and owner review is
+needed again. The comment should state what changed, why the original PR broke, and why the repair
+path should prevent a silent repeat. The Curator then dismisses addressed stale `CHANGES_REQUESTED`
+reviews, resolves addressed review threads, adds `ym-curator: waiting-review`, and removes
+`ym-curator: needs work`. That label suppresses repeated repair attempts while the owner reviews the
+new head. If a Curator PR has no validation status or check runs, reconciliation should report
+`checks_missing`, because skipped CI is not a passing validation state.
+
 ## Manual Model Launch
 
 The model-backed profile is intentionally manual-only. The timer principal must not list
@@ -189,6 +212,27 @@ The profile mounts only `/credentials/ykm-curator/proxy.env`, which contains the
 Curator model aliases in `/docker/gh-agent-broker/configs/litellm.yaml` should use
 `api_key: os.environ/OPENROUTER_CURATOR_API_KEY`. Keep the general YKM runtime/index keys separate
 from the Curator key in `/docker/gh-agent-broker/.env`.
+
+For PR repair runs, Codex uses the scoped proxy token, not provider credentials or borrowed
+subscription credentials. The Curator worker should receive:
+
+```text
+CODEX_PROXY_BASE_URL=http://gh-agent-proxy:8092/v1
+CODEX_PROXY_TOKEN=<scoped Codex proxy token>
+```
+
+The generated Codex config sets `wire_api = "responses"` and passes `X-GH-Agent-Run-ID` from
+`YKM_CURATOR_RUN_ID` through `env_http_headers`. The default repair model alias is
+`ykm-codex-gpt-5-mini`; `ykm-codex-haiku` and `ykm-codex-sonnet` remain useful comparison or
+fallback aliases.
+
+The current Curator GitHub App scope does not include workflow write permission. If Codex repairs
+touch `.github/workflows/*`, the Curator should report the repair as rejected/permission-blocked
+instead of attempting to push; base-repository CI path-filter changes need a separate privileged
+maintenance PR or an explicit App permission change.
+
+Production enablement still requires a scoped LiteLLM virtual key for the Codex proxy token and a
+live LiteLLM/OpenRouter E2E after the broker change is merged.
 
 Latest model-planning finding:
 

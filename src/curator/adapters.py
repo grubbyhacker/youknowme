@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
+from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel
@@ -13,6 +14,9 @@ from curator.models import (
     BrokerFixtureState,
     CuratorIssueSnapshot,
     CuratorProbe,
+    CuratorPrReviewCommentSnapshot,
+    CuratorPrReviewSnapshot,
+    CuratorPrReviewThreadSnapshot,
     CuratorPrSnapshot,
     ExecutionIntent,
     ExecutionResult,
@@ -162,6 +166,103 @@ class FixtureBrokerAdapter:
             status="simulated",
             target_repo=intent.target_repo,
             branch=intent.branch,
+        )
+
+    def add_issue_comment(
+        self,
+        *,
+        target_repo: str,
+        issue_number: int,
+        body: str,
+        action_id: str,
+        idempotency_key: str,
+    ) -> ExecutionResult:
+        return ExecutionResult(
+            action_id=action_id,
+            operation="issue.comment",
+            idempotency_key=idempotency_key,
+            status="simulated",
+            target_repo=target_repo,
+            pr_number=issue_number,
+            message="broker fixture simulated issue.comment",
+        )
+
+    def dismiss_pull_review(
+        self,
+        *,
+        target_repo: str,
+        pr_number: int,
+        review_id: str,
+        message: str,
+        action_id: str,
+        idempotency_key: str,
+    ) -> ExecutionResult:
+        return ExecutionResult(
+            action_id=action_id,
+            operation="pull.review.dismiss",
+            idempotency_key=idempotency_key,
+            status="simulated",
+            target_repo=target_repo,
+            pr_number=pr_number,
+            message="broker fixture simulated pull.review.dismiss",
+        )
+
+    def resolve_review_thread(
+        self,
+        *,
+        target_repo: str,
+        pr_number: int,
+        thread_id: str,
+        message: str,
+        action_id: str,
+        idempotency_key: str,
+    ) -> ExecutionResult:
+        return ExecutionResult(
+            action_id=action_id,
+            operation="pull.review_thread.resolve",
+            idempotency_key=idempotency_key,
+            status="simulated",
+            target_repo=target_repo,
+            pr_number=pr_number,
+            message="broker fixture simulated pull.review_thread.resolve",
+        )
+
+    def add_issue_label(
+        self,
+        *,
+        target_repo: str,
+        issue_number: int,
+        label: str,
+        action_id: str,
+        idempotency_key: str,
+    ) -> ExecutionResult:
+        return ExecutionResult(
+            action_id=action_id,
+            operation="issue.label.add",
+            idempotency_key=idempotency_key,
+            status="simulated",
+            target_repo=target_repo,
+            pr_number=issue_number,
+            message="broker fixture simulated issue.label.add",
+        )
+
+    def remove_issue_label(
+        self,
+        *,
+        target_repo: str,
+        issue_number: int,
+        label: str,
+        action_id: str,
+        idempotency_key: str,
+    ) -> ExecutionResult:
+        return ExecutionResult(
+            action_id=action_id,
+            operation="issue.label.remove",
+            idempotency_key=idempotency_key,
+            status="simulated",
+            target_repo=target_repo,
+            pr_number=issue_number,
+            message="broker fixture simulated issue.label.remove",
         )
 
     def simulate_intents(self, intents: list[ExecutionIntent]) -> list[ExecutionResult]:
@@ -486,6 +587,7 @@ class HttpBrokerAdapter:
                 "POST",
                 f"/v1/repos/{intent.target_repo}/pulls",
                 authenticated=True,
+                idempotency_key=intent.idempotency_key,
                 json_body={
                     "title": intent.title or "YouKnowMe Curator upload review",
                     "head": intent.branch,
@@ -530,6 +632,267 @@ class HttpBrokerAdapter:
             pr_number=_int_value(raw.get("number")) if isinstance(raw, dict) else None,
             url=_str_value(raw.get("html_url")) if isinstance(raw, dict) else None,
             message="broker pull.create succeeded",
+        )
+
+    def add_issue_comment(
+        self,
+        *,
+        target_repo: str,
+        issue_number: int,
+        body: str,
+        action_id: str,
+        idempotency_key: str,
+    ) -> ExecutionResult:
+        try:
+            response = self._request(
+                "POST",
+                f"/v1/repos/{target_repo}/issues/{issue_number}/comments",
+                authenticated=True,
+                idempotency_key=idempotency_key,
+                json_body={"body": body},
+            )
+            if response.status_code >= 400:
+                return ExecutionResult(
+                    action_id=action_id,
+                    operation="issue.comment",
+                    idempotency_key=idempotency_key,
+                    status="failed",
+                    target_repo=target_repo,
+                    pr_number=issue_number,
+                    message=(
+                        "broker issue.comment failed with HTTP "
+                        f"{response.status_code}: {response.text[:500]}"
+                    ),
+                )
+            raw = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            return ExecutionResult(
+                action_id=action_id,
+                operation="issue.comment",
+                idempotency_key=idempotency_key,
+                status="failed",
+                target_repo=target_repo,
+                pr_number=issue_number,
+                message=f"broker issue.comment failed: {exc}",
+            )
+        return ExecutionResult(
+            action_id=action_id,
+            operation="issue.comment",
+            idempotency_key=idempotency_key,
+            status="executed",
+            target_repo=target_repo,
+            pr_number=issue_number,
+            url=_str_value(raw.get("html_url")) if isinstance(raw, dict) else None,
+            message="broker issue.comment succeeded",
+        )
+
+    def dismiss_pull_review(
+        self,
+        *,
+        target_repo: str,
+        pr_number: int,
+        review_id: str,
+        message: str,
+        action_id: str,
+        idempotency_key: str,
+    ) -> ExecutionResult:
+        try:
+            response = self._request(
+                "PUT",
+                f"/v1/repos/{target_repo}/pulls/{pr_number}/reviews/{review_id}/dismissal",
+                authenticated=True,
+                idempotency_key=idempotency_key,
+                json_body={"message": message},
+            )
+            if response.status_code >= 400:
+                return ExecutionResult(
+                    action_id=action_id,
+                    operation="pull.review.dismiss",
+                    idempotency_key=idempotency_key,
+                    status="failed",
+                    target_repo=target_repo,
+                    pr_number=pr_number,
+                    message=(
+                        "broker pull.review.dismiss failed with HTTP "
+                        f"{response.status_code}: {response.text[:500]}"
+                    ),
+                )
+            raw = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            return ExecutionResult(
+                action_id=action_id,
+                operation="pull.review.dismiss",
+                idempotency_key=idempotency_key,
+                status="failed",
+                target_repo=target_repo,
+                pr_number=pr_number,
+                message=f"broker pull.review.dismiss failed: {exc}",
+            )
+        return ExecutionResult(
+            action_id=action_id,
+            operation="pull.review.dismiss",
+            idempotency_key=idempotency_key,
+            status="executed",
+            target_repo=target_repo,
+            pr_number=pr_number,
+            url=_str_value(raw.get("html_url")) if isinstance(raw, dict) else None,
+            message="broker pull.review.dismiss succeeded",
+        )
+
+    def resolve_review_thread(
+        self,
+        *,
+        target_repo: str,
+        pr_number: int,
+        thread_id: str,
+        message: str,
+        action_id: str,
+        idempotency_key: str,
+    ) -> ExecutionResult:
+        try:
+            response = self._request(
+                "PUT",
+                f"/v1/repos/{target_repo}/pulls/{pr_number}/review-threads/{thread_id}/resolve",
+                authenticated=True,
+                idempotency_key=idempotency_key,
+                json_body={"message": message},
+            )
+            if response.status_code >= 400:
+                return ExecutionResult(
+                    action_id=action_id,
+                    operation="pull.review_thread.resolve",
+                    idempotency_key=idempotency_key,
+                    status="failed",
+                    target_repo=target_repo,
+                    pr_number=pr_number,
+                    message=(
+                        "broker pull.review_thread.resolve failed with HTTP "
+                        f"{response.status_code}: {response.text[:500]}"
+                    ),
+                )
+            raw = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            return ExecutionResult(
+                action_id=action_id,
+                operation="pull.review_thread.resolve",
+                idempotency_key=idempotency_key,
+                status="failed",
+                target_repo=target_repo,
+                pr_number=pr_number,
+                message=f"broker pull.review_thread.resolve failed: {exc}",
+            )
+        return ExecutionResult(
+            action_id=action_id,
+            operation="pull.review_thread.resolve",
+            idempotency_key=idempotency_key,
+            status="executed",
+            target_repo=target_repo,
+            pr_number=pr_number,
+            url=_str_value(raw.get("html_url")) if isinstance(raw, dict) else None,
+            message="broker pull.review_thread.resolve succeeded",
+        )
+
+    def add_issue_label(
+        self,
+        *,
+        target_repo: str,
+        issue_number: int,
+        label: str,
+        action_id: str,
+        idempotency_key: str,
+    ) -> ExecutionResult:
+        try:
+            response = self._request(
+                "POST",
+                f"/v1/repos/{target_repo}/issues/{issue_number}/labels",
+                authenticated=True,
+                idempotency_key=idempotency_key,
+                json_body={"labels": [label]},
+            )
+            if response.status_code >= 400:
+                return ExecutionResult(
+                    action_id=action_id,
+                    operation="issue.label.add",
+                    idempotency_key=idempotency_key,
+                    status="failed",
+                    target_repo=target_repo,
+                    pr_number=issue_number,
+                    message=(
+                        "broker issue.label.add failed with HTTP "
+                        f"{response.status_code}: {response.text[:500]}"
+                    ),
+                )
+            raw = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            return ExecutionResult(
+                action_id=action_id,
+                operation="issue.label.add",
+                idempotency_key=idempotency_key,
+                status="failed",
+                target_repo=target_repo,
+                pr_number=issue_number,
+                message=f"broker issue.label.add failed: {exc}",
+            )
+        return ExecutionResult(
+            action_id=action_id,
+            operation="issue.label.add",
+            idempotency_key=idempotency_key,
+            status="executed",
+            target_repo=target_repo,
+            pr_number=issue_number,
+            url=_str_value(raw.get("html_url")) if isinstance(raw, dict) else None,
+            message="broker issue.label.add succeeded",
+        )
+
+    def remove_issue_label(
+        self,
+        *,
+        target_repo: str,
+        issue_number: int,
+        label: str,
+        action_id: str,
+        idempotency_key: str,
+    ) -> ExecutionResult:
+        try:
+            response = self._request(
+                "DELETE",
+                f"/v1/repos/{target_repo}/issues/{issue_number}/labels/{quote(label, safe='')}",
+                authenticated=True,
+                idempotency_key=idempotency_key,
+            )
+            if response.status_code >= 400:
+                return ExecutionResult(
+                    action_id=action_id,
+                    operation="issue.label.remove",
+                    idempotency_key=idempotency_key,
+                    status="failed",
+                    target_repo=target_repo,
+                    pr_number=issue_number,
+                    message=(
+                        "broker issue.label.remove failed with HTTP "
+                        f"{response.status_code}: {response.text[:500]}"
+                    ),
+                )
+            raw = response.json() if response.content else {}
+        except (httpx.HTTPError, ValueError) as exc:
+            return ExecutionResult(
+                action_id=action_id,
+                operation="issue.label.remove",
+                idempotency_key=idempotency_key,
+                status="failed",
+                target_repo=target_repo,
+                pr_number=issue_number,
+                message=f"broker issue.label.remove failed: {exc}",
+            )
+        return ExecutionResult(
+            action_id=action_id,
+            operation="issue.label.remove",
+            idempotency_key=idempotency_key,
+            status="executed",
+            target_repo=target_repo,
+            pr_number=issue_number,
+            url=_str_value(raw.get("html_url")) if isinstance(raw, dict) else None,
+            message="broker issue.label.remove succeeded",
         )
 
     def _pr_detail_read_requests(
@@ -610,13 +973,19 @@ class HttpBrokerAdapter:
         authenticated: bool,
         params: dict[str, str] | None = None,
         json_body: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
     ) -> httpx.Response:
         url = f"{self.base_url}{path}"
         kwargs: dict[str, Any] = {"timeout": self.timeout_seconds}
+        headers: dict[str, str] = {}
         if params:
             kwargs["params"] = params
         if json_body is not None:
             kwargs["json"] = json_body
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
+        if headers:
+            kwargs["headers"] = headers
         if authenticated:
             if not self.agent_id or not self.agent_secret:
                 raise ValueError("broker agent credentials are required for broker reads")
@@ -653,8 +1022,10 @@ class HttpBrokerAdapter:
         head_sha = _str_value(pull.get("head_sha")) or _nested_str(pull, "head", "sha")
         merged = bool(pull.get("merged"))
         state = "merged" if merged else _pr_state_value(_str_value(pull.get("state")))
-        review_decision = self._review_decision(target_repo, number)
-        unresolved_thread_count = self._unresolved_thread_count(target_repo, number)
+        reviews = self._reviews(target_repo, number)
+        review_threads = self._review_threads(target_repo, number)
+        review_decision = _review_decision(reviews)
+        review_comments = _review_comments(reviews)
         checks_conclusion = self._checks_conclusion(target_repo, head_sha)
         return CuratorPrSnapshot(
             number=number,
@@ -662,43 +1033,41 @@ class HttpBrokerAdapter:
             title=_str_value(pull.get("title")),
             body=_str_value(pull.get("body")) or "",
             branch=branch,
+            labels=_label_names(pull.get("labels")),
+            review_comments=review_comments,
+            reviews=_review_snapshots(reviews),
+            review_threads=review_threads,
             checks_conclusion=checks_conclusion,
-            unresolved_thread_count=unresolved_thread_count,
+            unresolved_thread_count=sum(1 for thread in review_threads if not thread.is_resolved),
             review_decision=review_decision,
         )
 
-    def _review_decision(self, target_repo: str, pr_number: int) -> str:
+    def _reviews(self, target_repo: str, pr_number: int) -> list[dict[str, Any]]:
         payload = self._get_json(
             f"/v1/repos/{target_repo}/pulls/{pr_number}/reviews",
             authenticated=True,
         )
         if not isinstance(payload, list):
             raise ValueError(f"broker reviews for PR #{pr_number} returned non-list payload")
-        states = [
-            str(review.get("state", "")).lower()
-            for review in payload
-            if isinstance(review, dict)
-        ]
-        if any(state == "changes_requested" for state in states):
-            return "changes_requested"
-        if any(state == "approved" for state in states):
-            return "approved"
-        if any(state == "commented" for state in states):
-            return "commented"
-        return "none"
+        return [item for item in payload if isinstance(item, dict)]
 
     def _unresolved_thread_count(self, target_repo: str, pr_number: int) -> int:
+        return sum(
+            1 for thread in self._review_threads(target_repo, pr_number) if not thread.is_resolved
+        )
+
+    def _review_threads(
+        self,
+        target_repo: str,
+        pr_number: int,
+    ) -> list[CuratorPrReviewThreadSnapshot]:
         payload = self._get_json(
             f"/v1/repos/{target_repo}/pulls/{pr_number}/review-threads",
             authenticated=True,
         )
         if not isinstance(payload, list):
             raise ValueError(f"broker review threads for PR #{pr_number} returned non-list payload")
-        return sum(
-            1
-            for thread in payload
-            if isinstance(thread, dict) and thread.get("is_resolved") is False
-        )
+        return [_review_thread_snapshot(item) for item in payload if isinstance(item, dict)]
 
     def _checks_conclusion(self, target_repo: str, head_sha: str | None) -> str:
         if not head_sha:
@@ -714,24 +1083,35 @@ class HttpBrokerAdapter:
         status_state = (
             _str_value(status_payload.get("state")) if isinstance(status_payload, dict) else None
         )
+        status_entries = (
+            status_payload.get("statuses") if isinstance(status_payload, dict) else None
+        )
+        check_runs = check_payload.get("check_runs") if isinstance(check_payload, dict) else None
+        missing_statuses = isinstance(status_entries, list) and not status_entries
+        missing_check_runs = isinstance(check_runs, list) and not check_runs
+        if missing_statuses and missing_check_runs:
+            return "missing"
         if status_state in {"failure", "error"}:
             return "failure"
-        if isinstance(check_payload, dict):
-            check_runs = check_payload.get("check_runs", [])
-            if isinstance(check_runs, list):
-                conclusions = [
-                    _str_value(run.get("conclusion"))
-                    for run in check_runs
-                    if isinstance(run, dict)
-                ]
-                if any(value in {"failure", "timed_out", "cancelled", "action_required"} for value in conclusions):
-                    return "failure"
-                if conclusions and all(value == "success" for value in conclusions):
-                    return "success"
+        if isinstance(check_runs, list):
+            conclusions = [
+                _str_value(run.get("conclusion"))
+                for run in check_runs
+                if isinstance(run, dict)
+            ]
+            if any(
+                value in {"failure", "timed_out", "cancelled", "action_required"}
+                for value in conclusions
+            ):
+                return "failure"
+            if conclusions and all(value == "success" for value in conclusions):
+                return "success"
         if status_state == "success":
             return "success"
         if status_state in {"pending", "expected"}:
             return "pending"
+        if missing_check_runs:
+            return "missing"
         return "unknown"
 
 
@@ -928,7 +1308,7 @@ class HttpModelProxyAdapter:
 
     def _url_for(self, path: str) -> str:
         base = httpx.URL(self.base_url)
-        if path == "/healthz" and base.path.rstrip("/") == "/v1/model/call":
+        if path == "/healthz" and base.path.rstrip("/") in {"/v1/model/call", "/v1"}:
             return str(base.copy_with(path="/healthz", query=None, fragment=None))
         if path == "/v1/model/call" and base.path.rstrip("/") == "/v1/model/call":
             return self.base_url
@@ -1008,6 +1388,124 @@ def _str_value(value: Any) -> str | None:
     if isinstance(value, str) and value:
         return value
     return None
+
+
+def _label_names(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    labels: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item:
+            labels.append(item)
+        elif isinstance(item, dict):
+            name = _str_value(item.get("name"))
+            if name:
+                labels.append(name)
+    return labels
+
+
+def _review_decision(reviews: list[dict[str, Any]]) -> str:
+    states = [str(review.get("state", "")).lower() for review in reviews]
+    if any(state == "changes_requested" for state in states):
+        return "changes_requested"
+    if any(state == "approved" for state in states):
+        return "approved"
+    if any(state == "commented" for state in states):
+        return "commented"
+    return "none"
+
+
+def _review_comments(reviews: list[dict[str, Any]]) -> list[str]:
+    comments: list[str] = []
+    for review in reviews:
+        body = _str_value(review.get("body"))
+        if body:
+            comments.append(body[:2000])
+    return comments[:20]
+
+
+def _review_snapshots(reviews: list[dict[str, Any]]) -> list[CuratorPrReviewSnapshot]:
+    return [_review_snapshot(review) for review in reviews]
+
+
+def _review_snapshot(raw: dict[str, Any]) -> CuratorPrReviewSnapshot:
+    raw_id = raw.get("id")
+    database_id = (
+        _int_value(raw.get("database_id"))
+        or _int_value(raw.get("databaseId"))
+        or _int_value(raw_id)
+    )
+    node_id = (
+        _str_value(raw.get("node_id"))
+        or _str_value(raw.get("nodeId"))
+        or (_str_value(raw_id) if not isinstance(raw_id, int) else None)
+    )
+    state = _str_value(raw.get("state")) or "UNKNOWN"
+    return CuratorPrReviewSnapshot(
+        id=node_id or (str(database_id) if database_id is not None else None),
+        database_id=database_id,
+        state=state,
+        author_login=_author_login(raw),
+        body=_str_value(raw.get("body")) or "",
+        submitted_at=_str_value(raw.get("submitted_at")) or _str_value(raw.get("submittedAt")),
+    )
+
+
+def _review_thread_snapshot(raw: dict[str, Any]) -> CuratorPrReviewThreadSnapshot:
+    raw_id = raw.get("id")
+    database_id = (
+        _int_value(raw.get("database_id"))
+        or _int_value(raw.get("databaseId"))
+        or _int_value(raw_id)
+    )
+    node_id = (
+        _str_value(raw.get("node_id"))
+        or _str_value(raw.get("nodeId"))
+        or (_str_value(raw_id) if not isinstance(raw_id, int) else None)
+    )
+    comments_raw = raw.get("comments")
+    comments = [
+        _review_thread_comment_snapshot(comment)
+        for comment in comments_raw
+        if isinstance(comment, dict)
+    ] if isinstance(comments_raw, list) else []
+    return CuratorPrReviewThreadSnapshot(
+        id=node_id or (str(database_id) if database_id is not None else None),
+        database_id=database_id,
+        is_resolved=bool(raw.get("is_resolved") or raw.get("isResolved")),
+        path=_str_value(raw.get("path")),
+        line=_int_value(raw.get("line")),
+        comments=comments,
+    )
+
+
+def _review_thread_comment_snapshot(raw: dict[str, Any]) -> CuratorPrReviewCommentSnapshot:
+    raw_id = raw.get("id")
+    database_id = (
+        _int_value(raw.get("database_id"))
+        or _int_value(raw.get("databaseId"))
+        or _int_value(raw_id)
+    )
+    node_id = (
+        _str_value(raw.get("node_id"))
+        or _str_value(raw.get("nodeId"))
+        or (_str_value(raw_id) if not isinstance(raw_id, int) else None)
+    )
+    return CuratorPrReviewCommentSnapshot(
+        id=node_id or (str(database_id) if database_id is not None else None),
+        database_id=database_id,
+        author_login=_author_login(raw),
+        body=_str_value(raw.get("body")) or "",
+        path=_str_value(raw.get("path")),
+        line=_int_value(raw.get("line")),
+    )
+
+
+def _author_login(raw: dict[str, Any]) -> str | None:
+    author = raw.get("author") or raw.get("user")
+    if isinstance(author, dict):
+        return _str_value(author.get("login"))
+    return _str_value(raw.get("author")) or _str_value(raw.get("author_login"))
 
 
 def _nested_str(raw: dict[str, Any], outer: str, inner: str) -> str | None:
