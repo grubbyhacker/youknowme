@@ -170,14 +170,17 @@ Launch lesson:
 Current restart branch:
 
 - Branch: `curator/upload-pr-title-context`.
-- Purpose: make future upload-review PR titles and descriptions show the destination corpus page at
-  a glance.
+- Purpose: make future upload-review PR titles/descriptions show the destination corpus page at a
+  glance, and add a dev-machine live MCP CLI for operator testing.
 - Code change: `src/curator/upload_pr.py` now titles future one-file upload PRs with the draft path,
   e.g. `YouKnowMe Curator upload review: preferences/dev-environment.md`, and adds a `Page:` or
   `Pages:` line near the top of the PR body.
+- Live CLI change: `ykm live ...` can call production MCP `tools`, `health`, `query`, `retrieve`,
+  `search`, `fetch`, guarded `upload`, and guarded `feedback` using Cloudflare Access credentials
+  from `.env`; see `docs/ykm-live-cli.md`.
 - Existing PRs `grubbyhacker/ykmcorpus#5` and `grubbyhacker/ykmcorpus#6` were intentionally left as
   is.
-- Verification on this branch: `mise run lint` passed and `mise run test` passed with `244` tests.
+- Verification on this branch: `mise run lint` passed and `mise run test` passed with `253` tests.
 
 ## Important Lessons
 
@@ -249,6 +252,11 @@ Current Phase 2 evidence:
     corpus index to production and run the normal MCP health/search smoke.
   - Decide whether the skipped upload should remain owner-action-only or needs a better model prompt
     / intake-quality path.
+  - Keep a simplification track open for a "free-range" Codex/Hermes upload-review worker with a
+    strong prompt. Upload review is relatively safe to compare this way because corpus validation,
+    PR/HITL review, mutation budgets, and OpenRouter token limits already bound the path. Watch for
+    signs that the typed Curator upload and feedback machinery is overbuilt or overfit to current
+    runtime problems.
   - Consider a follow-up that marks upload bundles claimed/processed only after PR creation and merge
     policy is settled; the current launch intentionally created PRs without moving queue state.
   - Continue keeping the live upload profile manual-only until enough runs justify automation.
