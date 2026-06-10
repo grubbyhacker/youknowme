@@ -93,7 +93,7 @@ docker run -d \
 ## Verification Completed
 
 - `mise run lint`: Ruff passing.
-- `mise run test`: `41` tests passing.
+- `mise run test`: `244` tests passing as of the Curator upload PR title-context follow-up.
 - `YKM_EMBEDDING_PROVIDER=openrouter mise run real-smoke`: rebuilt `.ykm/real-index` from
   `~/src/ykmcorpus`.
 - `YKM_EMBEDDING_PROVIDER=openrouter mise run container-smoke`: passed against the rebuilt real
@@ -117,6 +117,67 @@ docker run -d \
   result source IDs, and errors, not raw query text or returned content.
 - Minimized image size on the VPS measured about `194 MB`; previous image was about `354 MB`.
 - Recent measured image transfer to `hermes-vps` was about `10.5s`.
+
+## Curator Current State
+
+The upload-review observe and live PR execution path was merged through
+`grubbyhacker/youknowme#10` and deployed to `hermes-vps`.
+
+Deployment details:
+
+- Curator launcher image on the VPS: `youknowme:curator-upload-pr-live-20260610-34350f0`.
+- The Curator image contains the app virtualenv plus `git`, `mise`, and `uv`; the corpus validator's
+  `uv@0.11.18` and managed Python `3.12.13` are preinstalled so `mise run validate` can run without
+  network access.
+- sandbox-broker config: `/docker/gh-agent-broker/configs/sandbox-beta.yaml`.
+- Config backups from launch: `sandbox-beta.yaml.bak-live-upload-20260610T072100Z` and
+  `sandbox-beta.yaml.bak-live-upload-budget-20260610T072245Z`.
+- Read-only corpus validation source on the VPS: `/opt/youknowme/ykmcorpus`, refreshed from
+  `grubbyhacker/ykmcorpus` `main` at `c691e77`.
+- Manual live profile: `ykm-curator-upload-pr-live`.
+- The live profile uses the model-backed Curator template, mounts `/opt/youknowme/ykmcorpus` at
+  `/data/ykmcorpus:ro`, and runs `curator run ... --corpus-checkout /data/ykmcorpus`.
+- Operator principal `ykm-curator-operator` can launch `ykm-curator-upload-pr-live`.
+- Timer principal `ykm-curator-timer` cannot launch the live profile; it remains scoped to
+  `ykm-curator-dry-run` and `ykm-curator-state-only`.
+- The hourly timer is enabled and active. Last verified scheduled dry-run smoke:
+  `20260610T073539Z-04ad5e79ed5935aa`, status `pass`, mode `dry_run`, `0` GitHub mutations,
+  `0` model calls, no validation failures, no partial failures.
+
+Live upload PR launch:
+
+- Successful run: `20260610T072256Z-723466d21e81712e`.
+- Status: `pass`.
+- Mode: `manual_live`.
+- Model: `anthropic/claude-sonnet-4.6`.
+- Model budget used: `3` calls, `16551` tokens; budget was `3` calls / `30000` tokens.
+- GitHub mutation budget: `max_new_objects_per_run=2`, `upload=2`, `feedback=0`.
+- Observations: `3` upload-review observations, `2` corpus validation passes, `1` skipped draft,
+  `0` validation failures.
+- GitHub mutations: `2`.
+- Open corpus PRs created:
+  - `grubbyhacker/ykmcorpus#5`: `preferences/dev-environment.md`.
+  - `grubbyhacker/ykmcorpus#6`: `homemaint/santa-cruz-freeflow-excursion-owner-manual.md`.
+- The skipped upload was `upl_20260606_043954_cdda43dd`; the model did not produce an integrated
+  corpus draft for it, so no PR was created.
+
+Launch lesson:
+
+- The first live attempt, `20260610T072155Z-8ccbb52091c6ee86`, failed closed because there were
+  `3` pending upload previews and the task had only `2` model calls budgeted. The profile now budgets
+  `3` model calls while keeping GitHub upload mutations bounded to `2`.
+
+Current restart branch:
+
+- Branch: `curator/upload-pr-title-context`.
+- Purpose: make future upload-review PR titles and descriptions show the destination corpus page at
+  a glance.
+- Code change: `src/curator/upload_pr.py` now titles future one-file upload PRs with the draft path,
+  e.g. `YouKnowMe Curator upload review: preferences/dev-environment.md`, and adds a `Page:` or
+  `Pages:` line near the top of the PR body.
+- Existing PRs `grubbyhacker/ykmcorpus#5` and `grubbyhacker/ykmcorpus#6` were intentionally left as
+  is.
+- Verification on this branch: `mise run lint` passed and `mise run test` passed with `244` tests.
 
 ## Important Lessons
 
@@ -182,27 +243,15 @@ Current Phase 2 evidence:
   retrieval-ranking issues. The example is "How much bromine should I put into my home hot tub?";
   general knowledge is misleading because the private corpus says the home hot tub is chlorine-based.
 
-Good next slices:
-
-- Current Curator branch: `curator/model-feedback-evals`.
-- Latest committed Curator work:
-  - `6249263 Document upload review corpus validation gate`
-  - `42d7d75 Add upload review model evals`
-  - `10eb839 Record state-only upload readiness smoke`
-- Curator feedback-planning evals now have a reusable scenario suite. Current live signal: Gemini
-  Flash Lite and Sonnet pass the feedback suite; Haiku is not yet good enough for the general
-  feedback-planning task.
-- Curator upload-review evals now have sanitized dev-environment and hot-tub/manual scenarios.
-  Current live signal: Sonnet passes both initial upload-review cases; Haiku passes only the simpler
-  manual case; Gemini fails the upload-review frontmatter/markdown quality gate.
-- Next Curator implementation slice: implement upload-review observe for draft corpus changes.
-  Treat the model as proposing a draft, not as running arbitrary tools. The bounded observe
-  operation should apply proposed markdown/policy changes to a temporary `ykmcorpus` checkout, run
-  `mise run validate`, and record structured pass/fail output in the Curator report. The sandbox for
-  that operation must provide `mise`, `uv`, and Python. Corpus validation is the hard
-  structural/policy/security gate before PR creation; it does not judge semantic quality or whether
-  the curation decision was sensible.
-- Proceed to Phase 3 write-path design only when ready; do not add upload/feedback casually.
+- Good next Curator slices:
+  - Review and merge the two open `ykmcorpus` upload PRs if their content is acceptable.
+  - After those PRs merge and a new corpus index artifact/build is available, deploy the updated
+    corpus index to production and run the normal MCP health/search smoke.
+  - Decide whether the skipped upload should remain owner-action-only or needs a better model prompt
+    / intake-quality path.
+  - Consider a follow-up that marks upload bundles claimed/processed only after PR creation and merge
+    policy is settled; the current launch intentionally created PRs without moving queue state.
+  - Continue keeping the live upload profile manual-only until enough runs justify automation.
 - Keep collecting usage-derived private eval cases as maintenance.
 - If direct Cloudflare Access works for a generic MCP client but ChatGPT or Claude does not, stop and
   record the exact compatibility failure. Do not fall back to Cloudflare MCP Portal with an
