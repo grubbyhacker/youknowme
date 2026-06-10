@@ -54,6 +54,23 @@ Known passing live run:
 - feedback decisions appended: `0`
 - partial failures: `[]`
 
+Latest hardening runs:
+
+- `20260610T005442Z-f2f445d0687153b5`: deterministic dry-run on
+  `youknowme:curator-model-feedback-evals-20260610-7fc17c7` passed with `capacity=0`, `19`
+  no-action records, `3` upload-linked records, `2` corpus candidates, no checkpoint advancement,
+  no decisions appended, and no GitHub mutations.
+- `20260610T005317Z-563dd947d9bf42ef`: model dry-run on the same image failed closed on invalid
+  model output after one model call. The deterministic fallback plan was preserved and had the same
+  `capacity=0` shape as above.
+- Earlier model runs copied the deterministic soft-cap pattern and spent thousands of tokens without
+  improving action quality. Removing deterministic prompt seeding and simplifying the model schema
+  reduced prompt coupling, but did not produce a useful model plan with the current model.
+
+Conclusion: model-backed feedback planning is not ready for state advancement. The next practical
+path is deterministic `state_only` for safe dispositions, while keeping model planning manual and
+fail-closed.
+
 ## Done Criteria
 
 - A repeatable eval fixture suite exists for model feedback planning.

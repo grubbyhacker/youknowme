@@ -6,8 +6,8 @@ This runbook maintains the live Curator launcher on `hermes-vps`.
 
 - sandbox-broker config: `/docker/gh-agent-broker/configs/sandbox-beta.yaml`
 - broker env: `/docker/gh-agent-broker/.env`
-- deterministic Curator image: `youknowme:curator-launcher-20260609`
-- manual model Curator image: `youknowme:curator-model-planning-20260609-ec1b842`
+- deterministic Curator image: `youknowme:curator-model-feedback-evals-20260610-7fc17c7`
+- manual model Curator image: `youknowme:curator-model-feedback-evals-20260610-7fc17c7`
 - launcher user: `sandbox-curator-timer`
 - timer env: `/home/sandbox-curator-timer/.config/gh-agent-broker/operator.env`
 - systemd service: `ykm-curator-launch.service`
@@ -154,6 +154,15 @@ The profile mounts only `/credentials/ykm-curator/proxy.env`, which contains the
 Curator model aliases in `/docker/gh-agent-broker/configs/litellm.yaml` should use
 `api_key: os.environ/OPENROUTER_CURATOR_API_KEY`. Keep the general YKM runtime/index keys separate
 from the Curator key in `/docker/gh-agent-broker/.env`.
+
+Latest model-planning finding:
+
+- `20260610T005317Z-563dd947d9bf42ef` failed closed on invalid model output while preserving a
+  safer deterministic fallback plan.
+- The fallback plan had `capacity=0`, `19` no-action records, `3` upload-linked records, and `2`
+  corpus candidates.
+- Treat model-backed planning as not ready for state advancement; deterministic planning is the
+  current useful path.
 
 ## Timer Control
 
