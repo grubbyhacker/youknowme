@@ -2431,6 +2431,9 @@ def test_model_response_output_rejects_task_name_mismatch() -> None:
             "schema_version": "1",
             "upload_id": "upl_1",
             "decision": "deferred",
+            "files": [],
+            "policy_patch": {"allowed_types_add": [], "allowed_tags_add": []},
+            "rationale": "needs owner input",
             "reason": "needs owner input",
         },
     )

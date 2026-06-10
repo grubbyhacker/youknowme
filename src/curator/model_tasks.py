@@ -47,14 +47,30 @@ class FeedbackPlanningModelOutput(BaseModel):
     notes: str | None = Field(default=None, max_length=500)
 
 
+class UploadReviewDraftFile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=20000)
+
+
+class UploadReviewPolicyPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    allowed_types_add: list[str] = Field(default_factory=list)
+    allowed_tags_add: list[str] = Field(default_factory=list)
+
+
 class UploadReviewModelOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal["1"] = CURATOR_SCHEMA_VERSION
     upload_id: str
     decision: UploadDecision
+    files: list[UploadReviewDraftFile] = Field(default_factory=list)
+    policy_patch: UploadReviewPolicyPatch = Field(default_factory=UploadReviewPolicyPatch)
+    rationale: str = Field(max_length=1000)
     reason: str = Field(max_length=500)
-    proposed_actions: list[ProposedAction] = Field(default_factory=list)
 
 
 class PrCommentClassificationModelOutput(BaseModel):

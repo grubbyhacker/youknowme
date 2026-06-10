@@ -182,6 +182,60 @@ model as an escalation path, and avoid adding fallback complexity until a concre
 it. Haiku 4.5 is a plausible cheaper candidate for narrower classification tasks, but this feedback
 planning suite does not yet support using it as the general last-resort model.
 
+## Upload-Review Eval Harness
+
+Upload review is a separate model task from feedback planning. The committed upload-review suite
+lives in:
+
+```bash
+fixtures/curator/model-upload-review/scenarios.json
+```
+
+Run offline schema/scoring checks with:
+
+```bash
+mise run curator-model-eval
+```
+
+Run live upload-review checks through a configured Curator model proxy with:
+
+```bash
+CURATOR_MODEL_PROXY_URL=... CURATOR_MODEL_PROXY_TOKEN=... \
+  mise run curator-upload-model-live-eval
+```
+
+The initial upload-review schema is intentionally small:
+
+- normalized corpus markdown files;
+- optional `.ykm/corpus-policy.yaml` additions represented as `allowed_types_add` and
+  `allowed_tags_add`;
+- short rationale and reason text.
+
+The prompt advises the model to prefer existing vocabulary and propose small policy additions only
+when current policy does not fit. The first implementation does not enforce fine-grained policy
+limits in code; code review plus corpus validation are the hard gate. The initial cases cover:
+
+- a dev-environment preference document that should not be forced into `skill` or `work-history`,
+  and may propose `preference` plus missing tool/environment tags;
+- a Santa Cruz hot tub manual summary that should remain a home-maintenance corpus document and may
+  propose missing product/manual tags.
+
+Latest local live upload-review run through the VPS model proxy:
+
+- report: `.ykm/curator-model-eval/live-upload-review-v4.json` (ignored local artifact)
+- `anthropic/claude-sonnet-4.6`: passed both initial upload-review cases
+- `anthropic/claude-haiku-4.5`: passed the hot-tub/manual case, but routed the dev-environment
+  preference/policy-expansion case to `needs_owner_action`
+- `google/gemini-3.1-flash-lite`: failed both cases by returning markdown that did not parse as
+  valid corpus frontmatter
+
+Early upload-review signal: this task appears harder than feedback classification. Use Sonnet for
+the first upload-review implementation unless a cheaper model later passes a larger suite.
+
+The next upload implementation must add an observe step that validates model-produced drafts with
+the corpus repository's own tests before any PR is considered ready. The prompt and eval scorer are
+quality controls, not the authoritative gate for frontmatter or policy correctness.
+
 ## Manual Inspection Workflow
 
 For a real manual launch, inspect `/output/run-report.json` and `/output/run-report.md` from the

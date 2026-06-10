@@ -1,0 +1,107 @@
+{
+  "schema_version": "1",
+  "cases": [
+    {
+      "name": "dev_environment_preference_policy_addition",
+      "upload_id": "upl_eval_dev_environment",
+      "manifest": {
+        "upload_id": "upl_eval_dev_environment",
+        "purpose": "Document Roger's current development environment and tool preferences.",
+        "suggested_type": "project",
+        "suggested_tags": [
+          "dev-environment",
+          "hardware",
+          "macos",
+          "tools",
+          "codex",
+          "hermes",
+          "ykm",
+          "setup",
+          "golang",
+          "python",
+          "mise",
+          "docker",
+          "ghostty",
+          "uv"
+        ],
+        "suggested_related": [
+          "ykm-mcp-server"
+        ]
+      },
+      "files": [
+        {
+          "filename": "dev-environment.md",
+          "content": "---\nid: dev-environment\ntype: project\ntags: [dev-environment, hardware, macos, tools, codex, hermes, ykm, setup, golang, python, mise, docker, ghostty, uv]\nrelated: [ykm-mcp-server]\n---\n\n# Development Environment\n\nRoger uses a MacBook and prefers uv through mise for Python version and tool management.\n\n## Python Tooling\n\nUse uv when choosing Python package and virtual environment management. Keep mise as the local tool-version entry point.\n"
+        }
+      ],
+      "expected": {
+        "decision": "integrated",
+        "path": "preferences/dev-environment.md",
+        "type": "preference",
+        "required_tags": [
+          "python",
+          "uv",
+          "mise",
+          "macos"
+        ],
+        "policy_types_add": [
+          "preference"
+        ],
+        "policy_tags_add": [
+          "dev-environment",
+          "macos",
+          "python",
+          "uv",
+          "mise",
+          "ghostty"
+        ]
+      }
+    },
+    {
+      "name": "hot_tub_manual_policy_tag_cleanup",
+      "upload_id": "upl_eval_santa_cruz_manual",
+      "manifest": {
+        "upload_id": "upl_eval_santa_cruz_manual",
+        "purpose": "Stage a markdown summary of the Santa Cruz hot tub owner manual.",
+        "suggested_type": "procedure",
+        "suggested_tags": [
+          "beach-house",
+          "santa-cruz",
+          "hot-tub",
+          "spa",
+          "freeflow",
+          "excursion",
+          "owner-manual",
+          "home-maintenance"
+        ],
+        "suggested_related": [
+          "hottub-santa-cruz-bromine"
+        ]
+      },
+      "files": [
+        {
+          "filename": "santa-cruz-freeflow-excursion-owner-manual.md",
+          "content": "---\nid: santa-cruz-freeflow-excursion-owner-manual\ntype: procedure\ntags: [beach-house, santa-cruz, hot-tub, spa, freeflow, excursion, owner-manual, home-maintenance]\nrelated: [hottub-santa-cruz-bromine]\n---\n\n# Santa Cruz Freeflow Excursion Owner Manual\n\nThis note summarizes the owner manual for the Santa Cruz hot tub.\n\n## Startup\n\nConfirm electrical setup and fill the tub before heating.\n"
+        }
+      ],
+      "expected": {
+        "decision": "integrated",
+        "path": "homemaint/santa-cruz-freeflow-excursion-owner-manual.md",
+        "type": "procedure",
+        "required_tags": [
+          "beach-house",
+          "santa-cruz",
+          "hot-tub",
+          "spa",
+          "home-maintenance"
+        ],
+        "policy_types_add": [],
+        "policy_tags_add": [
+          "freeflow",
+          "excursion",
+          "owner-manual"
+        ]
+      }
+    }
+  ]
+}
