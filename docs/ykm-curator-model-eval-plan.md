@@ -236,6 +236,32 @@ The next upload implementation must add an observe step that validates model-pro
 the corpus repository's own tests before any PR is considered ready. The prompt and eval scorer are
 quality controls, not the authoritative gate for frontmatter or policy correctness.
 
+The `ykmcorpus` validation command is:
+
+```bash
+mise run validate
+```
+
+That task requires `mise`, `uv`, and Python in the sandbox and runs:
+
+```bash
+uv run --locked --managed-python python scripts/validate_corpus.py
+uv run --locked --managed-python python -m unittest discover -s tests
+```
+
+The validator is the structural/policy/security gate for upload-review drafts. It checks that corpus
+files live under declared roots, have safe `.md` paths, are UTF-8/non-empty/within size limits, start
+with parseable frontmatter, include required fields (`id`, `type`, `tags`), use lowercase
+kebab-case IDs/tags/aliases/related refs, use policy-declared types and tags, avoid duplicate or
+empty tags, block script-like HTML/data URLs/secret patterns, stay within heading/section/chunk
+limits, and avoid duplicate IDs, alias collisions, and unresolved related references.
+
+This does not judge semantic quality, factual correctness, duplication quality, or whether the
+Curator made a sensible curation decision. Those remain model/prompt/code-review responsibilities.
+In the agent loop, treat the test run as an observed external result: the Curator proposes a draft,
+the sandbox runs corpus validation, and the observation decides whether the draft can proceed,
+needs retry, or must be sent to owner action.
+
 ## Manual Inspection Workflow
 
 For a real manual launch, inspect `/output/run-report.json` and `/output/run-report.md` from the

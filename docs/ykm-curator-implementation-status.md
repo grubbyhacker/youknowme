@@ -49,6 +49,8 @@ source of truth remains `docs/ykm-phase4-curator.md` and `docs/ykm-curator-contr
   only `BROKER_AGENT_ID` and `BROKER_AGENT_SECRET`.
 - HTTP model proxy health probing only; no live model calls.
 - Model fixture budget preflight and typed fixture response validation.
+- Upload-review model evals with sanitized dev-environment and hot-tub/manual scenarios. Live eval
+  evidence currently supports Sonnet for the first upload-review implementation.
 - Run reports in JSON and Markdown with plans, summaries, failures, preflights, policy results,
   reconciliation, referenced evidence, capacity deferrals, and model budget fields.
 
@@ -62,13 +64,11 @@ mise run lint
 mise run test
 ```
 
-Observed result at this handoff:
+Observed result at the latest Curator handoff:
 
-- `tests/test_curator.py`: 121 passed.
-- Full suite: 200 passed.
+- Full suite: 238 passed.
 - Lint: passed.
 - Full suite has one existing Starlette/httpx deprecation warning in `tests/test_server.py`.
-- `git status --short POC` was clean.
 
 ## Contract-Blocked Or Future Work
 
@@ -77,9 +77,12 @@ Observed result at this handoff:
   comments.
 - Broker-backed PR and issue creation remains disabled. The Curator emits policy-checked execution
   intents and fixture simulation results only; real creation requires a future execution contract.
-- Model-backed feedback planning and upload review remains disabled. The Curator validates model
-  proxy health, budgets, and typed fixture responses only; live model calls require a future planning
+- Model-backed feedback planning and upload review remain disabled in production execution. Offline
+  and live-proxy eval harnesses exist; production live model calls require a future planning
   execution contract.
+- Upload-review PR creation must first add an observe step that applies model-produced drafts to a
+  temporary `ykmcorpus` checkout and runs `mise run validate`. That corpus validation is the
+  authoritative structural/policy/security gate before any PR is considered ready.
 - Add real upload claim/process/reject/archive queue movement only after the queue mutation contract is
   explicitly enabled.
 - Add PR maintenance actions for owner comments, requested changes, failed checks, and stale/blocked
@@ -111,6 +114,9 @@ Observed result at this handoff:
    manual wrapper that invokes sandbox-broker and collects `/output/run-report.json`.
 2. Define the future broker mutation execution contract for PR/issue creation, comments, branch
    edits, idempotency reuse, and budget-denial persistence.
-3. Define the future model execution contract for feedback planning, upload review, PR comment
+3. Implement upload-review observe for draft corpus changes: sandbox must provide `mise`, `uv`, and
+   Python, apply the proposed markdown/policy patch to `ykmcorpus`, run `mise run validate`, and
+   record pass/fail output in the Curator report.
+4. Define the future model execution contract for feedback planning, upload review, PR comment
    classification, and PR body drafting.
-4. Define the future queue movement contract before any upload directory moves are enabled.
+5. Define the future queue movement contract before any upload directory moves are enabled.
