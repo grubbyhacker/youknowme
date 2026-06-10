@@ -184,6 +184,24 @@ Current Phase 2 evidence:
 
 Good next slices:
 
+- Current Curator branch: `curator/model-feedback-evals`.
+- Latest committed Curator work:
+  - `6249263 Document upload review corpus validation gate`
+  - `42d7d75 Add upload review model evals`
+  - `10eb839 Record state-only upload readiness smoke`
+- Curator feedback-planning evals now have a reusable scenario suite. Current live signal: Gemini
+  Flash Lite and Sonnet pass the feedback suite; Haiku is not yet good enough for the general
+  feedback-planning task.
+- Curator upload-review evals now have sanitized dev-environment and hot-tub/manual scenarios.
+  Current live signal: Sonnet passes both initial upload-review cases; Haiku passes only the simpler
+  manual case; Gemini fails the upload-review frontmatter/markdown quality gate.
+- Next Curator implementation slice: implement upload-review observe for draft corpus changes.
+  Treat the model as proposing a draft, not as running arbitrary tools. The bounded observe
+  operation should apply proposed markdown/policy changes to a temporary `ykmcorpus` checkout, run
+  `mise run validate`, and record structured pass/fail output in the Curator report. The sandbox for
+  that operation must provide `mise`, `uv`, and Python. Corpus validation is the hard
+  structural/policy/security gate before PR creation; it does not judge semantic quality or whether
+  the curation decision was sensible.
 - Proceed to Phase 3 write-path design only when ready; do not add upload/feedback casually.
 - Keep collecting usage-derived private eval cases as maintenance.
 - If direct Cloudflare Access works for a generic MCP client but ChatGPT or Claude does not, stop and
