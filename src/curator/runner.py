@@ -28,7 +28,6 @@ from curator.models import (
     FeedbackPlan,
     ModelCallBudget,
     ModelCallRequest,
-    ProposedAction,
     UploadPlan,
     UploadDecision,
     UploadQueueSnapshot,
@@ -1125,8 +1124,6 @@ def _feedback_planning_model_request(
         "run_id": run_id,
         "feedback_window": base_plan.feedback_window.model_dump(),
         "feedback_records": records,
-        "deterministic_action_summary": _action_summary(base_plan.proposed_actions),
-        "deterministic_capacity_deferred_feedback_ids": base_plan.capacity_deferred_feedback_ids,
         "constraints": [
             "Return only valid JSON matching the response schema.",
             "Use only durable evidence identifiers present in feedback_records.",
@@ -1137,8 +1134,7 @@ def _feedback_planning_model_request(
             "Use corpus_pr only with source_id, section_id, or upload_id evidence.",
             "Use link_to_upload only with upload_id evidence.",
             f"Use target_repo {DEFAULT_CORPUS_REPO} for issue and corpus_pr actions.",
-            "Treat deterministic_action_summary as a baseline summary, not an answer to copy.",
-            "Do not preserve deterministic capacity deferrals when category and evidence support no_action.",
+            "Use defer only when a record cannot be safely classified from its category and evidence.",
             "Classify agent_note, non_actionable, and positive_content as no_action unless durable evidence proves otherwise.",
             "Prefer one grouped action over many identical actions when action_type, classification, target_repo, and evidence kind match.",
         ],
@@ -1177,14 +1173,6 @@ def _feedback_planning_model_request(
         },
         max_tokens=max_tokens,
     )
-
-
-def _action_summary(actions: list[ProposedAction]) -> dict[str, int]:
-    summary: dict[str, int] = {}
-    for action in actions:
-        key = f"{action.action_type}:{action.classification}"
-        summary[key] = summary.get(key, 0) + 1
-    return dict(sorted(summary.items()))
 
 
 def _validate_feedback_planning_model_output(
