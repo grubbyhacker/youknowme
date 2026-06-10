@@ -75,6 +75,21 @@ The branch-head image `youknowme:curator-model-feedback-evals-20260610-fb0e09e` 
 `state_only` checkpoint advancement: safe no-action/upload-linked decisions may be appended, but the
 checkpoint is not advanced while included feedback still lacks a state-only decision.
 
+Model candidate sweep on the same profile:
+
+- `deepseek/deepseek-v4-flash`: failed closed on invalid model output; deterministic fallback was
+  better and preserved.
+- `openai/gpt-5-mini`: proxy/upstream returned HTTP 400 via 502 before a usable model response.
+- `google/gemini-3.1-flash-lite`: returned valid JSON with low token use, but the plan was lower
+  quality than deterministic; it grouped upload-linked records as no-action and changed targeted
+  corpus candidates into a generic issue.
+- `nvidia/nemotron-3-super-120b-a12b`: failed schema validation by returning the wrong top-level
+  field.
+- `stepfun/step-3.7-flash`: timed out through the proxy before a usable model response.
+
+Current recommendation: do not spend more implementation time on model-backed batch planning until a
+new candidate is selected specifically for strict schema adherence and conservative classification.
+
 ## Done Criteria
 
 - A repeatable eval fixture suite exists for model feedback planning.
