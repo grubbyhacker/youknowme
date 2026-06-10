@@ -117,7 +117,59 @@ The evals validate action shape and safety properties, not exact model prose. Th
 
 The runner fails closed when model output violates these checks. A failed model plan leaves the
 deterministic base plan in the report and records a `model-feedback-planning` failure with model name,
-validation error, proposed action count when available, and token usage when a model call happened.
+  validation error, proposed action count when available, and token usage when a model call happened.
+
+## Scenario Eval Harness
+
+The reusable quality suite lives in:
+
+```bash
+fixtures/curator/model-feedback-planning/scenarios.json
+```
+
+It uses sanitized feedback records with realistic comments and expected dispositions per feedback ID.
+The scorer allows models to group records differently, but still checks that each record gets the
+expected action type, classification, target repo, and cited evidence.
+
+Run the committed offline checks with:
+
+```bash
+mise run curator-model-eval
+```
+
+Run live local model checks through any compatible Curator model proxy with:
+
+```bash
+CURATOR_MODEL_PROXY_URL=... CURATOR_MODEL_PROXY_TOKEN=... \
+  mise run curator-feedback-model-live-eval
+```
+
+The live runner defaults to:
+
+- `deepseek/deepseek-v4-flash`
+- `google/gemini-3.1-flash-lite`
+- `nvidia/nemotron-3-super-120b-a12b`
+- `anthropic/claude-sonnet-4.6`
+
+Use repeated `--model` flags to override the list and repeated `--case` flags to narrow the suite.
+The JSON report separates `schema_or_call_fail` from `quality_fail`, so strict JSON problems remain
+visible independently from planning-quality problems.
+
+Latest local live scenario run through the VPS model proxy:
+
+- report: `.ykm/curator-model-eval/live-full-gated-46-runids.json` (ignored local artifact)
+- prompt/schema changes: feedback comments included, strict OpenAI-compatible JSON schema, bounded
+  classification enum, explicit category-to-action routing rules
+- `deepseek/deepseek-v4-flash`: passed 26 of 28 expected feedback outcomes; failed only the two
+  untargeted `missing_content` examples by returning `no_action`/`insufficient_evidence`
+- `google/gemini-3.1-flash-lite`: passed 28 of 28 expected feedback outcomes
+- `anthropic/claude-sonnet-4.6`: passed 28 of 28 expected feedback outcomes
+- `nvidia/nemotron-3-super-120b-a12b`: still failed the initial safe no-action gate by returning
+  the wrong top-level response shape
+
+Early signal: strict schema and explicit routing rules removed the earlier broad quality failures.
+The remaining open question is whether Gemini/Claude continue to hold up on larger, mixed windows
+and real production feedback, not whether the current prompt can elicit valid JSON for simple cases.
 
 ## Manual Inspection Workflow
 

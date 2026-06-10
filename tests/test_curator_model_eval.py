@@ -10,8 +10,16 @@ from pydantic import ValidationError
 
 from curator.model_tasks import (
     FeedbackPlanningModelOutput,
+    strict_model_json_schema,
     validate_feedback_planning_model_output,
     validate_model_response_output,
+)
+from curator.feedback_model_eval import (
+    DEFAULT_SCENARIO_FIXTURE,
+    build_feedback_scenario_base_plan,
+    build_feedback_scenario_request,
+    load_feedback_scenario_cases,
+    score_feedback_scenario_actions,
 )
 from curator.models import FeedbackPlan, FeedbackWindow, ModelCallResponse
 from curator.planning import build_feedback_plan
@@ -72,6 +80,67 @@ def test_model_feedback_planning_eval_uses_model_response_contract() -> None:
     )
 
     assert output.proposed_actions[0].evidence.feedback_ids == ["fb_positive"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    load_feedback_scenario_cases(DEFAULT_SCENARIO_FIXTURE),
+    ids=lambda case: case.name,
+)
+def test_model_feedback_planning_scenarios_match_deterministic_baseline(case: Any) -> None:
+    base_plan = build_feedback_scenario_base_plan(case)
+
+    result = score_feedback_scenario_actions(case, base_plan.proposed_actions)
+
+    assert result.passed, result.failures
+
+
+def test_model_feedback_planning_prompt_includes_feedback_comments() -> None:
+    case = load_feedback_scenario_cases(DEFAULT_SCENARIO_FIXTURE)[0]
+
+    _, request = build_feedback_scenario_request(
+        case=case,
+        model="eval-model",
+        max_tokens=1000,
+    )
+
+    prompt_input = json.loads(request.input["messages"][1]["content"])
+    comments_by_id = {
+        record["feedback_id"]: record["comment"]
+        for record in prompt_input["feedback_records"]
+    }
+    assert comments_by_id["fb_missing_home_address"] == "Home address is missing from the corpus."
+    assert comments_by_id["fb_missing_beach_house_address"] == "Beach house address is missing."
+
+
+def test_model_feedback_planning_response_schema_is_strict_json_schema() -> None:
+    schema = strict_model_json_schema(FeedbackPlanningModelOutput)
+
+    assert set(schema["required"]) == {"schema_version", "proposed_actions", "notes"}
+    action_schema = schema["$defs"]["FeedbackPlanningModelAction"]
+    assert set(action_schema["required"]) == {
+        "action_type",
+        "classification",
+        "evidence",
+        "target_repo",
+    }
+    assert set(action_schema["properties"]["classification"]["enum"]) == {
+        "positive",
+        "non_actionable",
+        "owner_action",
+        "corpus_candidate",
+        "upload_linked",
+        "capacity",
+        "insufficient_evidence",
+    }
+    evidence_schema = schema["$defs"]["ActionEvidence"]
+    assert set(evidence_schema["required"]) == {
+        "feedback_ids",
+        "upload_ids",
+        "source_ids",
+        "section_ids",
+        "result_ids",
+    }
 
 
 def _base_plan(

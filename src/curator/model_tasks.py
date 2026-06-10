@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Literal, TypeVar
+import copy
+from typing import Any, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -18,11 +19,22 @@ from curator.models import (
 from curator.state import deterministic_idempotency_key
 
 
+FeedbackPlanningClassification = Literal[
+    "positive",
+    "non_actionable",
+    "owner_action",
+    "corpus_candidate",
+    "upload_linked",
+    "capacity",
+    "insufficient_evidence",
+]
+
+
 class FeedbackPlanningModelAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     action_type: CuratorActionType
-    classification: str
+    classification: FeedbackPlanningClassification
     evidence: ActionEvidence = Field(default_factory=ActionEvidence)
     target_repo: str | None = None
 
@@ -77,6 +89,12 @@ def validate_model_response_output(
             f"model response task mismatch: expected {expected_task_name}, got {response.task_name}"
         )
     return output_model.model_validate(response.output)
+
+
+def strict_model_json_schema(output_model: type[BaseModel]) -> dict[str, Any]:
+    schema = copy.deepcopy(output_model.model_json_schema())
+    _require_all_object_properties(schema)
+    return schema
 
 
 def validate_feedback_planning_model_output(
@@ -165,6 +183,20 @@ def _deterministic_action_types(base_plan: FeedbackPlan) -> dict[str, CuratorAct
         for feedback_id in action.evidence.feedback_ids:
             result[feedback_id] = action.action_type
     return result
+
+
+def _require_all_object_properties(schema: Any) -> None:
+    if isinstance(schema, dict):
+        schema.pop("default", None)
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            schema["additionalProperties"] = False
+            schema["required"] = sorted(properties)
+        for value in schema.values():
+            _require_all_object_properties(value)
+    elif isinstance(schema, list):
+        for item in schema:
+            _require_all_object_properties(item)
 
 
 def _validate_evidence_subset(

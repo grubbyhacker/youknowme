@@ -2190,12 +2190,12 @@ def test_runner_uses_model_feedback_planning_when_task_opts_in(
                         "output": {
                             "schema_version": "1",
                             "proposed_actions": [
-                                {
-                                    "action_type": "corpus_pr",
-                                    "classification": "model_corpus_candidate",
-                                    "evidence": evidence.model_dump(),
-                                    "target_repo": "grubbyhacker/ykmcorpus",
-                                }
+                                    {
+                                        "action_type": "corpus_pr",
+                                        "classification": "corpus_candidate",
+                                        "evidence": evidence.model_dump(),
+                                        "target_repo": "grubbyhacker/ykmcorpus",
+                                    }
                             ],
                         },
                         "usage": {"input_tokens": 21, "output_tokens": 9},
@@ -2227,7 +2227,7 @@ def test_runner_uses_model_feedback_planning_when_task_opts_in(
     assert report.proposed_actions[0]["idempotency_key"] == deterministic_idempotency_key(
         "corpus_pr", evidence
     )
-    assert report.proposed_actions[0]["classification"] == "model_corpus_candidate"
+    assert report.proposed_actions[0]["classification"] == "corpus_candidate"
     probe = next(probe for probe in report.probes if probe.name == "model-feedback-planning")
     assert probe.status == "pass"
     assert probe.details["model"] == "deepseek/deepseek-v4-flash"

@@ -37,6 +37,7 @@ from curator.models import (
 from curator.model_tasks import (
     FeedbackPlanningModelOutput,
     build_feedback_planning_proposed_actions,
+    strict_model_json_schema,
     validate_feedback_planning_model_output,
     validate_model_response_output,
 )
@@ -1123,10 +1124,12 @@ def _feedback_planning_model_request(
             continue
         if record.feedback_id not in included:
             continue
+        comment = raw_record.get("comment")
         records.append(
             {
                 "feedback_id": record.feedback_id,
                 "category": record.category,
+                "comment": str(comment)[:2000] if comment is not None else "",
                 "source_id": record.source_id,
                 "section_id": record.section_id,
                 "result_ids": record.result_ids,
@@ -1143,8 +1146,15 @@ def _feedback_planning_model_request(
             "Use only durable evidence identifiers present in feedback_records.",
             "Do not propose GitHub mutations for positive or non-actionable feedback.",
             "Use action_type no_action, issue, corpus_pr, link_to_upload, or defer.",
+            "Use classification positive, non_actionable, owner_action, corpus_candidate, upload_linked, capacity, or insufficient_evidence.",
             "Do not include action_id, idempotency_key, validation, or execution fields; the controller assigns them.",
             "Cover every included feedback_id in at least one proposed action.",
+            "A feedback_id is durable evidence for issue, no_action, and defer actions.",
+            "Use issue with classification owner_action for needs_owner_action feedback.",
+            "Use issue with classification owner_action for untargeted missing_content, wrong_content, stale_content, and unclear_content feedback.",
+            "Use corpus_pr with classification corpus_candidate for missing_content, wrong_content, stale_content, and unclear_content feedback when source_id, section_id, or upload_id evidence identifies the corpus target.",
+            "Use no_action with classification non_actionable for agent_note and non_actionable feedback.",
+            "Use no_action with classification positive for positive_content feedback.",
             "Use corpus_pr only with source_id, section_id, or upload_id evidence.",
             "Use link_to_upload only with upload_id evidence.",
             f"Use target_repo {DEFAULT_CORPUS_REPO} for issue and corpus_pr actions.",
@@ -1170,7 +1180,7 @@ def _feedback_planning_model_request(
         "type": "json_schema",
         "json_schema": {
             "name": "feedback_planning_output",
-            "schema": FeedbackPlanningModelOutput.model_json_schema(),
+            "schema": strict_model_json_schema(FeedbackPlanningModelOutput),
             "strict": True,
         },
     }
