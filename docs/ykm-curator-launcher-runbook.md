@@ -6,9 +6,9 @@ This runbook maintains the live Curator launcher on `hermes-vps`.
 
 - sandbox-broker config: `/docker/gh-agent-broker/configs/sandbox-beta.yaml`
 - broker env: `/docker/gh-agent-broker/.env`
-- deterministic Curator image: `youknowme:curator-model-feedback-evals-20260610-fb0e09e`
-- manual model Curator image: `youknowme:curator-model-feedback-evals-20260610-fb0e09e`
-- state-only Curator image: `youknowme:curator-state-only-20260610-f58e0d5`
+- deterministic Curator image: `youknowme:curator-upload-readiness-20260610-60ee09b`
+- manual model Curator image: `youknowme:curator-upload-readiness-20260610-60ee09b`
+- state-only Curator image: `youknowme:curator-upload-readiness-20260610-60ee09b`
 - launcher user: `sandbox-curator-timer`
 - timer env: `/home/sandbox-curator-timer/.config/gh-agent-broker/operator.env`
 - systemd service: `ykm-curator-launch.service`
@@ -128,6 +128,12 @@ Latest smoke results:
   checkpoint unadvanced because two actionable feedback records remained unresolved.
 - `20260610T055856Z-4aaf168189c84878`: appended `0` duplicate decisions and saw only those two
   unresolved feedback records, confirming decision idempotency.
+- `20260610T060525Z-362130b4bb7a6567`: confirmed the upload draft-readiness classifier on the real
+  queue. The smoke upload needs owner action because it has no frontmatter, the dev-environment
+  upload needs owner action because `type: project` is not in corpus policy, and the Santa Cruz hot
+  tub manual is a `corpus_pr_candidate` for
+  `homemaint/santa-cruz-freeflow-excursion-owner-manual.md` with unsupported tags dropped for
+  review.
 
 The hourly timer still points at `ykm-curator-dry-run` until the remaining actionable feedback is
 resolved or the state-only report status policy changes. Running state-only on the timer today would
