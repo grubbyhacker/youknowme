@@ -6,8 +6,8 @@ This runbook maintains the live Curator launcher on `hermes-vps`.
 
 - sandbox-broker config: `/docker/gh-agent-broker/configs/sandbox-beta.yaml`
 - broker env: `/docker/gh-agent-broker/.env`
-- deterministic Curator image: `youknowme:curator-model-feedback-evals-20260610-7fc17c7`
-- manual model Curator image: `youknowme:curator-model-feedback-evals-20260610-7fc17c7`
+- deterministic Curator image: `youknowme:curator-model-feedback-evals-20260610-fb0e09e`
+- manual model Curator image: `youknowme:curator-model-feedback-evals-20260610-fb0e09e`
 - launcher user: `sandbox-curator-timer`
 - timer env: `/home/sandbox-curator-timer/.config/gh-agent-broker/operator.env`
 - systemd service: `ykm-curator-launch.service`

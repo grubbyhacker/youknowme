@@ -71,6 +71,10 @@ Conclusion: model-backed feedback planning is not ready for state advancement. T
 path is deterministic `state_only` for safe dispositions, while keeping model planning manual and
 fail-closed.
 
+The branch-head image `youknowme:curator-model-feedback-evals-20260610-fb0e09e` also guards
+`state_only` checkpoint advancement: safe no-action/upload-linked decisions may be appended, but the
+checkpoint is not advanced while included feedback still lacks a state-only decision.
+
 ## Done Criteria
 
 - A repeatable eval fixture suite exists for model feedback planning.
