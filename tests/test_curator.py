@@ -234,6 +234,119 @@ def test_curator_reads_task_embedded_in_broker_task_contract(
     assert "broker task contract loaded" in task_probe.message
 
 
+def test_curator_applies_broker_upload_id_parameters_to_embedded_task(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    intake = tmp_path / "intake"
+    for upload_id in ("upl_first", "upl_second"):
+        pending = intake / "uploads" / "pending" / upload_id
+        pending.mkdir(parents=True)
+        (pending / "manifest.json").write_text(
+            json.dumps({"upload_id": upload_id}) + "\n",
+            encoding="utf-8",
+        )
+    output = tmp_path / "output"
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "run_id": "broker-run",
+                "task": json.dumps(
+                    {
+                        "schema_version": "1",
+                        "run_id": "${SANDBOX_RUN_ID}",
+                        "mode": "dry_run",
+                        "enabled_actions": ["plan_uploads"],
+                        "github_mutation_budget": {
+                            "max_new_objects_per_run": 0,
+                            "upload": 0,
+                            "feedback": 0,
+                        },
+                    }
+                ),
+                "parameters": {"upload_ids": ["upl_second"]},
+                "repo": "grubbyhacker/ykmcorpus",
+                "base_branch": "main",
+                "branch": "curator/broker-run/task",
+                "worker_agent_id": "ykm-curator",
+                "broker_remote_url": "http://broker:8080/git/grubbyhacker/ykmcorpus.git",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="fallback-run",
+            intake=intake,
+            output=output,
+            task=task,
+        )
+    )
+
+    assert report.status == "pass"
+    assert report.run_id == "broker-run"
+    assert report.mode == "dry_run"
+    assert report.github_mutation_budget["max_new_objects_per_run"] == 0
+    assert report.included_upload_ids == ["upl_second"]
+    assert report.task is not None
+    assert report.task["upload_ids"] == ["upl_second"]
+    assert [preview["upload_id"] for preview in report.upload_review_previews] == ["upl_second"]
+
+
+def test_curator_rejects_unsupported_broker_task_parameters(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    intake = tmp_path / "intake"
+    output = tmp_path / "output"
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "run_id": "broker-run",
+                "task": json.dumps(
+                    {
+                        "schema_version": "1",
+                        "run_id": "${SANDBOX_RUN_ID}",
+                        "mode": "dry_run",
+                        "enabled_actions": ["plan_uploads"],
+                    }
+                ),
+                "parameters": {"mode": "manual_live"},
+                "repo": "grubbyhacker/ykmcorpus",
+                "base_branch": "main",
+                "branch": "curator/broker-run/task",
+                "worker_agent_id": "ykm-curator",
+                "broker_remote_url": "http://broker:8080/git/grubbyhacker/ykmcorpus.git",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="fallback-run",
+            intake=intake,
+            output=output,
+            task=task,
+        )
+    )
+
+    assert report.status == "fail"
+    assert report.run_id == "fallback-run"
+    task_probe = next(probe for probe in report.probes if probe.name == "task")
+    assert task_probe.status == "fail"
+    assert "unsupported keys: ['mode']" in task_probe.message
+    assert report.github_mutation_budget == {}
+    assert report.included_upload_ids == []
+
+
 def test_curator_rejects_broker_task_contract_with_non_json_task(
     tmp_path: Path,
     monkeypatch,

@@ -1186,6 +1186,9 @@ def parse_curator_task_payload(payload: dict[str, Any]) -> tuple[dict[str, Any],
             "${BROKER_RUN_ID}",
         ):
             embedded_payload["run_id"] = broker_run_id
+    parameter_error = _apply_broker_parameters(embedded_payload, payload.get("parameters"))
+    if parameter_error is not None:
+        return embedded_payload, None, parameter_error
     try:
         task = CuratorTask.model_validate(embedded_payload)
     except ValidationError as exc:
@@ -1197,6 +1200,29 @@ def parse_curator_task_payload(payload: dict[str, Any]) -> tuple[dict[str, Any],
             f"embedded Curator task run_id {task.run_id!r} does not match broker run_id {broker_run_id!r}",
         )
     return embedded_payload, task, "broker task contract loaded with embedded Curator task"
+
+
+def _apply_broker_parameters(
+    embedded_payload: dict[str, Any],
+    parameters: Any,
+) -> str | None:
+    if parameters is None:
+        return None
+    if not isinstance(parameters, dict):
+        return "broker task parameters must be a JSON object"
+    allowed_parameters = {"upload_ids"}
+    unknown = sorted(set(parameters) - allowed_parameters)
+    if unknown:
+        return f"broker task parameters contain unsupported keys: {unknown}"
+    if "upload_ids" not in parameters:
+        return None
+    upload_ids = parameters["upload_ids"]
+    if not isinstance(upload_ids, list) or not all(
+        isinstance(upload_id, str) and upload_id for upload_id in upload_ids
+    ):
+        return "broker task parameter upload_ids must be a list of non-empty strings"
+    embedded_payload["upload_ids"] = upload_ids
+    return None
 
 
 def _is_broker_task_contract(payload: dict[str, Any]) -> bool:

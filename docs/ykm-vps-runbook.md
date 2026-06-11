@@ -9,11 +9,12 @@ As of the Phase 1E cutover:
 - Existing public MCP URL: `https://mcp.fleiglabs.cc/mcp`.
 - Existing `cloudflared` container remains running: `roger-knowledge-cloudflared-phase0`.
 - Production origin container: `youknowme-phase1e`.
+- Production Compose project: `/docker/youknowme` after the Compose migration.
 - Production image tag on the VPS: `youknowme:phase1e`.
 - Production private Docker network: `roger-knowledge-private`.
 - Production network aliases: `roger-knowledge-mcp`, `youknowme`.
 - Production runtime directory: `/opt/youknowme`.
-- Production index mount: `/opt/youknowme/index:/data/index:ro`.
+- Production index mount: `/opt/youknowme/index-current:/data/index:ro` through Compose.
 - Production log mount: `/opt/youknowme/logs:/data/logs`.
 - Production intake mount: `/opt/youknowme/intake:/data/intake`.
 - Production env file: `/opt/youknowme/runtime.env`, mode `0600`.
@@ -68,7 +69,8 @@ Promote it manually:
 ```bash
 ssh hermes-vps '
 sudo /opt/youknowme/bin/relaunch-container-with-new-index.sh \
-  --artifact /opt/youknowme/incoming/youknowme-index-<run>.zip
+  --artifact /opt/youknowme/incoming/youknowme-index-<run>.zip \
+  --compose-dir /docker/youknowme
 '
 ```
 
@@ -80,8 +82,8 @@ The utility:
 - installs the index under `/opt/youknowme/index-builds/<source_commit>-<build_id>/`;
 - updates `/opt/youknowme/index-current`;
 - records the previous target in `/opt/youknowme/index-previous`;
-- recreates `youknowme-phase1e` with the same network aliases, env file, log mount, and intake
-  mount;
+- recreates the Compose-managed `youknowme` service with the same network aliases, env file, log
+  mount, and intake mount when `--compose-dir /docker/youknowme` is used;
 - verifies `/livez` and fail-closed unauthenticated `/mcp`.
 
 The production container should mount `/opt/youknowme/index-current:/data/index:ro` after this
@@ -215,26 +217,18 @@ Restart production:
 
 ```bash
 ssh hermes-vps '
-mkdir -p /opt/youknowme/index /opt/youknowme/logs /opt/youknowme/intake
+mkdir -p /opt/youknowme/logs /opt/youknowme/intake
 uid_gid=$(docker run --rm --entrypoint id youknowme:phase1e -u):$(docker run --rm --entrypoint id youknowme:phase1e -g)
 chown -R "$uid_gid" /opt/youknowme/logs /opt/youknowme/intake
 chmod 700 /opt/youknowme/logs /opt/youknowme/intake
-docker rm -f youknowme-phase1e >/dev/null 2>&1 || true
-docker run -d \
-  --name youknowme-phase1e \
-  --restart unless-stopped \
-  --network roger-knowledge-private \
-  --network-alias roger-knowledge-mcp \
-  --network-alias youknowme \
-  --env-file /opt/youknowme/runtime.env \
-  -v /opt/youknowme/index:/data/index:ro \
-  -v /opt/youknowme/logs:/data/logs \
-  -v /opt/youknowme/intake:/data/intake \
-  --read-only \
-  --tmpfs /tmp \
-  --cap-drop ALL \
-  --security-opt no-new-privileges:true \
-  youknowme:phase1e
+cd /docker/youknowme
+YKM_IMAGE=youknowme:phase1e \
+YKM_CONTAINER_NAME=youknowme-phase1e \
+YKM_ENV_FILE=/opt/youknowme/runtime.env \
+YKM_INDEX_MOUNT=/opt/youknowme/index-current \
+YKM_LOG_DIR=/opt/youknowme/logs \
+YKM_INTAKE_DIR=/opt/youknowme/intake \
+docker compose up -d --force-recreate youknowme
 '
 ```
 
@@ -311,9 +305,51 @@ Hermes service-token verification:
    Cloudflare Access service token Client ID.
 4. Set `YKM_ALLOWED_SERVICE_COMMON_NAMES=<Hermes CF-Access-Client-Id>` in
    `/opt/youknowme/runtime.env`.
-5. Rebuild/redeploy `youknowme:phase1e`, recreate `youknowme-phase1e`, and restart the Hermes
+5. Rebuild/redeploy `youknowme:phase1e`, recreate the Compose-managed `youknowme` service, and restart the Hermes
    gateway to trigger MCP discovery.
 6. Confirm Hermes reaches FastMCP and lists tools, while unauthenticated `/mcp` remains `401`.
+
+## Production Compose
+
+YouKnowMe production should be managed as a Compose project under `/docker/youknowme`, while
+runtime data stays under `/opt/youknowme`.
+
+Install or refresh the Compose config from this repository:
+
+```bash
+ssh hermes-vps '
+install -d -m 0755 /docker/youknowme
+'
+scp deploy/youknowme/docker-compose.yml hermes-vps:/docker/youknowme/docker-compose.yml
+ssh hermes-vps '
+cd /docker/youknowme
+docker compose config >/tmp/youknowme-compose-rendered.yaml
+docker rm -f youknowme-phase1e >/dev/null 2>&1 || true
+YKM_IMAGE=youknowme:phase1e \
+YKM_CONTAINER_NAME=youknowme-phase1e \
+YKM_ENV_FILE=/opt/youknowme/runtime.env \
+YKM_INDEX_MOUNT=/opt/youknowme/index-current \
+YKM_LOG_DIR=/opt/youknowme/logs \
+YKM_INTAKE_DIR=/opt/youknowme/intake \
+docker compose up -d --force-recreate youknowme
+docker compose ps
+'
+```
+
+After migration, `docker compose ls` should show the `youknowme` project and hPanel should have the
+same Compose metadata surface it uses for other `/docker` projects.
+
+Index promotion should use the same Compose project:
+
+```bash
+sudo /opt/youknowme/bin/relaunch-container-with-new-index.sh \
+  --artifact /opt/youknowme/incoming/<artifact>.zip \
+  --compose-dir /docker/youknowme
+```
+
+The promotion script still keeps `docker run` as the default for local smoke tests. On the VPS,
+`--compose-dir /docker/youknowme` makes the script repoint `index-current`, recreate the Compose
+service, and run the same liveness/fail-closed smoke.
 
 Production exposes the native Phase 1 tools:
 

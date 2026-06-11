@@ -15,6 +15,9 @@ Options:
   --alias NAME          Docker network alias. May be repeated. Defaults: roger-knowledge-mcp, youknowme
   --env-file PATH       Runtime env file. Default: <deploy-root>/runtime.env
   --host-port PORT      Publish host PORT to container port 8765 and smoke via localhost.
+  --compose-dir PATH    Recreate the service with Docker Compose from PATH instead of docker run.
+  --compose-service NAME
+                        Compose service to recreate. Default: youknowme.
   --no-restart-policy   Do not set --restart unless-stopped. Useful for local smoke tests.
   --help                Show this help.
 EOF
@@ -27,6 +30,8 @@ CONTAINER="youknowme-phase1e"
 NETWORK="roger-knowledge-private"
 ENV_FILE=""
 HOST_PORT=""
+COMPOSE_DIR=""
+COMPOSE_SERVICE="youknowme"
 RESTART_POLICY="--restart unless-stopped"
 ALIASES=()
 
@@ -62,6 +67,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --host-port)
       HOST_PORT="${2:?--host-port requires a port}"
+      shift 2
+      ;;
+    --compose-dir)
+      COMPOSE_DIR="${2:?--compose-dir requires a path}"
+      shift 2
+      ;;
+    --compose-service)
+      COMPOSE_SERVICE="${2:?--compose-service requires a name}"
       shift 2
       ;;
     --no-restart-policy)
@@ -107,6 +120,9 @@ require_command tar
 ARTIFACT_ZIP="$(cd "$(dirname "$ARTIFACT_ZIP")" && pwd)/$(basename "$ARTIFACT_ZIP")"
 DEPLOY_ROOT="$(mkdir -p "$DEPLOY_ROOT" && cd "$DEPLOY_ROOT" && pwd)"
 ENV_FILE="$(cd "$(dirname "$ENV_FILE")" && pwd)/$(basename "$ENV_FILE")"
+if [[ -n "$COMPOSE_DIR" ]]; then
+  COMPOSE_DIR="$(cd "$COMPOSE_DIR" && pwd)"
+fi
 
 if [[ ! -f "$ARTIFACT_ZIP" ]]; then
   echo "Artifact ZIP does not exist: $ARTIFACT_ZIP" >&2
@@ -114,6 +130,14 @@ if [[ ! -f "$ARTIFACT_ZIP" ]]; then
 fi
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "Runtime env file does not exist: $ENV_FILE" >&2
+  exit 1
+fi
+if [[ -n "$COMPOSE_DIR" && -n "$HOST_PORT" ]]; then
+  echo "--host-port is not supported with --compose-dir; publish ports in the Compose file if needed" >&2
+  exit 2
+fi
+if [[ -n "$COMPOSE_DIR" && ! -f "$COMPOSE_DIR/docker-compose.yml" ]]; then
+  echo "Compose directory does not contain docker-compose.yml: $COMPOSE_DIR" >&2
   exit 1
 fi
 
@@ -295,6 +319,20 @@ run_container() {
     return 1
   fi
   echo "Starting $CONTAINER with index: $active_index"
+  if [[ -n "$COMPOSE_DIR" ]]; then
+    docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+    (
+      cd "$COMPOSE_DIR"
+      YKM_IMAGE="$IMAGE" \
+        YKM_CONTAINER_NAME="$CONTAINER" \
+        YKM_ENV_FILE="$ENV_FILE" \
+        YKM_INDEX_MOUNT="$active_index" \
+        YKM_LOG_DIR="$DEPLOY_ROOT/logs" \
+        YKM_INTAKE_DIR="$DEPLOY_ROOT/intake" \
+        docker compose up -d --force-recreate "$COMPOSE_SERVICE" >/dev/null
+    )
+    return 0
+  fi
   docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
   # shellcheck disable=SC2086
   docker run -d \

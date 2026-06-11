@@ -206,6 +206,45 @@ Run the committed offline model-planning evals locally after prompt or schema ch
 mise run curator-model-eval
 ```
 
+## Manual Live Upload Launch
+
+The live upload profile should remain fixed for mode, enabled actions, budgets, model, image, mounts,
+repo, and credentials. Once sandbox-broker supports parameterized launch profiles, scope live upload
+runs with the broker wrapper's `parameters.upload_ids` map instead of editing
+`configs/sandbox-beta.yaml`.
+
+Preview the resolved launch first:
+
+```bash
+ssh hermes-vps '
+cd /docker/gh-agent-broker
+set -a; . ./.env; set +a
+curl -fsS -X POST \
+  -H "Authorization: Bearer ${YKM_CURATOR_SANDBOX_ADMIN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "{\"parameters\":{\"upload_ids\":[\"upl_...\"]}}" \
+  http://127.0.0.1:8091/v1/launch-profiles/ykm-curator-upload-pr-live/preview
+'
+```
+
+Launch after reviewing the preview:
+
+```bash
+ssh hermes-vps '
+cd /docker/gh-agent-broker
+set -a; . ./.env; set +a
+curl -fsS -X POST \
+  -H "Authorization: Bearer ${YKM_CURATOR_SANDBOX_ADMIN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "{\"parameters\":{\"upload_ids\":[\"upl_...\"]}}" \
+  http://127.0.0.1:8091/v1/launch-profiles/ykm-curator-upload-pr-live/launch
+'
+```
+
+The broker validates only the declared parameter contract. Curator validates upload existence and
+state after the worker starts. Invalid or unknown upload IDs should fail in Curator before model
+review or PR creation.
+
 The profile mounts only `/credentials/ykm-curator/proxy.env`, which contains the proxy token for
 `gh-agent-proxy`. It must not mount provider keys or the broker `.env`.
 
