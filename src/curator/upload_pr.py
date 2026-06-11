@@ -30,7 +30,11 @@ def execute_upload_review_pr(
     preview: UploadReviewPreview,
     output: UploadReviewModelOutput,
 ) -> ExecutionResult:
-    intent = upload_review_pull_intent(run_id=run_id, preview=preview)
+    intent = upload_review_pull_intent(
+        run_id=run_id,
+        preview=preview,
+        content_summary=output.content_summary,
+    )
     if output.upload_id != preview.upload_id:
         return _failed_result(intent, f"upload review output mismatch for {preview.upload_id}")
     if output.decision != "integrated":
@@ -77,7 +81,12 @@ def execute_upload_review_pr(
     return broker_adapter.create_pull(intent)
 
 
-def upload_review_pull_intent(*, run_id: str, preview: UploadReviewPreview) -> ExecutionIntent:
+def upload_review_pull_intent(
+    *,
+    run_id: str,
+    preview: UploadReviewPreview,
+    content_summary: str | None = None,
+) -> ExecutionIntent:
     action = ProposedAction(
         action_id=preview.action_id,
         action_type="corpus_pr",
@@ -94,7 +103,7 @@ def upload_review_pull_intent(*, run_id: str, preview: UploadReviewPreview) -> E
         branch=preview.branch,
         evidence=ActionEvidence(upload_ids=[preview.upload_id]),
         title=_upload_review_pr_title(preview),
-        body=_upload_review_pr_body(run_id, preview, action),
+        body=_upload_review_pr_body(run_id, preview, action, content_summary=content_summary),
         labels=["ykm-curator", "upload"],
     )
 
@@ -113,15 +122,19 @@ def _upload_review_pr_body(
     run_id: str,
     preview: UploadReviewPreview,
     marker_action: ProposedAction,
+    *,
+    content_summary: str | None = None,
 ) -> str:
     marker_block = render_action_markers(run_id, marker_action)
     marker_block = marker_block.replace(
         f"YKM-Curator-Idempotency-Key: {marker_action.idempotency_key}",
         f"YKM-Curator-Idempotency-Key: {preview.idempotency_key}",
     )
+    summary = _single_line_summary(content_summary)
     return (
         "# YouKnowMe Curator upload review\n\n"
         f"- Upload: `{preview.upload_id}`\n"
+        f"- Content: {summary}\n"
         f"{_upload_review_pr_page_lines(preview)}"
         f"- Branch: `{preview.branch}`\n"
         "- Corpus validation: passed before PR creation.\n\n"
@@ -139,6 +152,11 @@ def _upload_review_pr_page_lines(preview: UploadReviewPreview) -> str:
         return f"- Page: `{preview.draft_paths[0]}`\n"
     pages = ", ".join(f"`{path}`" for path in preview.draft_paths)
     return f"- Pages: {pages}\n"
+
+
+def _single_line_summary(content_summary: str | None) -> str:
+    summary = " ".join((content_summary or "No upload summary supplied.").split())
+    return summary[:300]
 
 
 def _failed_result(intent: ExecutionIntent, message: str) -> ExecutionResult:
