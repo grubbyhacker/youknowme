@@ -128,7 +128,9 @@ def _execute_one_agentic_upload_review(
             transcript_path: Path | None = None
             summary_path = output / "upload-review-agent" / _safe_name(preview.upload_id) / "summary.json"
             validation: subprocess.CompletedProcess[str] | None = None
+            attempts_used = 0
             for attempt in range(1, max_attempts + 1):
+                attempts_used = attempt
                 transcript_path = _run_codex_upload_agent(
                     run_id=run_id,
                     preview=preview,
@@ -163,7 +165,7 @@ def _execute_one_agentic_upload_review(
                 if validation.returncode == 0:
                     break
             changed_files = _changed_files(checkout, git_env)
-            diff_stat = _git_output(["diff", "--stat"], cwd=checkout, env=git_env)
+            diff_stat = _diff_stat(checkout, git_env, changed_files)
             summary = _read_agent_summary(summary_path, changed_files)
             draft_paths = _final_draft_paths(summary, changed_files)
             if not changed_files:
@@ -172,7 +174,7 @@ def _execute_one_agentic_upload_review(
                     status="fail",
                     message="Codex upload review produced no checkout changes.",
                     model=model,
-                    attempts=max_attempts,
+                    attempts=attempts_used,
                     changed_files=[],
                     diff_stat=diff_stat,
                     validation_command=validation_command,
@@ -185,7 +187,7 @@ def _execute_one_agentic_upload_review(
                     status="fail",
                     message="upload review validation failed after Codex agent edits.",
                     model=model,
-                    attempts=max_attempts,
+                    attempts=attempts_used,
                     draft_paths=draft_paths,
                     changed_files=changed_files,
                     diff_stat=diff_stat,
@@ -200,23 +202,24 @@ def _execute_one_agentic_upload_review(
                 content_summary=summary.get("content_summary"),
                 draft_paths=draft_paths,
             )
-            observation = _agent_observation(
-                preview,
-                status="pass",
-                message="Codex upload review produced a validated corpus diff.",
-                model=model,
-                attempts=max_attempts,
-                draft_paths=draft_paths,
-                changed_files=changed_files,
-                diff_stat=diff_stat,
-                validation_command=validation_command,
-                validation=validation,
-                transcript_path=transcript_path,
-                elapsed_seconds=time.monotonic() - started,
-            )
             if mode != "manual_live":
+                observation = _agent_observation(
+                    preview,
+                    status="pass",
+                    message="Codex upload review produced a validated corpus diff.",
+                    model=model,
+                    attempts=attempts_used,
+                    draft_paths=draft_paths,
+                    changed_files=changed_files,
+                    diff_stat=diff_stat,
+                    validation_command=validation_command,
+                    validation=validation,
+                    transcript_path=transcript_path,
+                    elapsed_seconds=time.monotonic() - started,
+                )
                 return None, observation
             _run_git(["add", "--all"], cwd=checkout, env=git_env)
+            diff_stat = _git_output(["diff", "--cached", "--stat"], cwd=checkout, env=git_env)
             staged = subprocess.run(
                 ["git", "diff", "--cached", "--quiet"],
                 cwd=checkout,
@@ -232,7 +235,7 @@ def _execute_one_agentic_upload_review(
                     status="fail",
                     message="upload review agent produced no staged commit changes",
                     model=model,
-                    attempts=max_attempts,
+                    attempts=attempts_used,
                     draft_paths=draft_paths,
                     changed_files=changed_files,
                     diff_stat=diff_stat,
@@ -241,6 +244,20 @@ def _execute_one_agentic_upload_review(
                     transcript_path=transcript_path,
                     elapsed_seconds=time.monotonic() - started,
                 )
+            observation = _agent_observation(
+                preview,
+                status="pass",
+                message="Codex upload review produced a validated corpus diff.",
+                model=model,
+                attempts=attempts_used,
+                draft_paths=draft_paths,
+                changed_files=changed_files,
+                diff_stat=diff_stat,
+                validation_command=validation_command,
+                validation=validation,
+                transcript_path=transcript_path,
+                elapsed_seconds=time.monotonic() - started,
+            )
             _run_git(
                 [
                     "-c",
@@ -480,7 +497,7 @@ def _safe_repo_path(value: str) -> bool:
 
 
 def _changed_files(checkout: Path, env: dict[str, str]) -> list[str]:
-    output = _git_output(["status", "--porcelain"], cwd=checkout, env=env)
+    output = _git_output(["status", "--porcelain", "-uall"], cwd=checkout, env=env)
     files: list[str] = []
     for line in output.splitlines():
         if len(line) < 4:
@@ -490,6 +507,20 @@ def _changed_files(checkout: Path, env: dict[str, str]) -> list[str]:
             path = path.split(" -> ", maxsplit=1)[-1]
         files.append(path)
     return sorted(set(files))
+
+
+def _diff_stat(checkout: Path, env: dict[str, str], changed_files: list[str]) -> str:
+    diff_stat = _git_output(["diff", "--stat"], cwd=checkout, env=env)
+    untracked = _git_output(
+        ["ls-files", "--others", "--exclude-standard"],
+        cwd=checkout,
+        env=env,
+    )
+    untracked_files = [path for path in untracked.splitlines() if path in changed_files]
+    if not untracked_files:
+        return diff_stat
+    untracked_lines = "\n".join(f" {path} | untracked" for path in untracked_files)
+    return (diff_stat.rstrip() + "\n" + untracked_lines + "\n").lstrip()
 
 
 def _run_validation(checkout: Path, validation_command: list[str]) -> subprocess.CompletedProcess[str]:
