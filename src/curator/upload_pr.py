@@ -90,6 +90,7 @@ def upload_review_pull_intent(
     run_id: str,
     preview: UploadReviewPreview,
     content_summary: str | None = None,
+    draft_paths: list[str] | None = None,
 ) -> ExecutionIntent:
     action = ProposedAction(
         action_id=preview.action_id,
@@ -99,6 +100,7 @@ def upload_review_pull_intent(
         evidence=ActionEvidence(upload_ids=[preview.upload_id]),
         target_repo="grubbyhacker/ykmcorpus",
     )
+    effective_draft_paths = draft_paths if draft_paths is not None else preview.draft_paths
     return ExecutionIntent(
         action_id=preview.action_id,
         operation="pull.create",
@@ -106,20 +108,27 @@ def upload_review_pull_intent(
         target_repo="grubbyhacker/ykmcorpus",
         branch=preview.branch,
         evidence=ActionEvidence(upload_ids=[preview.upload_id]),
-        title=_upload_review_pr_title(preview),
-        body=_upload_review_pr_body(run_id, preview, action, content_summary=content_summary),
+        title=_upload_review_pr_title(preview, draft_paths=effective_draft_paths),
+        body=_upload_review_pr_body(
+            run_id,
+            preview,
+            action,
+            content_summary=content_summary,
+            draft_paths=effective_draft_paths,
+        ),
         labels=["ykm-curator", "upload"],
     )
 
 
-def _upload_review_pr_title(preview: UploadReviewPreview) -> str:
+def _upload_review_pr_title(preview: UploadReviewPreview, *, draft_paths: list[str] | None = None) -> str:
     title = f"YouKnowMe Curator upload review: {preview.upload_id}"
-    if not preview.draft_paths:
+    draft_paths = preview.draft_paths if draft_paths is None else draft_paths
+    if not draft_paths:
         return title
-    primary_path = preview.draft_paths[0]
-    if len(preview.draft_paths) == 1:
+    primary_path = draft_paths[0]
+    if len(draft_paths) == 1:
         return f"YouKnowMe Curator upload review: {primary_path}"
-    return f"YouKnowMe Curator upload review: {primary_path} (+{len(preview.draft_paths) - 1})"
+    return f"YouKnowMe Curator upload review: {primary_path} (+{len(draft_paths) - 1})"
 
 
 def _upload_review_pr_body(
@@ -128,6 +137,7 @@ def _upload_review_pr_body(
     marker_action: ProposedAction,
     *,
     content_summary: str | None = None,
+    draft_paths: list[str] | None = None,
 ) -> str:
     marker_block = render_action_markers(run_id, marker_action)
     marker_block = marker_block.replace(
@@ -139,22 +149,25 @@ def _upload_review_pr_body(
         "# YouKnowMe Curator upload review\n\n"
         f"- Upload: `{preview.upload_id}`\n"
         f"- Content: {summary}\n"
-        f"{_upload_review_pr_page_lines(preview)}"
+        f"{_upload_review_pr_page_lines(preview, draft_paths=draft_paths)}"
         f"- Branch: `{preview.branch}`\n"
         "- Corpus validation: passed before PR creation.\n\n"
         "This PR contains normalized corpus markdown and additive policy changes proposed from "
-        "the upload-review model. It does not include intake excerpts in the PR body.\n\n"
+        "the upload-review agent. It does not include intake excerpts in the PR body.\n\n"
         "## Curator Markers\n\n"
         f"{marker_block}"
     )
 
 
-def _upload_review_pr_page_lines(preview: UploadReviewPreview) -> str:
-    if not preview.draft_paths:
+def _upload_review_pr_page_lines(
+    preview: UploadReviewPreview, *, draft_paths: list[str] | None = None
+) -> str:
+    draft_paths = preview.draft_paths if draft_paths is None else draft_paths
+    if not draft_paths:
         return ""
-    if len(preview.draft_paths) == 1:
-        return f"- Page: `{preview.draft_paths[0]}`\n"
-    pages = ", ".join(f"`{path}`" for path in preview.draft_paths)
+    if len(draft_paths) == 1:
+        return f"- Page: `{draft_paths[0]}`\n"
+    pages = ", ".join(f"`{path}`" for path in draft_paths)
     return f"- Pages: {pages}\n"
 
 

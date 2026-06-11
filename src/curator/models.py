@@ -31,6 +31,7 @@ ExecutionOperation = Literal[
     "pull.review_thread.resolve",
 ]
 PrRepairExecutor = Literal["fixture", "codex_proxy"]
+UploadReviewExecutor = Literal["codex_proxy"]
 PrRepairStatus = Literal[
     "validated",
     "validation_failed",
@@ -118,6 +119,13 @@ class CuratorTask(BaseModel):
     feedback_model: str | None = None
     model_upload_review: bool = False
     upload_review_model: str | None = None
+    upload_review_executor: UploadReviewExecutor | None = None
+    upload_review_agent_model: str = "ykm-codex-gpt-5-mini"
+    upload_review_max_attempts: int | None = Field(default=None, ge=1)
+    upload_review_validation_command: list[str] = Field(
+        default_factory=lambda: ["mise", "run", "validate"],
+        min_length=1,
+    )
     pr_repair_executor: PrRepairExecutor | None = None
     pr_repair_model: str = "ykm-codex-gpt-5-mini"
     pr_repair_max_per_run: int = Field(default=1, ge=0)
