@@ -88,7 +88,7 @@ docker compose up -d --force-recreate youknowme
 ## Verification Completed
 
 - `mise run lint`: Ruff passing.
-- `mise run test`: `285` tests passing as of the agentic Curator upload budget/reporting follow-up.
+- `mise run test`: `289` tests passing as of the Curator feedback reporter/excerpt follow-up.
 - `YKM_EMBEDDING_PROVIDER=openrouter mise run real-smoke`: rebuilt `.ykm/real-index` from
   `~/src/ykmcorpus`.
 - `YKM_EMBEDDING_PROVIDER=openrouter mise run container-smoke`: passed against the rebuilt real
@@ -115,24 +115,36 @@ docker compose up -d --force-recreate youknowme
 
 ## Curator Current State
 
-Curator upload intake is now agentic and enabled on the hourly timer.
+Curator upload intake is agentic and enabled on the hourly timer. Feedback handling is also live
+behind an operator-only launch profile.
 
 Deployment details:
 
-- Current deployed Curator image on the VPS:
+- Current deployed feedback Curator image on the VPS:
+  `youknowme:curator-feedback-20260611-a9ff7c7`.
+- Upload/timer templates still use the earlier upload image:
   `youknowme:curator-agentic-upload-20260611-1cc9b97`.
 - Merged code PRs:
   - `grubbyhacker/youknowme#20`: agentic Codex upload-review executor.
   - `grubbyhacker/youknowme#21`: upload mutation-budget cap and report cleanup.
+  - `grubbyhacker/youknowme#24`: simplified feedback processing.
+  - `grubbyhacker/youknowme#25`: fixture result handling for simulated feedback executions.
+  - `grubbyhacker/youknowme#30`: reporter MCP issue creation and bounded feedback excerpts in
+    private corpus PR/issue bodies.
 - sandbox-broker config: `/docker/gh-agent-broker/configs/sandbox-beta.yaml`.
 - Recent config/service backups:
   - `configs/sandbox-beta.yaml.bak-agentic-upload-20260611T062504Z`
   - `configs/sandbox-beta.yaml.bak-agentic-upload-pr21-20260611T063819Z`
   - `configs/sandbox-beta.yaml.bak-enable-live-upload-timer-20260611T064759Z`
   - `/etc/systemd/system/ykm-curator-launch.service.bak-live-upload-timer-20260611T064812Z`
-- Curator templates `ykm-curator-dry-run` and `ykm-curator-dry-run-model` both use the current image.
+- Curator upload/repair profiles still use `ykm-curator-dry-run-model`; feedback uses the separate
+  `ykm-curator-feedback-model` template.
 - Manual live upload profile `ykm-curator-upload-pr-live` remains available to
   `ykm-curator-operator` and accepts required `parameters.upload_ids`.
+- Manual live feedback profile `ykm-curator-feedback-live` is available to `ykm-curator-operator`.
+  It uses template `ykm-curator-feedback-model`, image `youknowme:curator-feedback-20260611-a9ff7c7`,
+  `YKM_REPORTER_MCP_URL=http://issue-reporter:8090/mcp`, `feedback_executor: "codex_proxy"`, and a
+  two-object feedback mutation budget.
 - Timer profile `ykm-curator-upload-pr-timer` is live and unscoped. It runs:
   - mode: `manual_live`
   - enabled actions: `["plan_uploads"]`
@@ -148,6 +160,38 @@ Deployment details:
 - `ykm-curator-launch.timer` is enabled and active.
 - The timer token was rotated on June 11, 2026 after it was exposed in terminal output during
   service inspection; do not print timer/operator env files.
+
+Live feedback proof:
+
+- Broker issue `grubbyhacker/gh-agent-broker#41` tracked the reporter MCP installation/config
+  mismatch. It is fixed and was verified from Curator.
+- Run `20260611T082510Z-6a3f130502890fc2` used the pre-merge feedback image and created
+  `grubbyhacker/ykmcorpus#12` via broker PR creation and `grubbyhacker/youknowme#29` via reporter
+  MCP issue creation. The run's overall status was `fail` only because unresolved feedback remained
+  beyond the two-mutation budget, so the checkpoint correctly did not advance.
+- PR `grubbyhacker/ykmcorpus#11` was updated in place to include the original feedback excerpt. PR
+  #30 now makes future private corpus-targeted Curator PR/issue bodies include bounded feedback
+  excerpts; public product issues remain marker-only.
+- Latest production feedback run after deploying merged commit `a9ff7c7`:
+  `20260611T185959Z-fc0addf29a750f5a`.
+  - Image: `youknowme:curator-feedback-20260611-a9ff7c7`.
+  - Status: `fail` because unresolved feedback remains after the mutation budget.
+  - GitHub mutations: `2`.
+  - Feedback decisions appended: `2`.
+  - Created `grubbyhacker/youknowme#31` for `fb_20260606_213443_4d6413ec`.
+  - Created `grubbyhacker/youknowme#32` for `fb_20260606_213447_05359cd6`.
+  - Remaining unresolved feedback IDs are still queued for future runs.
+- Operational caveat: after broker/reporter restarts, confirm `issue-reporter` resolves from
+  `gh-agent-broker_default` because the feedback worker uses
+  `http://issue-reporter:8090/mcp`. A missing network alias breaks reporter MCP issue filing.
+
+Feedback architecture lesson:
+
+- The current feedback queue works at low QPS, but it is acting like a small issue tracker. A likely
+  future simplification is to have feedback intake auto-file private `grubbyhacker/ykmcorpus`
+  issues, then let humans or maintenance agents decide whether a corpus PR, corpus issue, or public
+  YKM issue is appropriate.
+- Until that is redesigned, keep the live feedback profile operator-triggered and budgeted.
 
 Agentic upload and repair proof:
 
