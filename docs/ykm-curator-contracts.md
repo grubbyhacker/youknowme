@@ -74,6 +74,13 @@ replace or mount over `/input/task.json`. For fixed launch profiles, the embedde
 use `"run_id":"${SANDBOX_RUN_ID}"`; Curator replaces that placeholder with the broker wrapper
 `run_id` before validation.
 
+The broker wrapper may also include an optional `parameters` object. The broker treats these values
+as opaque operator inputs and validates only the generic parameter contract. Curator currently
+interprets only `parameters.upload_ids` and copies it into the effective Curator task's `upload_ids`.
+Unsupported parameter names or invalid `upload_ids` shapes fail closed inside Curator before upload
+planning. Parameters must not override mode, enabled actions, budgets, model settings, repository
+settings, image, mounts, or credentials.
+
 Initial modes:
 
 - `dry_run`: read evidence and emit plans/reports only.

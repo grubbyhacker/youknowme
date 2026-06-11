@@ -16,6 +16,8 @@ inside `POC/`, and do not start another `cloudflared` with the existing tunnel t
 Production container state:
 
 - `youknowme-phase1e` is the live origin container.
+- The intended production management surface is `/docker/youknowme/docker-compose.yml`; runtime data
+  remains under `/opt/youknowme`.
 - `roger-knowledge-cloudflared-phase0` remains the existing tunnel container and was not replaced.
 - `roger-knowledge-mcp-phase0` is stopped and retained for rollback.
 - Runtime directory on the VPS: `/opt/youknowme`.
@@ -72,21 +74,14 @@ Restart production on the VPS:
 
 ```bash
 ssh hermes-vps '
-docker rm -f youknowme-phase1e >/dev/null 2>&1 || true
-docker run -d \
-  --name youknowme-phase1e \
-  --restart unless-stopped \
-  --network roger-knowledge-private \
-  --network-alias roger-knowledge-mcp \
-  --network-alias youknowme \
-  --env-file /opt/youknowme/runtime.env \
-  -v /opt/youknowme/index:/data/index:ro \
-  -v /opt/youknowme/logs:/data/logs \
-  --read-only \
-  --tmpfs /tmp \
-  --cap-drop ALL \
-  --security-opt no-new-privileges:true \
-  youknowme:phase1e
+cd /docker/youknowme
+YKM_IMAGE=youknowme:phase1e \
+YKM_CONTAINER_NAME=youknowme-phase1e \
+YKM_ENV_FILE=/opt/youknowme/runtime.env \
+YKM_INDEX_MOUNT=/opt/youknowme/index-current \
+YKM_LOG_DIR=/opt/youknowme/logs \
+YKM_INTAKE_DIR=/opt/youknowme/intake \
+docker compose up -d --force-recreate youknowme
 '
 ```
 
