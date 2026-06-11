@@ -102,6 +102,7 @@ def run_curator_dry_run(config: CuratorDryRunConfig) -> CuratorDryRunReport:
     run_id = task_model.run_id if task_model is not None else config.run_id
     mode = task_model.mode if task_model is not None else "dry_run"
     enabled_actions = set(task_model.enabled_actions if task_model is not None else [])
+    requested_upload_ids = task_model.upload_ids if task_model is not None else []
     if not enabled_actions:
         enabled_actions = {"reconcile", "plan_feedback", "plan_uploads"}
     feedback_soft_action_threshold = (
@@ -143,6 +144,7 @@ def run_curator_dry_run(config: CuratorDryRunConfig) -> CuratorDryRunReport:
         "task_payload": task_payload,
         "lock_path": lock_path,
         "enabled_actions": enabled_actions,
+        "requested_upload_ids": requested_upload_ids,
         "feedback_soft_action_threshold": feedback_soft_action_threshold,
         "github_mutation_budget": github_mutation_budget,
         "model_call_budget": model_call_budget,
@@ -190,6 +192,7 @@ def _run_with_lock(
     task_payload: dict[str, Any] | None,
     lock_path: Path,
     enabled_actions: set[str],
+    requested_upload_ids: list[str],
     feedback_soft_action_threshold: int,
     github_mutation_budget: dict[str, int],
     model_call_budget: dict[str, int],
@@ -299,7 +302,32 @@ def _run_with_lock(
         model_call_count += model_usage["call_count"]
         model_token_count += model_usage["token_count"]
     if "plan_uploads" in enabled_actions:
-        upload_plan = build_upload_plan(run_id=run_id, upload_snapshot=queue_snapshot)
+        upload_plan = build_upload_plan(
+            run_id=run_id,
+            upload_snapshot=queue_snapshot,
+            upload_ids=requested_upload_ids,
+        )
+        if requested_upload_ids:
+            missing_upload_ids = sorted(set(requested_upload_ids) - set(upload_plan.included_upload_ids))
+            if missing_upload_ids:
+                probes.append(
+                    CuratorProbe(
+                        name="upload-scope",
+                        status="fail",
+                        message="requested upload ids are absent or not reviewable",
+                        details={"upload_ids": missing_upload_ids},
+                    )
+                )
+                upload_plan = UploadPlan(run_id=run_id, created_at=datetime.now(UTC))
+            else:
+                probes.append(
+                    CuratorProbe(
+                        name="upload-scope",
+                        status="pass",
+                        message="requested upload ids are reviewable",
+                        details={"upload_ids": sorted(set(requested_upload_ids))},
+                    )
+                )
     else:
         upload_plan = UploadPlan(run_id=run_id, created_at=datetime.now(UTC))
     upload_review_observations: list[UploadReviewObservation] = []
@@ -865,6 +893,7 @@ def _empty_report(
     task_payload: dict[str, Any] | None,
     lock_path: Path,
     enabled_actions: set[str],
+    requested_upload_ids: list[str],
     feedback_soft_action_threshold: int,
     github_mutation_budget: dict[str, int],
     model_call_budget: dict[str, int],
@@ -1811,9 +1840,11 @@ def _upload_review_model_request(
             "Output frontmatter may contain only id, type, tags, aliases, and related; choose the corpus root through the file path, not a root frontmatter field.",
             "Prefer existing corpus types and tags when they fit.",
             "When existing vocabulary does not fit, propose a small policy_patch instead of misclassifying the document.",
+            "Use policy_patch.corpus_roots_add, allowed_types_add, and allowed_tags_add for new vocabulary needed by the draft.",
+            "A review PR is the owner permission request for bounded corpus policy additions; prefer an integrated draft with a minimal policy_patch over needs_owner_action when the change can be reviewed as code.",
+            "Use decision needs_owner_action only when the upload lacks enough context, has unresolved safety concerns, or cannot be turned into a small reviewable corpus-policy and markdown diff.",
             "Do not weaken validation limits, remove existing policy values, or include secrets.",
             "Use decision integrated only when files contain normalized corpus markdown for review.",
-            "Use decision needs_owner_action when the upload cannot be safely normalized from the supplied context.",
             "Keep rationale short and state why any policy additions are needed.",
         ],
     }
@@ -2328,6 +2359,21 @@ def _report_markdown(report: CuratorDryRunReport) -> str:
             suffix = ""
             if draft_paths:
                 suffix = " -> " + ", ".join(f"`{path}`" for path in draft_paths[:3])
+            policy_additions = []
+            if observation.get("policy_roots_add"):
+                policy_additions.append(
+                    "roots " + ", ".join(f"`{value}`" for value in observation["policy_roots_add"][:5])
+                )
+            if observation.get("policy_types_add"):
+                policy_additions.append(
+                    "types " + ", ".join(f"`{value}`" for value in observation["policy_types_add"][:5])
+                )
+            if observation.get("policy_tags_add"):
+                policy_additions.append(
+                    "tags " + ", ".join(f"`{value}`" for value in observation["policy_tags_add"][:5])
+                )
+            if policy_additions:
+                suffix += "; policy +" + "; +".join(policy_additions)
             returncode = observation.get("returncode")
             code_suffix = f" (exit `{returncode}`)" if returncode is not None else ""
             lines.append(

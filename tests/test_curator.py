@@ -25,6 +25,8 @@ from curator.model_tasks import (
 from curator.models import (
     ActionEvidence,
     CuratorIssueSnapshot,
+    CuratorPrReviewCommentSnapshot,
+    CuratorPrReconciliation,
     CuratorPrReviewSnapshot,
     CuratorPrReviewThreadSnapshot,
     CuratorPrSnapshot,
@@ -52,7 +54,12 @@ from curator.execution import (
 )
 from curator.planning import deterministic_branch_name
 from curator.policy import evaluate_feedback_action_policy, policy_from_budget
-from curator.pr_repair import _codex_config, _has_workflow_changed_file
+from curator.pr_repair import (
+    _codex_config,
+    _has_workflow_changed_file,
+    _repair_prompt,
+    _review_request_comment,
+)
 from curator.pr_reconcile import reconcile_pr_snapshots
 from curator.pr_state import PrStateTransitionError, validate_pr_transition
 from curator.reconcile import build_reconciliation_summary
@@ -62,7 +69,7 @@ from curator.upload_state import (
     transition_upload_metadata,
     validate_upload_transition,
 )
-from curator.upload_observe import observe_upload_review_draft
+from curator.upload_observe import apply_upload_review_draft_to_checkout, observe_upload_review_draft
 from ykm.curator import CuratorDryRunConfig, run_curator_dry_run
 from curator.runner import _complete_pr_repair_handoffs, write_curator_reports
 
@@ -4243,7 +4250,50 @@ def test_codex_proxy_config_uses_responses_wire_api_and_run_header() -> None:
     assert 'model = "ykm-codex-haiku"' in config
     assert 'base_url = "http://gh-agent-proxy:8092/v1"' in config
     assert 'wire_api = "responses"' in config
+    assert 'sandbox_mode = "danger-full-access"' in config
     assert '"X-GH-Agent-Run-ID" = "YKM_CURATOR_RUN_ID"' in config
+
+
+def test_pr_repair_prompt_includes_review_bodies_and_inline_threads() -> None:
+    prompt = _repair_prompt(
+        CuratorPrReconciliation(
+            pr_number=7,
+            pr_state="changes_requested",
+            branch="curator/run/upload",
+            labels=["ym-curator: needs work"],
+            upload_ids=["upl_1"],
+            reason="PR has changes requested",
+        ),
+        CuratorPrSnapshot(
+            number=7,
+            state="open",
+            title="Upload review",
+            branch="curator/run/upload",
+            reviews=[
+                CuratorPrReviewSnapshot(
+                    state="CHANGES_REQUESTED",
+                    author_login="owner",
+                    body="Move this somewhere other than skills.",
+                )
+            ],
+            review_threads=[
+                CuratorPrReviewThreadSnapshot(
+                    path="skills/example.md",
+                    line=4,
+                    comments=[
+                        CuratorPrReviewCommentSnapshot(
+                            author_login="owner",
+                            body="This is not a reusable skill.",
+                        )
+                    ],
+                )
+            ],
+        ),
+    )
+
+    assert "Move this somewhere other than skills." in prompt
+    assert "Inline review on skills/example.md:4 by owner" in prompt
+    assert "This is not a reusable skill." in prompt
 
 
 def test_pr_repair_classifies_workflow_file_changes_as_permission_blocked() -> None:
@@ -4329,6 +4379,7 @@ def test_runner_fixture_repairs_actionable_curator_pr(
     assert report.pr_repair_results[0]["pr_number"] == 5
     assert report.pr_repair_results[0]["status"] == "validated"
     assert "ready for review again" in report.pr_repair_results[0]["review_request_comment"]
+    assert "YKM-Curator-Run: run-pr-repair" in report.pr_repair_results[0]["review_request_comment"]
     assert any(probe.name == "pr-repair" and probe.status == "pass" for probe in report.probes)
     markdown = (tmp_path / "output" / "run-report.md").read_text(encoding="utf-8")
     assert "## PR Repair Results" in markdown
@@ -4352,7 +4403,16 @@ def test_pr_repair_handoff_posts_comment_dismisses_reviews_resolves_threads_and_
         status="pushed",
         message="pushed",
         changed_files=[".ykm/corpus-policy.yaml", "preferences/dev-environment.md"],
-        review_request_comment="Curator repair completed and this PR is ready for review again.",
+        review_request_comment=_review_request_comment(
+            CuratorPrReconciliation(
+                pr_number=5,
+                pr_state="changes_requested",
+                branch="curator/run/upload",
+                run_id="run",
+                reason="needs work",
+            ),
+            changed_files=[".ykm/corpus-policy.yaml", "preferences/dev-environment.md"],
+        ),
         review_request_comment_status="pending",
         pushed=True,
     )
@@ -4397,6 +4457,7 @@ def test_pr_repair_handoff_posts_comment_dismisses_reviews_resolves_threads_and_
         "issue.label.remove",
     ]
     assert all(result.status == "simulated" for result in results)
+    assert "YKM-Curator-Run: run" in repair.review_request_comment
     assert repair.review_request_comment_status == "posted"
     assert repair.dismissed_review_count == 1
     assert repair.resolved_thread_count == 1
@@ -5416,6 +5477,91 @@ def test_upload_plan_proposes_review_deferrals_without_queue_moves(
     assert pr_opened.exists()
 
 
+def test_upload_plan_can_be_scoped_by_task_upload_ids(tmp_path: Path, monkeypatch) -> None:
+    intake = tmp_path / "intake"
+    for upload_id in ("upl_first", "upl_second"):
+        pending = intake / "uploads" / "pending" / upload_id
+        pending.mkdir(parents=True)
+        (pending / "manifest.json").write_text(
+            json.dumps({"upload_id": upload_id}) + "\n",
+            encoding="utf-8",
+        )
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "run_id": "run-upload-scope",
+                "mode": "dry_run",
+                "enabled_actions": ["plan_uploads"],
+                "upload_ids": ["upl_second"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="ignored",
+            intake=intake,
+            output=tmp_path / "output",
+            task=task,
+        )
+    )
+
+    assert report.status == "pass"
+    assert report.included_upload_ids == ["upl_second"]
+    assert [preview["upload_id"] for preview in report.upload_review_previews] == ["upl_second"]
+    assert any(probe.name == "upload-scope" and probe.status == "pass" for probe in report.probes)
+
+
+def test_upload_plan_scope_fails_closed_for_missing_upload(tmp_path: Path, monkeypatch) -> None:
+    intake = tmp_path / "intake"
+    pending = intake / "uploads" / "pending" / "upl_present"
+    pending.mkdir(parents=True)
+    (pending / "manifest.json").write_text(
+        json.dumps({"upload_id": "upl_present"}) + "\n",
+        encoding="utf-8",
+    )
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "run_id": "run-upload-scope-missing",
+                "mode": "dry_run",
+                "enabled_actions": ["plan_uploads"],
+                "model_upload_review": True,
+                "upload_review_model": "anthropic/claude-sonnet-4.6",
+                "model_call_budget": {"max_calls_per_run": 1, "max_tokens_per_run": 1000},
+                "upload_ids": ["upl_missing"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="ignored",
+            intake=intake,
+            output=tmp_path / "output",
+            task=task,
+        )
+    )
+
+    assert report.status == "fail"
+    assert report.included_upload_ids == []
+    assert report.upload_review_preview_count == 0
+    assert report.model_call_count == 0
+    probe = next(probe for probe in report.probes if probe.name == "upload-scope")
+    assert probe.status == "fail"
+    assert probe.details["upload_ids"] == ["upl_missing"]
+
+
 def test_upload_plan_marks_corpus_ready_upload_draft(tmp_path: Path, monkeypatch) -> None:
     intake = tmp_path / "intake"
     pending = intake / "uploads" / "pending" / "upl_hot_tub"
@@ -5529,6 +5675,43 @@ def test_upload_review_observe_applies_model_draft_to_temp_checkout_and_validate
     assert observation.policy_tags_add == ["uv"]
     assert "validated draft" in observation.stdout_tail
     assert not (corpus / "homemaint" / "tooling-note.md").exists()
+
+
+def test_upload_review_policy_patch_can_add_corpus_root_type_and_tag(tmp_path: Path) -> None:
+    corpus = _fake_corpus_checkout(tmp_path)
+    output = UploadReviewModelOutput(
+        upload_id="upl_project",
+        decision="integrated",
+        files=[
+            {
+                "path": "projects/vps-hardening.md",
+                "content": (
+                    "---\n"
+                    "id: vps-hardening\n"
+                    "type: project\n"
+                    "tags: [vps]\n"
+                    "---\n\n"
+                    "# VPS Hardening\n"
+                ),
+            }
+        ],
+        policy_patch={
+            "corpus_roots_add": ["projects"],
+            "allowed_types_add": ["project"],
+            "allowed_tags_add": ["vps"],
+        },
+        rationale="A review PR can ask for the bounded schema addition.",
+        reason="ready for validation",
+    )
+
+    paths = apply_upload_review_draft_to_checkout(corpus, output)
+
+    assert paths == ["projects/vps-hardening.md"]
+    policy = (corpus / ".ykm" / "corpus-policy.yaml").read_text(encoding="utf-8")
+    assert "corpus_roots:\n  - homemaint\n  - projects\n" in policy
+    assert "allowed_types:\n  - procedure\n  - project\n" in policy
+    assert "allowed_tags:\n  - home\n  - home-maintenance\n  - vps\n" in policy
+    assert (corpus / "projects" / "vps-hardening.md").exists()
 
 
 def test_upload_review_observe_records_validation_failure(
@@ -6625,6 +6808,8 @@ def _fake_mise(
         (
             "#!/usr/bin/env python3\n"
             "import sys\n"
+            "if sys.argv[1:2] == ['trust']:\n"
+            "    raise SystemExit(0)\n"
             f"sys.stdout.write({stdout!r})\n"
             f"sys.stderr.write({stderr!r})\n"
             f"raise SystemExit({exit_code})\n"

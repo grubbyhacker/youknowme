@@ -111,6 +111,7 @@ class CuratorTask(BaseModel):
     run_id: str
     mode: CuratorMode = "dry_run"
     enabled_actions: list[CuratorEnabledAction] = Field(default_factory=list)
+    upload_ids: list[str] = Field(default_factory=list)
     github_mutation_budget: GithubMutationBudget = Field(default_factory=GithubMutationBudget)
     model_call_budget: ModelCallBudget = Field(default_factory=ModelCallBudget)
     model_feedback_planning: bool = False

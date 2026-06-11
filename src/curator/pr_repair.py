@@ -366,7 +366,7 @@ def _codex_config(*, model: str, proxy_base_url: str) -> str:
         f'model = "{model}"\n'
         'model_provider = "ykm_proxy"\n'
         'approval_policy = "never"\n'
-        'sandbox_mode = "workspace-write"\n\n'
+        'sandbox_mode = "danger-full-access"\n\n'
         "[model_providers.ykm_proxy]\n"
         'name = "YKM Codex Proxy"\n'
         f'base_url = "{proxy_base_url}"\n'
@@ -380,7 +380,7 @@ def _repair_prompt(
     reconciliation: CuratorPrReconciliation,
     snapshot: CuratorPrSnapshot | None,
 ) -> str:
-    comments = "\n\n".join(snapshot.review_comments[:10] if snapshot else [])
+    comments = "\n\n".join(_review_evidence(snapshot))
     title = snapshot.title if snapshot and snapshot.title else f"PR #{reconciliation.pr_number}"
     return (
         "You are repairing a YouKnowMe Curator pull request in this checkout.\n"
@@ -409,6 +409,41 @@ def _repair_prompt(
         "or otherwise making the reference valid. The long-term workflow path-filter fix "
         "must be handled separately because this repair worker cannot push workflow files."
     )
+
+
+def _review_evidence(snapshot: CuratorPrSnapshot | None) -> list[str]:
+    if snapshot is None:
+        return []
+    evidence: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: str) -> None:
+        text = " ".join(value.split())
+        if not text or text in seen:
+            return
+        seen.add(text)
+        evidence.append(text[:2000])
+
+    for comment in snapshot.review_comments:
+        add(comment)
+    for review in snapshot.reviews:
+        if review.body:
+            prefix = f"Review {review.state}"
+            if review.author_login:
+                prefix += f" by {review.author_login}"
+            add(f"{prefix}: {review.body}")
+    for thread in snapshot.review_threads:
+        location = thread.path or "unknown file"
+        if thread.line is not None:
+            location += f":{thread.line}"
+        for comment in thread.comments:
+            if not comment.body:
+                continue
+            prefix = f"Inline review on {location}"
+            if comment.author_login:
+                prefix += f" by {comment.author_login}"
+            add(f"{prefix}: {comment.body}")
+    return evidence[:20]
 
 
 def _run_validation(checkout: Path, validation_command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -523,6 +558,7 @@ def _review_request_comment(
     changed_files: list[str],
 ) -> str:
     changed_list = "\n".join(f"- `{path}`" for path in changed_files) or "- No files listed."
+    run_id = reconciliation.run_id or "unknown"
     return (
         "Curator repair completed and this PR is ready for review again.\n\n"
         "What I fixed:\n"
@@ -535,7 +571,12 @@ def _review_request_comment(
         "- The Curator repair path validates the repaired branch before pushing, treats failed or "
         "missing validation as actionable, and posts this handoff comment so the PR returns to "
         "owner review instead of relying only on labels.\n\n"
-        f"Please review PR #{reconciliation.pr_number} again when ready."
+        f"Please review PR #{reconciliation.pr_number} again when ready.\n\n"
+        "## Curator Markers\n\n"
+        f"YKM-Curator-Run: {run_id}\n"
+        "YKM-Curator-Action: repair\n"
+        "YKM-Curator-Action-Type: pr_repair\n"
+        f"YKM-Curator-PR: {reconciliation.pr_number}\n"
     )
 
 

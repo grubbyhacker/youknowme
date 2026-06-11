@@ -43,6 +43,7 @@ The Curator task payload is a JSON object:
   "run_id": "cur_20260608T120000Z_abcd1234",
   "mode": "dry_run",
   "enabled_actions": ["reconcile", "plan_feedback", "plan_uploads"],
+  "upload_ids": [],
   "github_mutation_budget": {
     "max_new_objects_per_run": 4,
     "upload": 2,
@@ -79,6 +80,11 @@ Initial modes:
 - `state_only`: update Curator state without GitHub or model mutations.
 - `manual_live`: allow policy-validated GitHub/model operations through broker/proxy boundaries.
 
+`upload_ids` optionally scopes `plan_uploads` to specific staged uploads. The default empty list
+preserves whole-queue planning. When the list is non-empty, the Curator only creates upload-review
+previews for matching reviewable bundles; if any requested upload is absent or not reviewable, the
+run fails closed before upload model review or PR execution.
+
 `model_feedback_planning` is an explicit opt-in for replacing the deterministic feedback planner's
 proposed actions with a single model-planned feedback action set. It requires a non-empty
 `feedback_model` and a `model_call_budget.max_calls_per_run` of at least `1`. The Curator still
@@ -92,10 +98,14 @@ upload-review model. It requires a non-empty `upload_review_model`, one remainin
 `model_call_budget.max_calls_per_run` entry per included upload preview, and a configured corpus
 checkout path supplied to the worker, for example through `curator run --corpus-checkout` or
 `YKM_CORPUS_CHECKOUT`. Integrated model drafts are applied only to a temporary checkout copy. The
-Curator then runs `mise run validate` in that copy and records a structured observation with status,
-command, exit code, bounded stdout/stderr tails, draft paths, and policy additions. Failed
-observations fail the run and increase `validation_failure_count`; skipped non-integrated model
-decisions are reported but do not apply draft files.
+model may propose additive `policy_patch` changes for `corpus_roots`, `allowed_types`, and
+`allowed_tags`; this is the preferred way to ask owner permission for a bounded schema expansion,
+because the resulting PR is reviewable and rejectable. The Curator then runs `mise run validate` in
+that copy and records a structured observation with status, command, exit code, bounded
+stdout/stderr tails, draft paths, and policy additions. Failed observations fail the run and
+increase `validation_failure_count`; skipped non-integrated model decisions are reported but do not
+apply draft files. `needs_owner_action` should be reserved for uploads that cannot be turned into a
+small reviewable markdown and policy diff from the supplied context.
 
 `repair_prs` is an explicit `enabled_actions` value for maintaining open Curator-authored PRs after
 owner feedback. It requires `reconcile` plus `pr_repair_executor`. The `fixture` executor is for
