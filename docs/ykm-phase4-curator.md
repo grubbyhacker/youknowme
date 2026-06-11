@@ -175,9 +175,10 @@ The editor/executor layer may start simple and become pluggable:
 
 - `deterministic`: simple file placement and metadata edits.
 - `sdk_agent`: provider-neutral structured LLM calls inside the Curator.
-- `hermes` or `codex`: optional subordinate executor for complex branch edits or review iteration.
+- `codex_proxy`: optional subordinate Codex executor for complex branch edits or review iteration,
+  using scoped proxy model access rather than subscription credential borrowing.
 
-Hermes or Codex may be useful as a worker, but they should not own the durable queue or PR lifecycle.
+Codex may be useful as a worker, but it should not own the durable queue or PR lifecycle.
 The durable truth should live in intake metadata, branch names, PR bodies, PR comments, and GitHub
 state.
 
@@ -223,11 +224,11 @@ The model provider should be selected by configuration. Reasonable initial provi
 
 - OpenAI API through a broker/proxy for direct OpenAI SDK support and tracing.
 - OpenRouter through a broker/proxy for model choice and cost flexibility.
-- A Hermes/Codex executor only for scoped edit tasks, if using subscription-backed coding agents is
-  operationally useful.
+- A Codex executor only for scoped edit tasks, routed through LiteLLM/OpenRouter via
+  `gh-agent-proxy`.
 
-Do not assume ChatGPT/Codex subscription access is the same thing as API access for an SDK-backed
-agent.
+Do not rely on ChatGPT/Codex subscription credential borrowing for production Curator work. Codex
+repair runs should use scoped paid model access through the broker/proxy boundary.
 
 ## Model Egress And Key Boundaries
 
@@ -630,10 +631,25 @@ Curator PR states:
 - `changes_requested`: owner or reviewer requested concrete changes.
 - `commented_needs_triage`: comments exist and need classification.
 - `checks_failed`: CI or validation failed.
+- `checks_missing`: expected CI or validation checks did not run for a Curator PR.
 - `ready_for_owner`: Curator has responded or updated the branch and is waiting again.
 - `merged`: PR merged; linked intake can move to `processed`.
 - `closed_unmerged`: PR closed without merge; linked intake should become `rejected` or `deferred`.
 - `stale_or_blocked`: Curator cannot proceed without owner input.
+
+Because GitHub does not allow assigning pull requests to GitHub Apps, labels are the manual
+reassignment mechanism for Curator-authored PRs. The first actionable label is exactly
+`ym-curator: needs work` (including the space after `:`). When Roger applies that label to an open
+Curator PR, reconciliation treats the PR as actionable by the Curator, equivalent to
+`changes_requested` unless a terminal state applies. Review decisions and check states remain
+automatic signals; the label is the explicit human wake-up signal. After a repair push, the PR should
+use `ym-curator: waiting-review`; that label means the Curator believes its branch work is complete
+and is waiting for owner review, even if GitHub still reports the previous review as
+`CHANGES_REQUESTED`. The repair push must also post a PR conversation comment from the Curator
+summarizing what was fixed, why the PR broke, and why the repair path should prevent the same class
+of failure from silently recurring. The same handoff dismisses addressed stale change-request reviews,
+resolves addressed review threads, and moves labels from `ym-curator: needs work` to
+`ym-curator: waiting-review`.
 
 Allowed PR state transitions:
 
@@ -641,6 +657,7 @@ Allowed PR state transitions:
 open_waiting_review -> commented_needs_triage
 open_waiting_review -> changes_requested
 open_waiting_review -> checks_failed
+open_waiting_review -> checks_missing
 open_waiting_review -> merged
 open_waiting_review -> closed_unmerged
 commented_needs_triage -> changes_requested
@@ -654,6 +671,9 @@ changes_requested -> closed_unmerged
 checks_failed -> ready_for_owner
 checks_failed -> merged
 checks_failed -> closed_unmerged
+checks_missing -> ready_for_owner
+checks_missing -> merged
+checks_missing -> closed_unmerged
 ready_for_owner -> open_waiting_review
 ready_for_owner -> merged
 ready_for_owner -> closed_unmerged
@@ -669,11 +689,11 @@ stale.
 On each run, the Curator should:
 
 1. Find open PRs authored by the Curator or matching the Curator branch prefix.
-2. Read PR comments, review submissions, unresolved review threads, and check status.
+2. Read PR labels, comments, review submissions, unresolved review threads, and check status.
 3. Classify the PR state.
 4. For concrete requested changes, update the same branch and leave a concise response.
 5. For ambiguous feedback, ask a clarifying PR comment and mark blocked.
-6. For failed checks, attempt a fix only if the failure is within Curator scope.
+6. For failed or missing checks, attempt a fix only if the failure is within Curator scope.
 7. For merged PRs, mark linked upload or feedback records as processed.
 8. For closed-unmerged PRs, record the outcome and stop retrying unless owner reopens the work.
 
@@ -793,6 +813,13 @@ failure status, and the next checkpoint if it advanced.
 - Use the live `gh-agent-proxy` model endpoint from inside the Docker/Hermes network:
   `http://gh-agent-proxy:8092/v1/model/call`.
 - Keep provider keys outside the Curator sandbox.
+- For Codex PR repair, configure Codex with `base_url = "http://gh-agent-proxy:8092/v1"`,
+  `wire_api = "responses"`, `OPENAI_API_KEY` set to the scoped proxy token, and
+  `X-GH-Agent-Run-ID` passed through `env_http_headers`.
+- Use `ykm-codex-gpt-5-mini` by default, with aliases such as `ykm-codex-haiku` and
+  `ykm-codex-sonnet` available for comparison or harder repairs.
+- Treat `.github/workflows/*` repairs as privileged repository maintenance unless the Curator
+  GitHub App is explicitly granted workflow write permission.
 - Allow Curator egress only to the model broker/proxy and required broker endpoints.
 - Keep the proxy self-hosted by default; hosted third-party proxy use requires an explicit design
   decision.
@@ -815,8 +842,17 @@ failure status, and the next checkpoint if it advanced.
 ### Slice 6: PR Maintenance Loop
 
 - Reconcile Curator-authored open PRs before new intake.
-- Respond to concrete owner feedback.
-- Update branches when the requested change is clear.
+- Treat `ym-curator: needs work`, review change requests, failed checks, and missing checks as
+  actionable PR maintenance signals.
+- Treat `ym-curator: waiting-review` as the post-repair owner-review handoff and do not immediately
+  repair it again.
+- Use the `codex_proxy` repair executor for bounded branch edits, then let the deterministic Curator
+  validate and decide whether to push.
+- After a successful repair push, post a PR conversation comment requesting owner review again; do
+  not rely on labels alone.
+- Dismiss stale PR-level change-request reviews, resolve addressed review threads, and transition
+  labels to `ym-curator: waiting-review` after the review-request comment is posted.
+- Update existing Curator branches only in explicit `manual_live` repair runs.
 - Ask clarification when feedback is ambiguous.
 - Mark merged and closed PRs back into intake state.
 

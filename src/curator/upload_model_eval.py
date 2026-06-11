@@ -29,6 +29,7 @@ class ExpectedUploadReviewOutcome(BaseModel):
     path: str
     type: str
     required_tags: list[str] = Field(default_factory=list)
+    policy_roots_add: list[str] = Field(default_factory=list)
     policy_types_add: list[str] = Field(default_factory=list)
     policy_tags_add: list[str] = Field(default_factory=list)
 
@@ -96,8 +97,11 @@ def build_upload_review_scenario_request(
             "Output frontmatter may contain only id, type, tags, aliases, and related; choose the corpus root through the file path, not a root frontmatter field.",
             "Prefer existing corpus types and tags when they fit.",
             "When existing vocabulary does not fit, propose a small policy_patch instead of misclassifying the document.",
+            "Use policy_patch.corpus_roots_add, allowed_types_add, and allowed_tags_add for new vocabulary needed by the draft.",
+            "A review PR is the owner permission request for bounded corpus policy additions; prefer an integrated draft with a minimal policy_patch over needs_owner_action when the change can be reviewed as code.",
+            "Use decision needs_owner_action only when the upload lacks enough context, has unresolved safety concerns, or cannot be turned into a small reviewable corpus-policy and markdown diff.",
             "If the upload describes Roger's personal operating context, defaults, tool choices, or recurring preferences, use type preference under the preferences root and add preference to policy_patch.allowed_types_add when absent.",
-            "Use policy_patch.allowed_types_add and policy_patch.allowed_tags_add for new vocabulary needed by the draft.",
+            "If using a corpus root that is absent from corpus_policy.corpus_roots, add it to policy_patch.corpus_roots_add.",
             "Preserve central concrete tool, product, or technology names as tags when they are likely retrieval handles for user questions, such as uv and mise in a Python tooling preference document.",
             "Do not drop a central concrete tag merely because it appears in the body; add it to policy_patch.allowed_tags_add when absent from policy.",
             "Do not preserve an invalid uploaded type when a better new type is clear from the document purpose.",
@@ -172,8 +176,16 @@ def score_upload_review_scenario_output(
         if missing_tags:
             failures.append(f"{expected.path}: missing tags {missing_tags}")
 
+    policy_roots = set(output.policy_patch.corpus_roots_add)
+    missing_roots = sorted(set(expected.policy_roots_add) - policy_roots)
+    if missing_roots:
+        failures.append(f"policy_patch.corpus_roots_add missing {missing_roots}")
     policy_types = set(output.policy_patch.allowed_types_add)
     missing_types = sorted(set(expected.policy_types_add) - policy_types)
     if missing_types:
         failures.append(f"policy_patch.allowed_types_add missing {missing_types}")
+    policy_tags = set(output.policy_patch.allowed_tags_add)
+    missing_policy_tags = sorted(set(expected.policy_tags_add) - policy_tags)
+    if missing_policy_tags:
+        failures.append(f"policy_patch.allowed_tags_add missing {missing_policy_tags}")
     return UploadReviewScenarioResult(case=case.name, passed=not failures, failures=failures)

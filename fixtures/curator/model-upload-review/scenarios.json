@@ -44,6 +44,9 @@
           "mise",
           "macos"
         ],
+        "policy_roots_add": [
+          "preferences"
+        ],
         "policy_types_add": [
           "preference"
         ],
@@ -54,6 +57,63 @@
           "uv",
           "mise",
           "ghostty"
+        ]
+      }
+    },
+    {
+      "name": "vps_project_policy_addition",
+      "upload_id": "upl_eval_vps_project",
+      "manifest": {
+        "upload_id": "upl_eval_vps_project",
+        "purpose": "Stage a durable project note for future YouKnowMe corpus review about automating and hardening the Hostinger VPS environment.",
+        "suggested_type": "project",
+        "suggested_tags": [
+          "ansible",
+          "deployment",
+          "hermes",
+          "hostinger",
+          "infrastructure",
+          "observability",
+          "someday-maybe",
+          "vps",
+          "ykm"
+        ],
+        "suggested_related": []
+      },
+      "files": [
+        {
+          "filename": "vps-infrastructure-automation-hardening-plan.md",
+          "content": "---\nid: vps-infrastructure-automation-hardening-plan\ntype: project\ntags: [vps, hostinger, infrastructure, ansible, ykm, hermes, deployment, observability, someday-maybe]\n---\n\n# VPS Infrastructure Automation Hardening Plan\n\nRoger wants to make the Hostinger VPS environment more reproducible and safer to operate.\n\n## Direction\n\nUse Ansible or similarly explicit automation for repeatable setup, document deployment assumptions, and improve observability without weakening access controls.\n"
+        }
+      ],
+      "expected": {
+        "decision": "integrated",
+        "path": "projects/vps-infrastructure-automation-hardening-plan.md",
+        "type": "project",
+        "required_tags": [
+          "vps",
+          "hostinger",
+          "infrastructure",
+          "ansible",
+          "deployment",
+          "observability"
+        ],
+        "policy_roots_add": [
+          "projects"
+        ],
+        "policy_types_add": [
+          "project"
+        ],
+        "policy_tags_add": [
+          "ansible",
+          "deployment",
+          "hermes",
+          "hostinger",
+          "infrastructure",
+          "observability",
+          "someday-maybe",
+          "vps",
+          "ykm"
         ]
       }
     },
@@ -95,6 +155,7 @@
           "spa",
           "home-maintenance"
         ],
+        "policy_roots_add": [],
         "policy_types_add": [],
         "policy_tags_add": [
           "freeflow",

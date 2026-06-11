@@ -47,7 +47,8 @@ source of truth remains `docs/ykm-phase4-curator.md` and `docs/ykm-curator-contr
 - HTTP broker read-preflight descriptor generation.
 - Opt-in HTTP broker PR and issue reads for reconciliation through `--enable-broker-reads`, using
   only `BROKER_AGENT_ID` and `BROKER_AGENT_SECRET`.
-- HTTP model proxy health probing only; no live model calls.
+- HTTP model proxy health probing and typed model calls through `gh-agent-proxy`; Codex PR repair
+  uses the OpenAI-compatible `/v1` proxy surface with a scoped proxy token.
 - Model fixture budget preflight and typed fixture response validation.
 - Upload-review model evals with sanitized dev-environment and hot-tub/manual scenarios. Live eval
   evidence currently supports Sonnet for the first upload-review implementation.
@@ -57,6 +58,9 @@ source of truth remains `docs/ykm-phase4-curator.md` and `docs/ykm-curator-contr
 - Broker-backed upload review PR creation for `manual_live` runs after validation passes. The worker
   clones through the broker Git remote, reapplies the draft, re-runs corpus validation, pushes a
   deterministic Curator branch, and opens a broker `pull.create` PR with Curator metadata.
+- Opt-in PR repair action for open Curator PRs. `repair_prs` can use a fixture executor in tests or
+  `codex_proxy` to run `codex exec` in a broker-cloned checkout, validate the diff, and in
+  `manual_live` push back to the existing Curator branch.
 - Run reports in JSON and Markdown with plans, summaries, failures, preflights, policy results,
   reconciliation, referenced evidence, capacity deferrals, and model budget fields.
 

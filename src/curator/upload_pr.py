@@ -169,6 +169,19 @@ def _run_git(args: list[str], *, cwd: Path | None, env: dict[str, str]) -> None:
 
 
 def _run_validate(checkout: Path) -> None:
+    mise_toml = checkout / "mise.toml"
+    if mise_toml.exists():
+        trust = subprocess.run(
+            ["mise", "trust", "--yes", str(mise_toml)],
+            cwd=checkout,
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT_SECONDS,
+            check=False,
+        )
+        if trust.returncode != 0:
+            detail = (trust.stderr or trust.stdout).strip()[:500]
+            raise RuntimeError(f"mise trust failed with exit {trust.returncode}: {detail}")
     result = subprocess.run(
         ["mise", "run", "validate"],
         cwd=checkout,

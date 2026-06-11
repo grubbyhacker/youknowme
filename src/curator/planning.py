@@ -199,12 +199,16 @@ def build_upload_plan(
     *,
     run_id: str,
     upload_snapshot: UploadQueueSnapshot,
+    upload_ids: list[str] | None = None,
 ) -> UploadPlan:
+    requested_upload_ids = set(upload_ids or [])
     included_upload_ids: list[str] = []
     review_previews: list[UploadReviewPreview] = []
     proposed_actions: list[ProposedAction] = []
     action_index = 1
     for bundle in upload_snapshot.bundles:
+        if requested_upload_ids and bundle.upload_id not in requested_upload_ids:
+            continue
         if not _upload_needs_deterministic_review(bundle):
             continue
         included_upload_ids.append(bundle.upload_id)

@@ -57,6 +57,7 @@ class UploadReviewDraftFile(BaseModel):
 class UploadReviewPolicyPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    corpus_roots_add: list[str] = Field(default_factory=list)
     allowed_types_add: list[str] = Field(default_factory=list)
     allowed_tags_add: list[str] = Field(default_factory=list)
 

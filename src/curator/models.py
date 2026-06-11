@@ -15,13 +15,30 @@ DEFAULT_TARGET_REPO = "grubbyhacker/ykmcorpus"
 UPLOAD_QUEUE_DIRS = ("pending", "claimed", "processed", "rejected", "archive", "deferred")
 
 CuratorMode = Literal["dry_run", "state_only", "manual_live"]
-CuratorEnabledAction = Literal["reconcile", "plan_feedback", "plan_uploads"]
+CuratorEnabledAction = Literal["reconcile", "plan_feedback", "plan_uploads", "repair_prs"]
 CuratorActionType = Literal["no_action", "issue", "corpus_pr", "link_to_upload", "defer"]
 CuratorActionExecution = Literal["not_executed", "executed", "skipped"]
 CuratorActionValidation = Literal["accepted", "rejected"]
 CuratorRunStatus = Literal["pass", "fail"]
 PolicyDecisionStatus = Literal["allowed", "denied"]
-ExecutionOperation = Literal["issue.create", "pull.create"]
+ExecutionOperation = Literal[
+    "issue.create",
+    "issue.comment",
+    "issue.label.add",
+    "issue.label.remove",
+    "pull.create",
+    "pull.review.dismiss",
+    "pull.review_thread.resolve",
+]
+PrRepairExecutor = Literal["fixture", "codex_proxy"]
+PrRepairStatus = Literal[
+    "validated",
+    "validation_failed",
+    "executor_failed",
+    "push_failed",
+    "pushed",
+    "rejected",
+]
 BrokerReadOperation = Literal[
     "pull.list",
     "pull.read",
@@ -64,6 +81,7 @@ CuratorPrState = Literal[
     "changes_requested",
     "commented_needs_triage",
     "checks_failed",
+    "checks_missing",
     "ready_for_owner",
     "merged",
     "closed_unmerged",
@@ -93,12 +111,20 @@ class CuratorTask(BaseModel):
     run_id: str
     mode: CuratorMode = "dry_run"
     enabled_actions: list[CuratorEnabledAction] = Field(default_factory=list)
+    upload_ids: list[str] = Field(default_factory=list)
     github_mutation_budget: GithubMutationBudget = Field(default_factory=GithubMutationBudget)
     model_call_budget: ModelCallBudget = Field(default_factory=ModelCallBudget)
     model_feedback_planning: bool = False
     feedback_model: str | None = None
     model_upload_review: bool = False
     upload_review_model: str | None = None
+    pr_repair_executor: PrRepairExecutor | None = None
+    pr_repair_model: str = "ykm-codex-gpt-5-mini"
+    pr_repair_max_per_run: int = Field(default=1, ge=0)
+    pr_repair_validation_command: list[str] = Field(
+        default_factory=lambda: ["mise", "run", "validate"],
+        min_length=1,
+    )
     feedback_soft_action_threshold: int = Field(default=10, ge=0)
     stale_lock_timeout_seconds: int = Field(default=DEFAULT_STALE_LOCK_TIMEOUT_SECONDS, ge=1)
 
@@ -123,6 +149,8 @@ class CuratorRunConfig(BaseModel):
     simulate_execution: bool = False
     enable_broker_reads: bool = False
     corpus_checkout: Path | None = None
+    codex_proxy_base_url: str | None = None
+    codex_proxy_token: str | None = None
 
 
 class FeedbackCheckpoint(BaseModel):
@@ -354,6 +382,39 @@ class BranchCollision(BaseModel):
     existing_upload_id: str
 
 
+class CuratorPrReviewSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str | None = None
+    database_id: int | None = None
+    state: str
+    author_login: str | None = None
+    body: str = ""
+    submitted_at: str | None = None
+
+
+class CuratorPrReviewCommentSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str | None = None
+    database_id: int | None = None
+    author_login: str | None = None
+    body: str = ""
+    path: str | None = None
+    line: int | None = None
+
+
+class CuratorPrReviewThreadSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str | None = None
+    database_id: int | None = None
+    is_resolved: bool = False
+    path: str | None = None
+    line: int | None = None
+    comments: list[CuratorPrReviewCommentSnapshot] = Field(default_factory=list)
+
+
 class CuratorPrSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -362,7 +423,11 @@ class CuratorPrSnapshot(BaseModel):
     title: str | None = None
     body: str = ""
     branch: str | None = None
-    checks_conclusion: Literal["success", "failure", "pending", "unknown"] = "unknown"
+    labels: list[str] = Field(default_factory=list)
+    review_comments: list[str] = Field(default_factory=list)
+    reviews: list[CuratorPrReviewSnapshot] = Field(default_factory=list)
+    review_threads: list[CuratorPrReviewThreadSnapshot] = Field(default_factory=list)
+    checks_conclusion: Literal["success", "failure", "pending", "missing", "unknown"] = "unknown"
     unresolved_thread_count: int = Field(default=0, ge=0)
     review_decision: Literal["approved", "changes_requested", "commented", "none"] = "none"
 
@@ -382,6 +447,7 @@ class CuratorPrReconciliation(BaseModel):
     pr_number: int
     pr_state: CuratorPrState
     branch: str | None = None
+    labels: list[str] = Field(default_factory=list)
     run_id: str | None = None
     action_id: str | None = None
     idempotency_key: str | None = None
@@ -495,6 +561,34 @@ class ExecutionResult(BaseModel):
     message: str | None = None
 
 
+class PrRepairResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pr_number: int
+    branch: str | None = None
+    pr_state: CuratorPrState
+    executor: PrRepairExecutor
+    model: str | None = None
+    status: PrRepairStatus
+    message: str
+    changed_files: list[str] = Field(default_factory=list)
+    diff_stat: str | None = None
+    validation_command: list[str] = Field(default_factory=list)
+    validation_returncode: int | None = None
+    validation_stdout_tail: str = ""
+    validation_stderr_tail: str = ""
+    transcript_path: str | None = None
+    review_request_comment: str | None = None
+    review_request_comment_status: Literal["not_applicable", "pending", "posted", "failed"] = (
+        "not_applicable"
+    )
+    review_request_comment_message: str | None = None
+    dismissed_review_count: int = 0
+    resolved_thread_count: int = 0
+    label_update_count: int = 0
+    pushed: bool = False
+
+
 class BrokerReadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -515,7 +609,15 @@ class BrokerFixtureState(BaseModel):
     existing_branches: list[str] = Field(default_factory=list)
     existing_idempotency_keys: list[str] = Field(default_factory=list)
     allowed_operations: list[ExecutionOperation] = Field(
-        default_factory=lambda: ["issue.create", "pull.create"]
+        default_factory=lambda: [
+            "issue.create",
+            "issue.comment",
+            "issue.label.add",
+            "issue.label.remove",
+            "pull.create",
+            "pull.review.dismiss",
+            "pull.review_thread.resolve",
+        ]
     )
     pr_snapshots: list[CuratorPrSnapshot] = Field(default_factory=list)
     issue_snapshots: list[CuratorIssueSnapshot] = Field(default_factory=list)
@@ -614,6 +716,9 @@ class CuratorRunReport(BaseModel):
     upload_review_observations: list[dict[str, Any]] = Field(default_factory=list)
     upload_review_observation_count: int = 0
     upload_review_validation_failure_count: int = 0
+    pr_repair_results: list[dict[str, Any]] = Field(default_factory=list)
+    pr_repair_result_count: int = 0
+    pr_repair_validation_failure_count: int = 0
     upload_metadata_update_count: int = 0
     upload_metadata_update_paths: list[str] = Field(default_factory=list)
     referenced_upload_ids: list[str] = Field(default_factory=list)

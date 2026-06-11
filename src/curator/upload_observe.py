@@ -46,6 +46,7 @@ class UploadReviewObservation(BaseModel):
     decision: str | None = None
     message: str
     draft_paths: list[str] = Field(default_factory=list)
+    policy_roots_add: list[str] = Field(default_factory=list)
     policy_types_add: list[str] = Field(default_factory=list)
     policy_tags_add: list[str] = Field(default_factory=list)
     command: list[str] = Field(default_factory=list)
@@ -69,6 +70,7 @@ def observe_upload_review_draft(
             decision=output.decision,
             message="upload review model did not produce an integrated corpus draft",
             draft_paths=[file.path for file in output.files],
+            policy_roots_add=output.policy_patch.corpus_roots_add,
             policy_types_add=output.policy_patch.allowed_types_add,
             policy_tags_add=output.policy_patch.allowed_tags_add,
         )
@@ -79,6 +81,7 @@ def observe_upload_review_draft(
             status="fail",
             decision=output.decision,
             message="integrated upload review output contains no draft files",
+            policy_roots_add=output.policy_patch.corpus_roots_add,
             policy_types_add=output.policy_patch.allowed_types_add,
             policy_tags_add=output.policy_patch.allowed_tags_add,
         )
@@ -90,12 +93,14 @@ def observe_upload_review_draft(
             decision=output.decision,
             message=f"integrated upload review output exceeds {MAX_DRAFT_FILES} draft files",
             draft_paths=[file.path for file in output.files[:MAX_DRAFT_FILES]],
+            policy_roots_add=output.policy_patch.corpus_roots_add,
             policy_types_add=output.policy_patch.allowed_types_add,
             policy_tags_add=output.policy_patch.allowed_tags_add,
         )
 
     try:
         safe_paths = [_safe_draft_path(file.path) for file in output.files]
+        _validate_policy_values(output.policy_patch.corpus_roots_add, name="corpus_roots_add")
         _validate_policy_values(output.policy_patch.allowed_types_add, name="allowed_types_add")
         _validate_policy_values(output.policy_patch.allowed_tags_add, name="allowed_tags_add")
     except ValueError as exc:
@@ -106,6 +111,7 @@ def observe_upload_review_draft(
             decision=output.decision,
             message=str(exc),
             draft_paths=[file.path for file in output.files],
+            policy_roots_add=output.policy_patch.corpus_roots_add,
             policy_types_add=output.policy_patch.allowed_types_add,
             policy_tags_add=output.policy_patch.allowed_tags_add,
         )
@@ -118,6 +124,7 @@ def observe_upload_review_draft(
             decision=output.decision,
             message=f"corpus checkout is not a directory: {corpus_checkout}",
             draft_paths=[str(path) for path in safe_paths],
+            policy_roots_add=output.policy_patch.corpus_roots_add,
             policy_types_add=output.policy_patch.allowed_types_add,
             policy_tags_add=output.policy_patch.allowed_tags_add,
         )
@@ -129,6 +136,24 @@ def observe_upload_review_draft(
             temp_checkout = Path(temp_root) / "ykmcorpus"
             copy_corpus_checkout(corpus_checkout, temp_checkout)
             apply_upload_review_draft_to_checkout(temp_checkout, output)
+            trust = _trust_mise_config(temp_checkout)
+            if trust.returncode != 0:
+                return UploadReviewObservation(
+                    upload_id=output.upload_id,
+                    action_id=action_id,
+                    status="fail",
+                    decision=output.decision,
+                    message="corpus validation trust step failed",
+                    draft_paths=[str(path) for path in safe_paths],
+                    policy_roots_add=output.policy_patch.corpus_roots_add,
+                    policy_types_add=output.policy_patch.allowed_types_add,
+                    policy_tags_add=output.policy_patch.allowed_tags_add,
+                    command=["mise", "trust", "--yes", str(temp_checkout / "mise.toml")],
+                    returncode=trust.returncode,
+                    stdout_tail=_tail(trust.stdout),
+                    stderr_tail=_tail(trust.stderr),
+                    elapsed_seconds=round(time.monotonic() - started, 3),
+                )
             completed = subprocess.run(
                 command,
                 cwd=temp_checkout,
@@ -146,6 +171,7 @@ def observe_upload_review_draft(
             decision=output.decision,
             message=f"corpus validation timed out after {VALIDATE_TIMEOUT_SECONDS}s",
             draft_paths=[str(path) for path in safe_paths],
+            policy_roots_add=output.policy_patch.corpus_roots_add,
             policy_types_add=output.policy_patch.allowed_types_add,
             policy_tags_add=output.policy_patch.allowed_tags_add,
             command=command,
@@ -161,6 +187,7 @@ def observe_upload_review_draft(
             decision=output.decision,
             message=f"corpus validation observe failed before command execution: {exc}",
             draft_paths=[str(path) for path in safe_paths],
+            policy_roots_add=output.policy_patch.corpus_roots_add,
             policy_types_add=output.policy_patch.allowed_types_add,
             policy_tags_add=output.policy_patch.allowed_tags_add,
             command=command,
@@ -175,6 +202,7 @@ def observe_upload_review_draft(
         decision=output.decision,
         message="corpus validation passed" if passed else "corpus validation failed",
         draft_paths=[str(path) for path in safe_paths],
+        policy_roots_add=output.policy_patch.corpus_roots_add,
         policy_types_add=output.policy_patch.allowed_types_add,
         policy_tags_add=output.policy_patch.allowed_tags_add,
         command=command,
@@ -205,6 +233,7 @@ def apply_upload_review_draft_to_checkout(
     if len(output.files) > MAX_DRAFT_FILES:
         raise ValueError(f"integrated upload review output exceeds {MAX_DRAFT_FILES} draft files")
     safe_paths = [_safe_draft_path(file.path) for file in output.files]
+    _validate_policy_values(output.policy_patch.corpus_roots_add, name="corpus_roots_add")
     _validate_policy_values(output.policy_patch.allowed_types_add, name="allowed_types_add")
     _validate_policy_values(output.policy_patch.allowed_tags_add, name="allowed_tags_add")
     _apply_policy_patch(checkout / POLICY_PATH, output)
@@ -242,9 +271,30 @@ def _apply_policy_patch(policy_path: Path, output: UploadReviewModelOutput) -> N
     if not policy_path.exists():
         raise FileNotFoundError(f"corpus policy file missing: {policy_path}")
     text = policy_path.read_text(encoding="utf-8")
+    text = _append_yaml_list_values(text, "corpus_roots", output.policy_patch.corpus_roots_add)
     text = _append_yaml_list_values(text, "allowed_types", output.policy_patch.allowed_types_add)
     text = _append_yaml_list_values(text, "allowed_tags", output.policy_patch.allowed_tags_add)
     policy_path.write_text(text, encoding="utf-8")
+
+
+def _trust_mise_config(checkout: Path) -> subprocess.CompletedProcess[str]:
+    mise_toml = checkout / "mise.toml"
+    if not mise_toml.exists():
+        return subprocess.CompletedProcess(
+            args=["mise", "trust", "--yes", str(mise_toml)],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+    return subprocess.run(
+        ["mise", "trust", "--yes", str(mise_toml)],
+        cwd=checkout,
+        capture_output=True,
+        text=True,
+        timeout=VALIDATE_TIMEOUT_SECONDS,
+        env=_validation_env(),
+        check=False,
+    )
 
 
 def _append_yaml_list_values(text: str, key: str, values: list[str]) -> str:

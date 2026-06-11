@@ -34,6 +34,7 @@ def test_upload_review_scenario_expected_outputs_score(case) -> None:
             }
         ],
         policy_patch={
+            "corpus_roots_add": case.expected.policy_roots_add,
             "allowed_types_add": case.expected.policy_types_add,
             "allowed_tags_add": case.expected.policy_tags_add,
         },
@@ -60,6 +61,8 @@ def test_upload_review_prompt_carries_policy_agency_advice() -> None:
     assert "preference" not in prompt_input["corpus_policy"]["allowed_types"]
     assert "uv" not in prompt_input["corpus_policy"]["allowed_tags"]
     assert any("propose a small policy_patch" in item for item in prompt_input["constraints"])
+    assert any("PR is the owner permission request" in item for item in prompt_input["constraints"])
+    assert any("corpus_roots_add" in item for item in prompt_input["constraints"])
     assert any("type preference under the preferences root" in item for item in prompt_input["constraints"])
     assert any("uv and mise" in item for item in prompt_input["constraints"])
     assert any("Do not drop a central concrete tag" in item for item in prompt_input["constraints"])
@@ -81,6 +84,7 @@ def test_upload_review_response_schema_is_strict_json_schema() -> None:
     }
     assert set(schema["$defs"]["UploadReviewDraftFile"]["required"]) == {"path", "content"}
     assert set(schema["$defs"]["UploadReviewPolicyPatch"]["required"]) == {
+        "corpus_roots_add",
         "allowed_types_add",
         "allowed_tags_add",
     }
