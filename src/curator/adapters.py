@@ -176,6 +176,7 @@ class FixtureBrokerAdapter:
         body: str,
         action_id: str,
         idempotency_key: str,
+        metadata: dict[str, str] | None = None,
     ) -> ExecutionResult:
         return ExecutionResult(
             action_id=action_id,
@@ -642,14 +643,18 @@ class HttpBrokerAdapter:
         body: str,
         action_id: str,
         idempotency_key: str,
+        metadata: dict[str, str] | None = None,
     ) -> ExecutionResult:
+        json_body: dict[str, Any] = {"body": body}
+        if metadata:
+            json_body["metadata"] = metadata
         try:
             response = self._request(
                 "POST",
                 f"/v1/repos/{target_repo}/issues/{issue_number}/comments",
                 authenticated=True,
                 idempotency_key=idempotency_key,
-                json_body={"body": body},
+                json_body=json_body,
             )
             if response.status_code >= 400:
                 return ExecutionResult(

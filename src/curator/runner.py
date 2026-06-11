@@ -46,6 +46,7 @@ from curator.model_tasks import (
     validate_feedback_planning_model_output,
     validate_model_response_output,
 )
+from curator.markers import parse_curator_markers
 from curator.execution import (
     append_feedback_decisions,
     build_execution_intents,
@@ -1934,6 +1935,7 @@ def _complete_pr_repair_handoffs(
             body=result.review_request_comment,
             action_id=action_id,
             idempotency_key=idempotency_key,
+            metadata=_pr_repair_handoff_metadata(result, snapshot),
         )
         result.review_request_comment_status = (
             "posted" if comment_result.status != "failed" else "failed"
@@ -2052,6 +2054,23 @@ def _pr_repair_handoff_path(intake: Path, result: PrRepairResult) -> Path:
 
 def _pr_repair_handoff_key(result: PrRepairResult) -> str:
     return result.repair_head_sha or result.branch or "unknown"
+
+
+def _pr_repair_handoff_metadata(
+    result: PrRepairResult,
+    snapshot: CuratorPrSnapshot | None,
+) -> dict[str, str]:
+    markers = parse_curator_markers(result.review_request_comment or "")
+    run_id = markers.run_id
+    if run_id is None and snapshot is not None:
+        run_id = parse_curator_markers(snapshot.body).run_id
+    metadata = {
+        "YKM-Curator-Action": "repair",
+        "YKM-Curator-PR": str(result.pr_number),
+    }
+    if run_id:
+        metadata["YKM-Curator-Run"] = run_id
+    return metadata
 
 
 def _slug_for_filename(value: str) -> str:

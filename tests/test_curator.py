@@ -2966,6 +2966,10 @@ def test_http_broker_adapter_posts_issue_comment_with_agent_auth() -> None:
         body="Curator repair completed and this PR is ready for review again.",
         action_id="pr_repair_comment_5",
         idempotency_key="pr-repair-comment:5:curator/run",
+        metadata={
+            "YKM-Curator-Run": "run-pr-repair",
+            "YKM-Curator-Action": "repair",
+        },
     )
 
     assert result.status == "executed"
@@ -2976,7 +2980,11 @@ def test_http_broker_adapter_posts_issue_comment_with_agent_auth() -> None:
     assert captured["path"] == "/v1/repos/grubbyhacker/ykmcorpus/issues/5/comments"
     assert captured["auth"] is not None
     assert captured["body"] == {
-        "body": "Curator repair completed and this PR is ready for review again."
+        "body": "Curator repair completed and this PR is ready for review again.",
+        "metadata": {
+            "YKM-Curator-Run": "run-pr-repair",
+            "YKM-Curator-Action": "repair",
+        },
     }
 
 
@@ -4617,8 +4625,11 @@ def test_pr_repair_handoff_stops_when_comment_fails(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    captured_comment_kwargs: dict[str, object] = {}
+
     class FailingCommentAdapter:
         def add_issue_comment(self, **kwargs) -> ExecutionResult:
+            captured_comment_kwargs.update(kwargs)
             return ExecutionResult(
                 action_id=kwargs["action_id"],
                 operation="issue.comment",
@@ -4689,6 +4700,11 @@ def test_pr_repair_handoff_stops_when_comment_fails(
     assert results[0].operation == "issue.comment"
     assert results[0].status == "failed"
     assert results[0].idempotency_key == "pr-repair-comment:5:abc123repair"
+    assert captured_comment_kwargs["metadata"] == {
+        "YKM-Curator-Action": "repair",
+        "YKM-Curator-PR": "5",
+        "YKM-Curator-Run": "run",
+    }
     assert repair.review_request_comment_status == "failed"
     assert repair.review_request_comment_message == "comment failed"
     assert repair.dismissed_review_count == 0
