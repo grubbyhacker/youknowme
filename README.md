@@ -54,6 +54,19 @@ Private eval cases can live outside this repo and be passed with `--cases /path/
 
 Generated indexes and logs live under `.ykm/` and are ignored.
 
+## Live MCP CLI
+
+Use `ykm live` to call the production MCP route from a development machine with local Cloudflare
+Access credentials in `.env`.
+
+```bash
+uv run ykm live health --pretty
+uv run ykm live query "thermostat setup" --limit 2 --pretty
+uv run ykm live feedback --category agent_note --comment "live CLI smoke" --dry-run --pretty
+```
+
+See `docs/ykm-live-cli.md` for auth variables, upload examples, and write-safety behavior.
+
 ## Reusable Index Artifact Tools
 
 Private corpus repositories can install this package and use the public YKM build tooling without

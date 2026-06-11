@@ -182,6 +182,22 @@ Codex may be useful as a worker, but it should not own the durable queue or PR l
 The durable truth should live in intake metadata, branch names, PR bodies, PR comments, and GitHub
 state.
 
+### Free-Range Worker Experiment
+
+Keep an explicit simplification track open for a "free-range" Curator worker that runs Codex or
+Hermes with a strong prompt over one upload document path. This is most reasonable for upload-review
+work first, because that path already has corpus validation, build checks, GitHub PR review, human
+merge control, mutation budgets, and OpenRouter token limits.
+
+The experiment should compare the current typed Curator path against a simpler worker that receives
+the upload bundle, the intended corpus checkout, the validation command, and clear PR expectations.
+It should still produce reviewable corpus changes rather than mutating production state directly.
+
+This is not a decision to abandon the deterministic controller. It is a standing check against
+overbuilding or overfitting upload and especially feedback processing to the current batch of runtime
+problems. If a simpler prompted worker reliably produces valid, reviewable upload PRs, future Curator
+work should prefer that simplification over adding orchestration complexity.
+
 ## Agent SDK Direction
 
 The first implementation should be SDK-first and provider-neutral.
