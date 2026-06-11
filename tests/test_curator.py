@@ -80,6 +80,7 @@ from curator.upload_pr import upload_review_pull_intent
 from ykm.curator import CuratorDryRunConfig, run_curator_dry_run
 from curator.runner import (
     _complete_pr_repair_handoffs,
+    _upload_review_model_request,
     _write_pending_pr_repair_handoffs,
     write_curator_reports,
 )
@@ -6177,6 +6178,51 @@ def test_upload_review_observe_records_validation_failure(
     assert observation.returncode == 7
     assert observation.message == "corpus validation failed"
     assert "bad frontmatter" in observation.stderr_tail
+
+
+def test_upload_review_model_prompt_requires_policy_patch_for_new_metadata(
+    tmp_path: Path,
+) -> None:
+    bundle_path = tmp_path / "upl_writing"
+    files = bundle_path / "files"
+    files.mkdir(parents=True)
+    (bundle_path / "manifest.json").write_text(
+        json.dumps({"upload_id": "upl_writing"}) + "\n",
+        encoding="utf-8",
+    )
+    (files / "summary.md").write_text(
+        "---\nid: narrow-pipe-summary\ntype: writing-sample\ntags: [writing]\n"
+        "related: [the-narrow-pipe]\n---\n\n# Summary\n",
+        encoding="utf-8",
+    )
+    bundle = type("Bundle", (), {"upload_id": "upl_writing", "path": bundle_path})()
+
+    request = _upload_review_model_request(
+        run_id="run-upload-model",
+        model="anthropic/claude-sonnet-4.6",
+        model_call_budget=ModelCallBudget(max_calls_per_run=1, max_tokens_per_run=1000),
+        bundle=bundle,
+    )
+
+    user_message = request.input["messages"][1]
+    prompt_input = json.loads(user_message["content"])
+    constraints = prompt_input["constraints"]
+    assert (
+        "Every frontmatter type must already be in corpus_policy.allowed_types or be listed in "
+        "policy_patch.allowed_types_add."
+    ) in constraints
+    assert (
+        "Every frontmatter tag must already be in corpus_policy.allowed_tags or be listed in "
+        "policy_patch.allowed_tags_add."
+    ) in constraints
+    assert (
+        "Every output path must start with an existing corpus_policy.corpus_roots value or one "
+        "listed in policy_patch.corpus_roots_add."
+    ) in constraints
+    assert (
+        "Do not invent related IDs. Only include related when the upload itself names an exact "
+        "existing corpus id; otherwise mention the relationship in prose instead."
+    ) in constraints
 
 
 def test_runner_observes_model_upload_review_draft_validation(
