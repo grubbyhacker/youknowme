@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import cast
 
 from curator.models import (
+    DEFAULT_TARGET_REPO,
     ExecutionIntent,
     FeedbackDecision,
     FeedbackDecisionPreview,
@@ -127,8 +128,10 @@ def build_execution_intents(
     run_id: str,
     actions: list[ProposedAction],
     policy_decisions: list[PolicyDecision],
+    feedback_records: list[dict[str, object]] | None = None,
 ) -> list[ExecutionIntent]:
     decisions_by_action = {decision.action_id: decision for decision in policy_decisions}
+    feedback_records_by_id = _feedback_records_by_id(feedback_records or [])
     intents: list[ExecutionIntent] = []
     for action in actions:
         decision = decisions_by_action.get(action.action_id)
@@ -145,7 +148,7 @@ def build_execution_intents(
                     target_repo=action.target_repo,
                     evidence=action.evidence,
                     title=_intent_title(action),
-                    body=draft_action_body(run_id, action),
+                    body=_intent_body(run_id, action, feedback_records_by_id),
                     labels=_issue_labels(action),
                     assignees=_issue_assignees(action),
                 )
@@ -162,7 +165,7 @@ def build_execution_intents(
                     branch=deterministic_branch_name(run_id, action),
                     evidence=action.evidence,
                     title=_intent_title(action),
-                    body=draft_action_body(run_id, action),
+                    body=_intent_body(run_id, action, feedback_records_by_id),
                 )
             )
     return intents
@@ -183,6 +186,35 @@ def _issue_assignees(action: ProposedAction) -> list[str]:
     if action.classification in {"owner_action", "fallback"}:
         return [DEFAULT_OWNER_ASSIGNEE]
     return []
+
+
+def _intent_body(
+    run_id: str,
+    action: ProposedAction,
+    feedback_records_by_id: dict[str, dict[str, object]],
+) -> str:
+    if action.target_repo != DEFAULT_TARGET_REPO:
+        return draft_action_body(run_id, action)
+    return draft_action_body(
+        run_id,
+        action,
+        feedback_records=[
+            feedback_records_by_id[feedback_id]
+            for feedback_id in action.evidence.feedback_ids
+            if feedback_id in feedback_records_by_id
+        ],
+    )
+
+
+def _feedback_records_by_id(
+    feedback_records: list[dict[str, object]],
+) -> dict[str, dict[str, object]]:
+    records_by_id: dict[str, dict[str, object]] = {}
+    for record in feedback_records:
+        feedback_id = record.get("feedback_id")
+        if isinstance(feedback_id, str):
+            records_by_id[feedback_id] = record
+    return records_by_id
 
 
 def _decision_reason(action: ProposedAction) -> str:

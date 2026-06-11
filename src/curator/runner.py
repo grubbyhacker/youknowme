@@ -509,7 +509,10 @@ def _run_with_lock(
         policy_from_budget(github_mutation_budget),
     )
     feedback_execution_intents = build_execution_intents(
-        run_id, feedback_plan.proposed_actions, policy_decisions
+        run_id,
+        feedback_plan.proposed_actions,
+        policy_decisions,
+        feedback_records=feedback_records,
     )
     execution_intents = [*feedback_execution_intents]
     execution_intents.extend(
