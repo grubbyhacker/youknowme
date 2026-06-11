@@ -69,7 +69,7 @@ from curator.upload_state import (
     transition_upload_metadata,
     validate_upload_transition,
 )
-from curator.upload_observe import observe_upload_review_draft
+from curator.upload_observe import apply_upload_review_draft_to_checkout, observe_upload_review_draft
 from curator.upload_pr import upload_review_pull_intent
 from ykm.curator import CuratorDryRunConfig, run_curator_dry_run
 from curator.runner import _complete_pr_repair_handoffs, write_curator_reports
