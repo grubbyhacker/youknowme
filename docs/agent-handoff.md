@@ -88,7 +88,7 @@ docker compose up -d --force-recreate youknowme
 ## Verification Completed
 
 - `mise run lint`: Ruff passing.
-- `mise run test`: `244` tests passing as of the Curator upload PR title-context follow-up.
+- `mise run test`: `285` tests passing as of the agentic Curator upload budget/reporting follow-up.
 - `YKM_EMBEDDING_PROVIDER=openrouter mise run real-smoke`: rebuilt `.ykm/real-index` from
   `~/src/ykmcorpus`.
 - `YKM_EMBEDDING_PROVIDER=openrouter mise run container-smoke`: passed against the rebuilt real
@@ -115,67 +115,72 @@ docker compose up -d --force-recreate youknowme
 
 ## Curator Current State
 
-The upload-review observe and live PR execution path was merged through
-`grubbyhacker/youknowme#10` and deployed to `hermes-vps`.
+Curator upload intake is now agentic and enabled on the hourly timer.
 
 Deployment details:
 
-- Curator launcher image on the VPS: `youknowme:curator-upload-pr-live-20260610-34350f0`.
-- The Curator image contains the app virtualenv plus `git`, `mise`, and `uv`; the corpus validator's
-  `uv@0.11.18` and managed Python `3.12.13` are preinstalled so `mise run validate` can run without
-  network access.
+- Current deployed Curator image on the VPS:
+  `youknowme:curator-agentic-upload-20260611-1cc9b97`.
+- Merged code PRs:
+  - `grubbyhacker/youknowme#20`: agentic Codex upload-review executor.
+  - `grubbyhacker/youknowme#21`: upload mutation-budget cap and report cleanup.
 - sandbox-broker config: `/docker/gh-agent-broker/configs/sandbox-beta.yaml`.
-- Config backups from launch: `sandbox-beta.yaml.bak-live-upload-20260610T072100Z` and
-  `sandbox-beta.yaml.bak-live-upload-budget-20260610T072245Z`.
-- Read-only corpus validation source on the VPS: `/opt/youknowme/ykmcorpus`, refreshed from
-  `grubbyhacker/ykmcorpus` `main` at `c691e77`.
-- Manual live profile: `ykm-curator-upload-pr-live`.
-- The live profile uses the model-backed Curator template, mounts `/opt/youknowme/ykmcorpus` at
-  `/data/ykmcorpus:ro`, and runs `curator run ... --corpus-checkout /data/ykmcorpus`.
-- Operator principal `ykm-curator-operator` can launch `ykm-curator-upload-pr-live`.
-- Timer principal `ykm-curator-timer` cannot launch the live profile; it remains scoped to
-  `ykm-curator-dry-run` and `ykm-curator-state-only`.
-- The hourly timer is enabled and active. Last verified scheduled dry-run smoke:
-  `20260610T073539Z-04ad5e79ed5935aa`, status `pass`, mode `dry_run`, `0` GitHub mutations,
-  `0` model calls, no validation failures, no partial failures.
+- Recent config/service backups:
+  - `configs/sandbox-beta.yaml.bak-agentic-upload-20260611T062504Z`
+  - `configs/sandbox-beta.yaml.bak-agentic-upload-pr21-20260611T063819Z`
+  - `configs/sandbox-beta.yaml.bak-enable-live-upload-timer-20260611T064759Z`
+  - `/etc/systemd/system/ykm-curator-launch.service.bak-live-upload-timer-20260611T064812Z`
+- Curator templates `ykm-curator-dry-run` and `ykm-curator-dry-run-model` both use the current image.
+- Manual live upload profile `ykm-curator-upload-pr-live` remains available to
+  `ykm-curator-operator` and accepts required `parameters.upload_ids`.
+- Timer profile `ykm-curator-upload-pr-timer` is live and unscoped. It runs:
+  - mode: `manual_live`
+  - enabled actions: `["plan_uploads"]`
+  - executor: `upload_review_executor: "codex_proxy"`
+  - model: `ykm-codex-gpt-5-mini`
+  - attempts: `upload_review_max_attempts: 2`
+  - validation: `["mise", "run", "validate"]`
+  - GitHub mutation budget: `max_new_objects_per_run=1`, `upload=1`, `feedback=0`
+- `ykm-curator-timer` is allowed to launch
+  `ykm-curator-dry-run`, `ykm-curator-state-only`, and `ykm-curator-upload-pr-timer`.
+- `ykm-curator-launch.service` now launches
+  `/v1/launch-profiles/ykm-curator-upload-pr-timer/launch`.
+- `ykm-curator-launch.timer` is enabled and active.
+- The timer token was rotated on June 11, 2026 after it was exposed in terminal output during
+  service inspection; do not print timer/operator env files.
 
-Live upload PR launch:
+Agentic upload and repair proof:
 
-- Successful run: `20260610T072256Z-723466d21e81712e`.
+- Upload `upl_20260611_053713_9d1639ef` was processed by live run
+  `20260611T062556Z-37bb16ff3829516f`.
+- Run result: `pass`, `manual_live`, `1` GitHub mutation, `0` model calls,
+  `0` validation failures.
+- Curator opened `grubbyhacker/ykmcorpus#10` for `final/the-narrow-pipe-summary.md`.
+- Owner left inline review comments only, without labels. Repair run
+  `20260611T063859Z-8891fe53f993ef1d` still classified PR #10 as
+  `commented_needs_triage`.
+- Curator repaired PR #10 by moving the document to `writing/the-narrow-pipe-summary.md`, changing
+  the corpus policy root from `final` to `writing`, validating, pushing commit
+  `b492bee7e1419b2104d0cea2f1f8fa13bce9275d`, resolving the two review threads, adding
+  `ym-curator: waiting-review`, and posting the repair handoff comment.
+- `grubbyhacker/ykmcorpus#10` is now merged. The corpus index has not yet been rebuilt/deployed from
+  that merge in this handoff.
+
+Latest live timer smoke:
+
+- Run: `20260611T064818Z-84a12a675b996a89`.
 - Status: `pass`.
 - Mode: `manual_live`.
-- Model: `anthropic/claude-sonnet-4.6`.
-- Model budget used: `3` calls, `16551` tokens; budget was `3` calls / `30000` tokens.
-- GitHub mutation budget: `max_new_objects_per_run=2`, `upload=2`, `feedback=0`.
-- Observations: `3` upload-review observations, `2` corpus validation passes, `1` skipped draft,
-  `0` validation failures.
-- GitHub mutations: `2`.
-- Open corpus PRs created:
-  - `grubbyhacker/ykmcorpus#5`: `preferences/dev-environment.md`.
-  - `grubbyhacker/ykmcorpus#6`: `homemaint/santa-cruz-freeflow-excursion-owner-manual.md`.
-- The skipped upload was `upl_20260606_043954_cdda43dd`; the model did not produce an integrated
-  corpus draft for it, so no PR was created.
+- Upload previews: `0`.
+- GitHub mutations: `0`.
+- Model calls: `0`.
+- Validation failures: `0`.
 
-Launch lesson:
+Known Curator follow-up:
 
-- The first live attempt, `20260610T072155Z-8ccbb52091c6ee86`, failed closed because there were
-  `3` pending upload previews and the task had only `2` model calls budgeted. The profile now budgets
-  `3` model calls while keeping GitHub upload mutations bounded to `2`.
-
-Current restart branch:
-
-- Branch: `curator/upload-pr-title-context`.
-- Purpose: make future upload-review PR titles/descriptions show the destination corpus page at a
-  glance, and add a dev-machine live MCP CLI for operator testing.
-- Code change: `src/curator/upload_pr.py` now titles future one-file upload PRs with the draft path,
-  e.g. `YouKnowMe Curator upload review: preferences/dev-environment.md`, and adds a `Page:` or
-  `Pages:` line near the top of the PR body.
-- Live CLI change: `ykm live ...` can call production MCP `tools`, `health`, `query`, `retrieve`,
-  `search`, `fetch`, guarded `upload`, and guarded `feedback` using Cloudflare Access credentials
-  from `.env`; see `docs/ykm-live-cli.md`.
-- Existing PRs `grubbyhacker/ykmcorpus#5` and `grubbyhacker/ykmcorpus#6` were intentionally left as
-  is.
-- Verification on this branch: `mise run lint` passed and `mise run test` passed with `253` tests.
+- `grubbyhacker/youknowme#22`: Curator repair should refresh upload PR title/body metadata after a
+  file move. In PR #10, repair moved the file to `writing/`, but the PR title still referenced the
+  old `final/` path.
 
 ## Important Lessons
 
@@ -242,20 +247,15 @@ Current Phase 2 evidence:
   general knowledge is misleading because the private corpus says the home hot tub is chlorine-based.
 
 - Good next Curator slices:
-  - Review and merge the two open `ykmcorpus` upload PRs if their content is acceptable.
-  - After those PRs merge and a new corpus index artifact/build is available, deploy the updated
-    corpus index to production and run the normal MCP health/search smoke.
-  - Decide whether the skipped upload should remain owner-action-only or needs a better model prompt
-    / intake-quality path.
-  - Keep a simplification track open for a "free-range" Codex/Hermes upload-review worker with a
-    strong prompt. Upload review is relatively safe to compare this way because corpus validation,
-    PR/HITL review, mutation budgets, and OpenRouter token limits already bound the path. Watch for
-    signs that the typed Curator upload and feedback machinery is overbuilt or overfit to current
-    runtime problems.
-  - Consider a follow-up that marks upload bundles claimed/processed only after PR creation and merge
-    policy is settled; the current launch intentionally created PRs without moving queue state.
-  - Continue keeping the live upload profile manual-only until enough runs justify automation.
-- Keep collecting usage-derived private eval cases as maintenance.
+  - Rebuild and deploy the production corpus index after the `ykmcorpus#10` merge, preserving the
+    existing index symlink/rollback shape and the timerd index-promotion task.
+  - Watch the next few hourly `ykm-curator-upload-pr-timer` runs for duplicate PRs, queue-state
+    drift, validation failures, and whether one upload per run is enough.
+  - Fix `grubbyhacker/youknowme#22` so Curator repair refreshes upload PR title/body metadata after
+    file moves.
+  - Decide whether PR repair should also be timer-enabled, or remain manual/operator-triggered until
+    a few more owner-review loops are observed.
+  - Continue collecting usage-derived private eval cases as maintenance.
 - If direct Cloudflare Access works for a generic MCP client but ChatGPT or Claude does not, stop and
   record the exact compatibility failure. Do not fall back to Cloudflare MCP Portal with an
   unauthenticated upstream.
