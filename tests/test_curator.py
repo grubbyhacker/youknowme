@@ -12,7 +12,12 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from curator.adapters import FixtureModelAdapter, HttpBrokerAdapter, HttpModelProxyAdapter
+from curator.adapters import (
+    FixtureBrokerAdapter,
+    FixtureModelAdapter,
+    HttpBrokerAdapter,
+    HttpModelProxyAdapter,
+)
 from curator.body import MAX_BODY_CHARS, draft_action_body
 from curator.markers import parse_curator_markers, render_action_markers
 from curator.model_tasks import (
@@ -5154,6 +5159,86 @@ def test_state_only_appends_reconciliation_feedback_decisions_without_queue_muta
     assert claimed.exists()
 
 
+def test_state_only_applies_closed_unmerged_upload_pr_as_deferred(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    intake = tmp_path / "intake"
+    feedback = intake / "feedback" / "feedback.jsonl"
+    feedback.parent.mkdir(parents=True)
+    feedback.write_text("", encoding="utf-8")
+    claimed = intake / "uploads" / "claimed" / "upl_1"
+    claimed.mkdir(parents=True)
+    metadata = {
+        "schema_version": "1",
+        "upload_id": "upl_1",
+        "state": "pr_opened",
+        "run_id": "run-old",
+        "pr_number": 44,
+    }
+    metadata_path = claimed / "curator.json"
+    metadata_path.write_text(json.dumps(metadata) + "\n", encoding="utf-8")
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "run_id": "run-state-reconcile",
+                "mode": "state_only",
+                "enabled_actions": ["reconcile"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    broker_fixture = tmp_path / "broker-fixture.json"
+    broker_fixture.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "reachable": True,
+                "pr_snapshots": [
+                    {
+                        "number": 44,
+                        "state": "closed",
+                        "body": "\n".join(
+                            [
+                                "YKM-Curator-Run: run-state-reconcile",
+                                "YKM-Curator-Upload: upl_1",
+                            ]
+                        ),
+                        "branch": "curator/run-state-reconcile/upload-upl-1",
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="ignored",
+            intake=intake,
+            output=tmp_path / "output",
+            task=task,
+            broker_fixture=broker_fixture,
+        )
+    )
+
+    updated_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert report.status == "pass"
+    assert report.upload_metadata_update_count == 1
+    assert updated_metadata["upload_id"] == "upl_1"
+    assert updated_metadata["state"] == "deferred"
+    assert updated_metadata["decision"] == "deferred"
+    assert updated_metadata["run_id"] == "run-state-reconcile"
+    assert updated_metadata["pr_number"] == 44
+    assert updated_metadata["blocking_reason"] == "Closed-unmerged Curator PR can defer linked upload."
+    assert claimed.exists()
+
+
 def test_state_only_does_not_apply_reconciliation_when_disabled(
     tmp_path: Path,
     monkeypatch,
@@ -6161,6 +6246,184 @@ def test_runner_manual_live_creates_upload_review_pr_after_validation(
         "curator/run-upload-pr/upload-upl-tooling-"
     )
     assert any(probe.name == "manual-live-upload-pr" and probe.status == "pass" for probe in report.probes)
+
+
+def test_runner_retries_pending_upload_pr_creation_after_broker_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    intake = tmp_path / "intake"
+    pending = intake / "uploads" / "pending" / "upl_tooling"
+    files = pending / "files"
+    files.mkdir(parents=True)
+    (pending / "manifest.json").write_text(
+        json.dumps({"upload_id": "upl_tooling"}) + "\n",
+        encoding="utf-8",
+    )
+    (files / "tooling.md").write_text(
+        "---\nid: tooling\ntype: procedure\ntags: [home]\n---\n\n# Tooling\n",
+        encoding="utf-8",
+    )
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "run_id": "run-upload-pr-retry",
+                "mode": "manual_live",
+                "enabled_actions": ["plan_uploads"],
+                "github_mutation_budget": {
+                    "max_new_objects_per_run": 2,
+                    "upload": 2,
+                    "feedback": 0,
+                },
+                "model_upload_review": True,
+                "upload_review_model": "anthropic/claude-sonnet-4.6",
+                "model_call_budget": {"max_calls_per_run": 1, "max_tokens_per_run": 1000},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    model_fixture = tmp_path / "model-fixture.json"
+    model_fixture.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "reachable": True,
+                "max_calls_per_run": 1,
+                "max_tokens_per_run": 1000,
+                "responses": {
+                    "upload_review": {
+                        "schema_version": "1",
+                        "task_name": "upload_review",
+                        "output": {
+                            "schema_version": "1",
+                            "upload_id": "upl_tooling",
+                            "decision": "integrated",
+                            "files": [
+                                {
+                                    "path": "homemaint/tooling.md",
+                                    "content": (
+                                        "---\n"
+                                        "id: tooling\n"
+                                        "type: procedure\n"
+                                        "tags: [home-maintenance]\n"
+                                        "---\n\n"
+                                        "# Tooling\n"
+                                    ),
+                                }
+                            ],
+                            "policy_patch": {
+                                "allowed_types_add": [],
+                                "allowed_tags_add": [],
+                            },
+                            "content_summary": "A tooling note about Python development setup.",
+                            "rationale": "The upload can be normalized.",
+                            "reason": "ready for validation",
+                        },
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    broker_fixture = tmp_path / "broker-fixture.json"
+    broker_fixture.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "reachable": True,
+                "existing_branches": [],
+                "existing_idempotency_keys": [],
+                "allowed_operations": ["pull.create"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _fake_mise(tmp_path, monkeypatch, exit_code=0, stdout="validation ok\n")
+    _fake_git(tmp_path, monkeypatch)
+    monkeypatch.setenv("BROKER_AGENT_ID", "ykm-curator")
+    monkeypatch.setenv("BROKER_AGENT_SECRET", "broker-secret")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    def fail_create_pull(self, intent: ExecutionIntent) -> ExecutionResult:
+        return ExecutionResult(
+            action_id=intent.action_id,
+            operation=intent.operation,
+            idempotency_key=intent.idempotency_key,
+            status="failed",
+            target_repo=intent.target_repo,
+            branch=intent.branch,
+            message="broker unavailable",
+        )
+
+    original_create_pull = FixtureBrokerAdapter.create_pull
+    monkeypatch.setattr(FixtureBrokerAdapter, "create_pull", fail_create_pull)
+
+    first_report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="ignored",
+            intake=intake,
+            output=tmp_path / "output-first",
+            task=task,
+            broker_url="http://broker:8080",
+            broker_fixture=broker_fixture,
+            model_proxy_fixture=model_fixture,
+            corpus_checkout=_fake_corpus_checkout(tmp_path),
+        )
+    )
+
+    pending_files = list((intake / "upload-pr-creations" / "pending").glob("*.json"))
+    assert first_report.status == "fail"
+    assert len(pending_files) == 1
+    pending_intent = json.loads(pending_files[0].read_text(encoding="utf-8"))
+    assert pending_intent["operation"] == "pull.create"
+    assert pending_intent["branch"].startswith("curator/run-upload-pr-retry/upload-upl-tooling-")
+
+    monkeypatch.setattr(FixtureBrokerAdapter, "create_pull", original_create_pull)
+    retry_task = tmp_path / "retry-task.json"
+    retry_task.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "run_id": "run-upload-pr-retry-2",
+                "mode": "manual_live",
+                "enabled_actions": ["plan_uploads"],
+                "github_mutation_budget": {
+                    "max_new_objects_per_run": 2,
+                    "upload": 2,
+                    "feedback": 0,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    second_report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="ignored",
+            intake=intake,
+            output=tmp_path / "output-second",
+            task=retry_task,
+            broker_url="http://broker:8080",
+            broker_fixture=broker_fixture,
+            corpus_checkout=_fake_corpus_checkout(tmp_path / "retry"),
+        )
+    )
+
+    assert second_report.status == "pass"
+    retried_results = [
+        result
+        for result in second_report.simulated_execution_results
+        if result["operation"] == "pull.create"
+    ]
+    assert len(retried_results) == 1
+    assert retried_results[0]["status"] == "simulated"
+    assert not pending_files[0].exists()
 
 
 def test_upload_plan_reenters_deferred_metadata_only_when_trigger_is_ready(
