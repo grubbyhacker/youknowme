@@ -32,6 +32,7 @@ from curator.models import (
     ModelCallBudget,
     ModelCallRequest,
     PrRepairResult,
+    UploadCuratorMetadata,
     UploadPlan,
     UploadDecision,
     UploadQueueSnapshot,
@@ -751,6 +752,16 @@ def _run_with_lock(
                 observations=upload_review_observations,
                 outputs=upload_model_outputs,
             )
+            upload_pr_metadata_paths, upload_pr_metadata_probes = (
+                _apply_upload_pr_execution_results(
+                    run_id=run_id,
+                    upload_snapshot=queue_snapshot,
+                    upload_plan=upload_plan,
+                    results=live_execution_results,
+                )
+            )
+            upload_metadata_update_paths.extend(upload_pr_metadata_paths)
+            probes.extend(upload_pr_metadata_probes)
             probes.append(
                 CuratorProbe(
                     name="manual-live-upload-pr",
@@ -1763,6 +1774,112 @@ def _upload_pr_creation_pending_dir(intake: Path) -> Path:
 
 def _upload_pr_creation_path(intake: Path, intent: ExecutionIntent) -> Path:
     return _upload_pr_creation_pending_dir(intake) / f"{_slug_for_filename(intent.idempotency_key)}.json"
+
+
+def _apply_upload_pr_execution_results(
+    *,
+    run_id: str,
+    upload_snapshot: UploadQueueSnapshot,
+    upload_plan: UploadPlan,
+    results: list[ExecutionResult],
+) -> tuple[list[str], list[CuratorProbe]]:
+    bundles_by_upload = {bundle.upload_id: bundle for bundle in upload_snapshot.bundles}
+    previews_by_action = {preview.action_id: preview for preview in upload_plan.review_previews}
+    updated_paths: list[str] = []
+    probes: list[CuratorProbe] = []
+    for result in results:
+        if result.operation != "pull.create" or result.status == "failed":
+            continue
+        preview = previews_by_action.get(result.action_id)
+        if preview is None:
+            continue
+        bundle = bundles_by_upload.get(preview.upload_id)
+        if bundle is None:
+            probes.append(
+                CuratorProbe(
+                    name="upload-metadata-update",
+                    status="fail",
+                    message="upload PR was created but upload bundle is missing",
+                    details={"upload_id": preview.upload_id},
+                )
+            )
+            continue
+        try:
+            metadata_path = _mark_upload_pr_opened(
+                run_id=run_id,
+                bundle=bundle,
+                branch=result.branch or preview.branch,
+                pr_number=result.pr_number,
+            )
+        except Exception as exc:  # noqa: BLE001 - report write failure without hiding PR creation.
+            probes.append(
+                CuratorProbe(
+                    name="upload-metadata-update",
+                    status="fail",
+                    message=f"upload PR metadata update failed: {exc}",
+                    details={"upload_id": preview.upload_id, "path": bundle.path},
+                )
+            )
+            continue
+        updated_paths.append(str(metadata_path))
+    if updated_paths:
+        probes.append(
+            CuratorProbe(
+                name="upload-metadata-update",
+                status="pass",
+                message="upload curator metadata updated after PR creation",
+                details={"count": len(updated_paths), "paths": updated_paths[:20]},
+            )
+        )
+    return updated_paths, probes
+
+
+def _mark_upload_pr_opened(
+    *,
+    run_id: str,
+    bundle: Any,
+    branch: str,
+    pr_number: int | None,
+) -> Path:
+    upload_path = Path(bundle.path)
+    if bundle.queue == "pending":
+        destination = upload_path.parent.parent / "claimed" / bundle.upload_id
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists() and destination != upload_path:
+            raise FileExistsError(f"claimed upload already exists: {destination}")
+        upload_path.rename(destination)
+        upload_path = destination
+        metadata = UploadCuratorMetadata(
+            upload_id=bundle.upload_id,
+            state="pending",
+            run_id=run_id,
+        )
+        metadata = transition_upload_metadata(
+            metadata,
+            desired_state="claimed",
+            run_id=run_id,
+        )
+    elif bundle.queue == "claimed":
+        metadata = bundle.curator_metadata or UploadCuratorMetadata(
+            upload_id=bundle.upload_id,
+            state="claimed",
+            run_id=run_id,
+        )
+    else:
+        raise ValueError(f"upload PR creation cannot mark queue {bundle.queue!r} as pr_opened")
+    if metadata.state != "claimed":
+        raise ValueError(f"upload metadata must be claimed before pr_opened, got {metadata.state!r}")
+    metadata = transition_upload_metadata(
+        metadata,
+        desired_state="pr_opened",
+        run_id=run_id,
+        decision="integrated",
+        branch=branch,
+        pr_number=pr_number,
+    )
+    metadata_path = upload_path / "curator.json"
+    metadata_path.write_text(metadata.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    return metadata_path
 
 
 def _complete_pr_repair_handoffs(

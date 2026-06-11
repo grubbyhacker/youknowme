@@ -6245,6 +6245,15 @@ def test_runner_manual_live_creates_upload_review_pr_after_validation(
     assert report.simulated_execution_results[0]["branch"].startswith(
         "curator/run-upload-pr/upload-upl-tooling-"
     )
+    metadata_path = intake / "uploads" / "claimed" / "upl_tooling" / "curator.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["state"] == "pr_opened"
+    assert metadata["decision"] == "integrated"
+    assert metadata["run_id"] == "run-upload-pr"
+    assert metadata["branch"].startswith("curator/run-upload-pr/upload-upl-tooling-")
+    assert report.upload_metadata_update_count == 1
+    assert report.upload_metadata_update_paths == [str(metadata_path)]
+    assert not pending.exists()
     assert any(probe.name == "manual-live-upload-pr" and probe.status == "pass" for probe in report.probes)
 
 
@@ -6378,6 +6387,8 @@ def test_runner_retries_pending_upload_pr_creation_after_broker_failure(
 
     pending_files = list((intake / "upload-pr-creations" / "pending").glob("*.json"))
     assert first_report.status == "fail"
+    assert first_report.upload_metadata_update_count == 0
+    assert (intake / "uploads" / "pending" / "upl_tooling").exists()
     assert len(pending_files) == 1
     pending_intent = json.loads(pending_files[0].read_text(encoding="utf-8"))
     assert pending_intent["operation"] == "pull.create"
@@ -6423,6 +6434,13 @@ def test_runner_retries_pending_upload_pr_creation_after_broker_failure(
     ]
     assert len(retried_results) == 1
     assert retried_results[0]["status"] == "simulated"
+    metadata_path = intake / "uploads" / "claimed" / "upl_tooling" / "curator.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["state"] == "pr_opened"
+    assert metadata["decision"] == "integrated"
+    assert metadata["run_id"] == "run-upload-pr-retry-2"
+    assert metadata["branch"].startswith("curator/run-upload-pr-retry/upload-upl-tooling-")
+    assert second_report.upload_metadata_update_count == 1
     assert not pending_files[0].exists()
 
 
