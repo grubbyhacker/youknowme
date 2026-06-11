@@ -266,7 +266,9 @@ def _upload_review_preview(
         reason="Deterministic upload review preview only; no queue move or curator.json write.",
         draft_status=draft.status,
         draft_paths=[file.target_path for file in draft.files],
-        blocking_reason=draft.reason if draft.status == "needs_owner_action" else None,
+        blocking_reason=draft.reason
+        if draft.status in {"model_review_candidate", "needs_owner_action"}
+        else None,
         warnings=draft.warnings,
     )
 

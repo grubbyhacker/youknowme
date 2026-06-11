@@ -99,8 +99,9 @@ upload-review model. It requires a non-empty `upload_review_model`, one remainin
 checkout path supplied to the worker, for example through `curator run --corpus-checkout` or
 `YKM_CORPUS_CHECKOUT`. Integrated model drafts are applied only to a temporary checkout copy. The
 model may propose additive `policy_patch` changes for `corpus_roots`, `allowed_types`, and
-`allowed_tags`; this is the preferred way to ask owner permission for a bounded schema expansion,
-because the resulting PR is reviewable and rejectable. The Curator then runs `mise run validate` in
+`allowed_tags`. Corpus policy is a consistency guardrail and review surface, not an immutable
+permission boundary; additive schema evolution should be proposed in the same PR as the normalized
+document when the change is bounded and reviewable. The Curator then runs `mise run validate` in
 that copy and records a structured observation with status, command, exit code, bounded
 stdout/stderr tails, draft paths, and policy additions. Failed observations fail the run and
 increase `validation_failure_count`; skipped non-integrated model decisions are reported but do not
@@ -243,10 +244,10 @@ would be used by a later broker-backed upload review. They are plan data only an
 move, reject, archive, or otherwise mutate upload bundles.
 They also include a deterministic draft-readiness classification. `corpus_pr_candidate` means the
 uploaded markdown already has frontmatter that can be normalized into current corpus policy and the
-preview lists the proposed corpus paths. `needs_owner_action` means the upload is well-formed intake
-but cannot safely become a corpus PR without owner input, such as missing frontmatter or unsupported
-document type. Unsupported tags may be dropped in the proposed draft and reported as warnings so the
-operator can review the normalization before any live PR is opened.
+preview lists the proposed corpus paths. `model_review_candidate` means the upload appears
+reviewable but needs model judgment and likely additive corpus-policy changes before a PR can be
+created. `needs_owner_action` means the upload cannot become a small reviewable markdown and policy
+diff from the supplied context.
 
 When deferred upload metadata exists, deterministic upload planning re-enters it only after a
 satisfied trigger. `reentry_trigger: "next_run"` is ready immediately, and

@@ -274,6 +274,7 @@ class UploadReviewPreview(BaseModel):
     draft_status: Literal[
         "not_evaluated",
         "corpus_pr_candidate",
+        "model_review_candidate",
         "needs_owner_action",
     ] = "not_evaluated"
     draft_paths: list[str] = Field(default_factory=list)

@@ -95,6 +95,7 @@ def build_upload_review_scenario_request(
             "Produce reviewable corpus markdown files; do not merge or publish anything.",
             "Every output file must be complete markdown with a frontmatter block whose delimiter lines are exactly three hyphens: ---.",
             "Output frontmatter may contain only id, type, tags, aliases, and related; choose the corpus root through the file path, not a root frontmatter field.",
+            "Treat corpus policy as a consistency guardrail and review surface, not as an immutable permission boundary.",
             "Prefer existing corpus types and tags when they fit.",
             "When existing vocabulary does not fit, propose a small policy_patch instead of misclassifying the document.",
             "Use policy_patch.corpus_roots_add, allowed_types_add, and allowed_tags_add for new vocabulary needed by the draft.",

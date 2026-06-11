@@ -49,7 +49,10 @@ def test_upload_review_scenario_expected_outputs_score(case) -> None:
 
 
 def test_upload_review_prompt_carries_policy_agency_advice() -> None:
-    case = load_upload_review_scenario_cases(DEFAULT_UPLOAD_SCENARIO_FIXTURE)[0]
+    case = load_upload_review_scenario_cases(
+        DEFAULT_UPLOAD_SCENARIO_FIXTURE,
+        names={"dev_environment_preference_policy_addition"},
+    )[0]
 
     request = build_upload_review_scenario_request(
         case=case,
@@ -61,6 +64,7 @@ def test_upload_review_prompt_carries_policy_agency_advice() -> None:
     assert prompt_input["upload_id"] == "upl_eval_dev_environment"
     assert "preference" not in prompt_input["corpus_policy"]["allowed_types"]
     assert "uv" not in prompt_input["corpus_policy"]["allowed_tags"]
+    assert any("consistency guardrail" in item for item in prompt_input["constraints"])
     assert any("propose a small policy_patch" in item for item in prompt_input["constraints"])
     assert any("PR is the owner permission request" in item for item in prompt_input["constraints"])
     assert any("corpus_roots_add" in item for item in prompt_input["constraints"])

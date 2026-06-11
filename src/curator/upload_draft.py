@@ -110,7 +110,7 @@ class UploadCorpusDraftFile(BaseModel):
 class UploadCorpusDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    status: Literal["corpus_pr_candidate", "needs_owner_action"]
+    status: Literal["corpus_pr_candidate", "model_review_candidate", "needs_owner_action"]
     files: list[UploadCorpusDraftFile] = Field(default_factory=list)
     reason: str
     warnings: list[str] = Field(default_factory=list)
@@ -141,11 +141,24 @@ def draft_upload_corpus_change(bundle_path: Path) -> UploadCorpusDraft:
                 reason=f"{path.name} is not valid UTF-8",
             )
         metadata, body = parse_frontmatter(text)
-        normalized, file_warnings, blocking_reason = _normalize_metadata(metadata)
+        if not body.strip():
+            return UploadCorpusDraft(
+                status="needs_owner_action",
+                reason=f"{path.name} has no markdown body content",
+            )
+        normalized, file_warnings, model_review_reason, blocking_reason = _normalize_metadata(
+            metadata
+        )
         if blocking_reason is not None:
             return UploadCorpusDraft(
                 status="needs_owner_action",
                 reason=f"{path.name}: {blocking_reason}",
+                warnings=warnings + file_warnings,
+            )
+        if model_review_reason is not None:
+            return UploadCorpusDraft(
+                status="model_review_candidate",
+                reason=f"{path.name}: {model_review_reason}",
                 warnings=warnings + file_warnings,
             )
         assert normalized is not None
@@ -170,23 +183,35 @@ def draft_upload_corpus_change(bundle_path: Path) -> UploadCorpusDraft:
 
 def _normalize_metadata(
     metadata: dict[str, object],
-) -> tuple[dict[str, object] | None, list[str], str | None]:
+) -> tuple[dict[str, object] | None, list[str], str | None, str | None]:
     warnings: list[str] = []
     doc_id = metadata.get("id")
+    if doc_id is None:
+        return None, warnings, "missing frontmatter id", None
     if not isinstance(doc_id, str) or not ID_RE.match(doc_id):
-        return None, warnings, "missing or invalid frontmatter id"
+        return None, warnings, None, "invalid frontmatter id"
     doc_type = metadata.get("type")
-    if not isinstance(doc_type, str) or doc_type not in ALLOWED_TYPES:
-        return None, warnings, "missing or unsupported frontmatter type"
+    if doc_type is None:
+        return None, warnings, "missing frontmatter type", None
+    if not isinstance(doc_type, str):
+        return None, warnings, None, "invalid frontmatter type"
+    if doc_type not in ALLOWED_TYPES:
+        return None, warnings, f"unsupported frontmatter type: {doc_type}", None
     raw_tags = metadata.get("tags")
     if not isinstance(raw_tags, list) or not raw_tags:
-        return None, warnings, "missing or invalid frontmatter tags"
+        return None, warnings, "missing or invalid frontmatter tags", None
     tags = [tag for tag in _string_list(raw_tags) if tag in ALLOWED_TAGS]
     dropped_tags = sorted(set(_string_list(raw_tags)) - set(tags))
     if dropped_tags:
-        warnings.append("dropped unsupported tags: " + ", ".join(dropped_tags))
+        warnings.append("unsupported tags need corpus policy review: " + ", ".join(dropped_tags))
+        return (
+            None,
+            warnings,
+            "unsupported frontmatter tags: " + ", ".join(dropped_tags),
+            None,
+        )
     if not tags:
-        return None, warnings, "frontmatter tags contain no supported corpus tags"
+        return None, warnings, "frontmatter tags contain no supported corpus tags", None
 
     normalized: dict[str, object] = {
         "id": doc_id,
@@ -199,7 +224,7 @@ def _normalize_metadata(
     related = [value for value in _string_list(metadata.get("related")) if ID_RE.match(value)]
     if related:
         normalized["related"] = sorted(set(related))
-    return normalized, warnings, None
+    return normalized, warnings, None, None
 
 
 def _target_path(filename: str, metadata: dict[str, object]) -> str:

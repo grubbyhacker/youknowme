@@ -5840,7 +5840,7 @@ def test_upload_plan_marks_corpus_ready_upload_draft(tmp_path: Path, monkeypatch
         """---
 id: hot-tub-note
 type: procedure
-tags: [home-maintenance, hot-tub, unsupported-tag]
+tags: [home-maintenance, hot-tub]
 ---
 
 # Hot Tub Note
@@ -5859,30 +5859,70 @@ Use the documented maintenance procedure.
     assert preview["draft_status"] == "corpus_pr_candidate"
     assert preview["draft_paths"] == ["homemaint/hot-tub-note.md"]
     assert preview["blocking_reason"] is None
-    assert preview["warnings"] == ["hot-tub-note.md: dropped unsupported tags: unsupported-tag"]
+    assert preview["warnings"] == []
     markdown = (tmp_path / "output" / "run-report.md").read_text(encoding="utf-8")
     assert "draft `corpus_pr_candidate` -> `homemaint/hot-tub-note.md`" in markdown
 
 
-def test_upload_plan_marks_upload_draft_needing_owner_action(
+def test_upload_plan_marks_unknown_vocabulary_for_model_review(
     tmp_path: Path, monkeypatch
 ) -> None:
     intake = tmp_path / "intake"
-    pending = intake / "uploads" / "pending" / "upl_project"
+    pending = intake / "uploads" / "pending" / "upl_birthdays"
     files = pending / "files"
     files.mkdir(parents=True)
     (pending / "manifest.json").write_text(
-        json.dumps({"upload_id": "upl_project"}) + "\n",
+        json.dumps({"upload_id": "upl_birthdays"}) + "\n",
         encoding="utf-8",
     )
-    (files / "project-note.md").write_text(
+    (files / "important-birthdays.md").write_text(
         """---
-id: project-note
-type: project
-tags: [tools]
+id: important-birthdays
+type: preference
+tags: [birthday, personal, reminder]
 ---
 
-# Project Note
+# Important Birthdays
+
+Remember these birthdays for future reminders.
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(run_id="run-upload-model-needed", intake=intake, output=tmp_path / "output")
+    )
+    preview = report.upload_review_previews[0]
+
+    assert preview["draft_status"] == "model_review_candidate"
+    assert preview["draft_paths"] == []
+    assert preview["blocking_reason"] == (
+        "important-birthdays.md: unsupported frontmatter type: preference"
+    )
+    markdown = (tmp_path / "output" / "run-report.md").read_text(encoding="utf-8")
+    assert "draft `model_review_candidate`: important-birthdays.md: unsupported" in markdown
+
+
+def test_upload_plan_marks_invalid_id_as_needing_owner_action(
+    tmp_path: Path, monkeypatch
+) -> None:
+    intake = tmp_path / "intake"
+    pending = intake / "uploads" / "pending" / "upl_invalid_id"
+    files = pending / "files"
+    files.mkdir(parents=True)
+    (pending / "manifest.json").write_text(
+        json.dumps({"upload_id": "upl_invalid_id"}) + "\n",
+        encoding="utf-8",
+    )
+    (files / "bad-id.md").write_text(
+        """---
+id: Bad ID
+type: procedure
+tags: [home]
+---
+
+# Bad ID
 """,
         encoding="utf-8",
     )
@@ -5895,9 +5935,9 @@ tags: [tools]
 
     assert preview["draft_status"] == "needs_owner_action"
     assert preview["draft_paths"] == []
-    assert preview["blocking_reason"] == "project-note.md: missing or unsupported frontmatter type"
+    assert preview["blocking_reason"] == "bad-id.md: invalid frontmatter id"
     markdown = (tmp_path / "output" / "run-report.md").read_text(encoding="utf-8")
-    assert "draft `needs_owner_action`: project-note.md: missing" in markdown
+    assert "draft `needs_owner_action`: bad-id.md: invalid frontmatter id" in markdown
 
 
 def test_upload_review_observe_applies_model_draft_to_temp_checkout_and_validates(
@@ -6023,7 +6063,7 @@ def test_runner_observes_model_upload_review_draft_validation(
         encoding="utf-8",
     )
     (files / "tooling.md").write_text(
-        "---\nid: tooling\ntype: procedure\ntags: [home]\n---\n\n# Tooling\n",
+        "---\nid: tooling\ntype: preference\ntags: [python, uv]\n---\n\n# Tooling\n",
         encoding="utf-8",
     )
     task = tmp_path / "task.json"
@@ -6060,20 +6100,21 @@ def test_runner_observes_model_upload_review_draft_validation(
                             "decision": "integrated",
                             "files": [
                                 {
-                                    "path": "homemaint/tooling.md",
+                                    "path": "preferences/tooling.md",
                                     "content": (
                                         "---\n"
                                         "id: tooling\n"
-                                        "type: procedure\n"
-                                        "tags: [home-maintenance]\n"
+                                        "type: preference\n"
+                                        "tags: [python, uv]\n"
                                         "---\n\n"
                                         "# Tooling\n"
                                     ),
                                 }
                             ],
                             "policy_patch": {
-                                "allowed_types_add": [],
-                                "allowed_tags_add": [],
+                                "corpus_roots_add": ["preferences"],
+                                "allowed_types_add": ["preference"],
+                                "allowed_tags_add": ["python", "uv"],
                             },
                             "content_summary": "A tooling note about Python development setup.",
                             "rationale": "The upload can be normalized.",
@@ -6105,11 +6146,15 @@ def test_runner_observes_model_upload_review_draft_validation(
     assert report.status == "pass"
     assert report.model_call_count == 1
     assert report.model_token_count == 20
+    assert report.upload_review_previews[0]["draft_status"] == "model_review_candidate"
     assert report.upload_review_observation_count == 1
     assert report.upload_review_validation_failure_count == 0
     observation = report.upload_review_observations[0]
     assert observation["status"] == "pass"
-    assert observation["draft_paths"] == ["homemaint/tooling.md"]
+    assert observation["draft_paths"] == ["preferences/tooling.md"]
+    assert observation["policy_roots_add"] == ["preferences"]
+    assert observation["policy_types_add"] == ["preference"]
+    assert observation["policy_tags_add"] == ["python", "uv"]
     assert observation["command"] == ["mise", "run", "validate"]
     markdown = (tmp_path / "output" / "run-report.md").read_text(encoding="utf-8")
     assert "## Upload Review Observations" in markdown
