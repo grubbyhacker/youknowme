@@ -124,14 +124,15 @@ def test_model_feedback_planning_response_schema_is_strict_json_schema() -> None
         "evidence",
         "target_repo",
     }
+    assert set(action_schema["properties"]["action_type"]["enum"]) == {
+        "corpus_pr",
+        "corpus_issue",
+        "product_issue",
+    }
     assert set(action_schema["properties"]["classification"]["enum"]) == {
-        "positive",
-        "non_actionable",
-        "owner_action",
         "corpus_candidate",
-        "upload_linked",
-        "capacity",
-        "insufficient_evidence",
+        "corpus_issue",
+        "fallback",
     }
     evidence_schema = schema["$defs"]["ActionEvidence"]
     assert set(evidence_schema["required"]) == {

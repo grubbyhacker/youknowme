@@ -169,6 +169,21 @@ def test_record_feedback_appends_bounded_jsonl(tmp_path: Path) -> None:
     assert "token" not in payload
 
 
+def test_record_feedback_accepts_comment_only(tmp_path: Path) -> None:
+    store = IntakeStore(tmp_path / "intake")
+
+    response = store.record_feedback(
+        FeedbackRequest(comment="This answer was not useful enough to act on."),
+        build_id="build-123",
+        auth_path="mcp",
+    )
+
+    payload = json.loads((tmp_path / "intake" / response.path).read_text(encoding="utf-8"))
+    assert response.accepted is True
+    assert payload["comment"] == "This answer was not useful enough to act on."
+    assert payload["category"] is None
+
+
 @pytest.mark.parametrize(
     "category",
     [

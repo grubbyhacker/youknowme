@@ -7,9 +7,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from curator.models import (
     CURATOR_SCHEMA_VERSION,
+    DEFAULT_PRODUCT_REPO,
     DEFAULT_TARGET_REPO,
     ActionEvidence,
-    CuratorActionType,
     CuratorPrState,
     FeedbackPlan,
     ModelCallResponse,
@@ -20,20 +20,17 @@ from curator.state import deterministic_idempotency_key
 
 
 FeedbackPlanningClassification = Literal[
-    "positive",
-    "non_actionable",
-    "owner_action",
     "corpus_candidate",
-    "upload_linked",
-    "capacity",
-    "insufficient_evidence",
+    "corpus_issue",
+    "fallback",
 ]
+FeedbackPlanningActionType = Literal["corpus_pr", "corpus_issue", "product_issue"]
 
 
 class FeedbackPlanningModelAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    action_type: CuratorActionType
+    action_type: FeedbackPlanningActionType
     classification: FeedbackPlanningClassification
     evidence: ActionEvidence = Field(default_factory=ActionEvidence)
     target_repo: str | None = None
@@ -132,7 +129,6 @@ def build_feedback_planning_proposed_actions(
     allowed_source_ids = set(base_plan.referenced_source_ids)
     allowed_section_ids = set(base_plan.referenced_section_ids)
     allowed_result_ids = set(base_plan.referenced_result_ids)
-    deterministic_action_type_by_feedback_id = _deterministic_action_types(base_plan)
     seen_idempotency_keys: set[str] = set()
     covered_feedback_ids: set[str] = set()
     proposed_actions: list[ProposedAction] = []
@@ -156,25 +152,15 @@ def build_feedback_planning_proposed_actions(
             or action.evidence.upload_ids
         ):
             raise ValueError("model corpus_pr action must cite source, section, or upload evidence")
-        if action.action_type == "link_to_upload" and not action.evidence.upload_ids:
-            raise ValueError("model link_to_upload action must cite upload evidence")
-        if action.action_type in {"issue", "corpus_pr"} and action.target_repo != DEFAULT_TARGET_REPO:
-            raise ValueError(
-                "model GitHub-object action must target the allowed corpus repo: "
-                f"{DEFAULT_TARGET_REPO}"
-            )
-        if action.action_type == "defer":
-            downgraded = sorted(
-                feedback_id
-                for feedback_id in action.evidence.feedback_ids
-                if deterministic_action_type_by_feedback_id.get(feedback_id)
-                in {"no_action", "link_to_upload"}
-            )
-            if downgraded:
-                raise ValueError(
-                    "model action defers feedback already classified as non-mutating: "
-                    f"{downgraded}"
-                )
+        target_repo = action.target_repo or _default_target_repo(action.action_type)
+        if action.action_type == "corpus_pr" and target_repo != DEFAULT_TARGET_REPO:
+            raise ValueError(f"model corpus_pr action must target {DEFAULT_TARGET_REPO}")
+        if action.action_type == "corpus_issue" and target_repo != DEFAULT_TARGET_REPO:
+            raise ValueError(f"model corpus_issue action must target {DEFAULT_TARGET_REPO}")
+        if action.action_type == "product_issue" and target_repo != DEFAULT_PRODUCT_REPO:
+            raise ValueError(f"model product_issue action must target {DEFAULT_PRODUCT_REPO}")
+        if action.action_type not in {"corpus_pr", "corpus_issue", "product_issue"}:
+            raise ValueError(f"model action uses unsupported feedback action type: {action.action_type}")
         covered_feedback_ids.update(action.evidence.feedback_ids)
         proposed_actions.append(
             ProposedAction(
@@ -183,7 +169,7 @@ def build_feedback_planning_proposed_actions(
                 classification=action.classification,
                 idempotency_key=idempotency_key,
                 evidence=action.evidence,
-                target_repo=action.target_repo,
+                target_repo=target_repo,
                 validation="accepted",
                 execution="not_executed",
             )
@@ -195,13 +181,12 @@ def build_feedback_planning_proposed_actions(
     return proposed_actions
 
 
-def _deterministic_action_types(base_plan: FeedbackPlan) -> dict[str, CuratorActionType]:
-    result: dict[str, CuratorActionType] = {}
-    for action in base_plan.proposed_actions:
-        for feedback_id in action.evidence.feedback_ids:
-            result[feedback_id] = action.action_type
-    return result
-
+def _default_target_repo(action_type: str) -> str:
+    if action_type in {"corpus_pr", "corpus_issue"}:
+        return DEFAULT_TARGET_REPO
+    if action_type == "product_issue":
+        return DEFAULT_PRODUCT_REPO
+    raise ValueError(f"unsupported feedback action type: {action_type}")
 
 def _require_all_object_properties(schema: Any) -> None:
     if isinstance(schema, dict):

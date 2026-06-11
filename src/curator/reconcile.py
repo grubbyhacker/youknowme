@@ -63,7 +63,7 @@ def build_reconciliation_summary(
             branch=deterministic_branch_name(feedback_plan.run_id, action),
         )
         for action in feedback_plan.proposed_actions
-        if action.action_type in {"corpus_pr", "issue"}
+        if action.action_type == "corpus_pr"
     ]
     if upload_plan is not None:
         branch_previews.extend(

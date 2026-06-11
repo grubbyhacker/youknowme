@@ -15,8 +15,8 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_type": "no_action",
-            "classification": "positive",
+            "action_type": "product_issue",
+            "classification": "fallback",
             "evidence": {
               "feedback_ids": [
                 "fb_positive"
@@ -24,7 +24,8 @@
               "source_ids": [
                 "src_home_spa"
               ]
-            }
+            },
+            "target_repo": "grubbyhacker/youknowme"
           }
         ]
       }
@@ -71,8 +72,8 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_type": "issue",
-            "classification": "owner_action",
+            "action_type": "corpus_issue",
+            "classification": "corpus_issue",
             "target_repo": "grubbyhacker/ykmcorpus",
             "evidence": {
               "feedback_ids": [
@@ -97,8 +98,8 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_type": "link_to_upload",
-            "classification": "upload_linked",
+            "action_type": "corpus_pr",
+            "classification": "corpus_candidate",
             "evidence": {
               "feedback_ids": [
                 "fb_upload"
@@ -106,7 +107,8 @@
               "upload_ids": [
                 "upl_home_note"
               ]
-            }
+            },
+            "target_repo": "grubbyhacker/ykmcorpus"
           }
         ]
       }
@@ -176,8 +178,8 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_type": "no_action",
-            "classification": "non_actionable",
+            "action_type": "product_issue",
+            "classification": "fallback",
             "evidence": {
               "feedback_ids": [
                 "fb_agent_1",
@@ -185,7 +187,8 @@
                 "fb_agent_3",
                 "fb_agent_4"
               ]
-            }
+            },
+            "target_repo": "grubbyhacker/youknowme"
           }
         ]
       }
@@ -206,8 +209,8 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_type": "issue",
-            "classification": "owner_action",
+            "action_type": "corpus_issue",
+            "classification": "corpus_issue",
             "target_repo": "grubbyhacker/ykmcorpus",
             "evidence": {
               "feedback_ids": [
@@ -237,13 +240,14 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_type": "no_action",
-            "classification": "positive",
+            "action_type": "product_issue",
+            "classification": "fallback",
             "evidence": {
               "feedback_ids": [
                 "fb_one"
               ]
-            }
+            },
+            "target_repo": "grubbyhacker/youknowme"
           }
         ]
       }
@@ -262,22 +266,24 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_type": "no_action",
-            "classification": "positive",
+            "action_type": "product_issue",
+            "classification": "fallback",
             "evidence": {
               "feedback_ids": [
                 "fb_duplicate"
               ]
-            }
+            },
+            "target_repo": "grubbyhacker/youknowme"
           },
           {
-            "action_type": "no_action",
-            "classification": "positive",
+            "action_type": "product_issue",
+            "classification": "fallback",
             "evidence": {
               "feedback_ids": [
                 "fb_duplicate"
               ]
-            }
+            },
+            "target_repo": "grubbyhacker/youknowme"
           }
         ]
       }
@@ -296,8 +302,8 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_type": "issue",
-            "classification": "owner_action",
+            "action_type": "corpus_issue",
+            "classification": "corpus_issue",
             "target_repo": "grubbyhacker/ykmcorpus",
             "idempotency_key": "issue:0000000000000000",
             "evidence": {
@@ -311,7 +317,7 @@
     },
     {
       "name": "defer_non_mutating_feedback_rejected",
-      "match": "defers feedback already classified as non-mutating",
+      "match": "Input should",
       "feedback_records": [
         {
           "event": "feedback",
@@ -324,9 +330,11 @@
         "proposed_actions": [
           {
             "action_type": "defer",
-            "classification": "capacity",
+            "classification": "fallback",
             "evidence": {
-              "feedback_ids": ["fb_agent_note"]
+              "feedback_ids": [
+                "fb_agent_note"
+              ]
             }
           }
         ]
@@ -360,7 +368,7 @@
     },
     {
       "name": "link_to_upload_without_upload_evidence",
-      "match": "link_to_upload action must cite upload evidence",
+      "match": "Input should",
       "feedback_records": [
         {
           "event": "feedback",
@@ -374,7 +382,7 @@
         "proposed_actions": [
           {
             "action_type": "link_to_upload",
-            "classification": "upload_linked",
+            "classification": "corpus_candidate",
             "evidence": {
               "feedback_ids": [
                 "fb_upload_missing"
@@ -389,7 +397,7 @@
     },
     {
       "name": "wrong_target_repo",
-      "match": "allowed corpus repo",
+      "match": "corpus_issue action must target",
       "feedback_records": [
         {
           "event": "feedback",
@@ -401,9 +409,9 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_type": "issue",
-            "classification": "owner_action",
-            "target_repo": "grubbyhacker/aboutmemcp",
+            "action_type": "corpus_issue",
+            "classification": "corpus_issue",
+            "target_repo": "example/not-allowed",
             "evidence": {
               "feedback_ids": [
                 "fb_repo"

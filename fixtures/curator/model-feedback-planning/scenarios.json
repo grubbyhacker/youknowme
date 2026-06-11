@@ -33,26 +33,30 @@
       ],
       "expected_feedback": {
         "fb_missing_home_address": {
-          "action_type": "issue",
-          "classification": "owner_action",
+          "action_type": "corpus_issue",
+          "classification": "corpus_issue",
           "target_repo": "grubbyhacker/ykmcorpus"
         },
         "fb_missing_beach_house_address": {
-          "action_type": "issue",
-          "classification": "owner_action",
+          "action_type": "corpus_issue",
+          "classification": "corpus_issue",
           "target_repo": "grubbyhacker/ykmcorpus"
         },
         "fb_missing_resume_substack": {
           "action_type": "corpus_pr",
           "classification": "corpus_candidate",
           "target_repo": "grubbyhacker/ykmcorpus",
-          "source_ids": ["src_resume"]
+          "source_ids": [
+            "src_resume"
+          ]
         },
         "fb_missing_hot_tub_startup": {
           "action_type": "corpus_pr",
           "classification": "corpus_candidate",
           "target_repo": "grubbyhacker/ykmcorpus",
-          "source_ids": ["src_beach_house_hot_tub"]
+          "source_ids": [
+            "src_beach_house_hot_tub"
+          ]
         }
       }
     },
@@ -93,25 +97,33 @@
           "action_type": "corpus_pr",
           "classification": "corpus_candidate",
           "target_repo": "grubbyhacker/ykmcorpus",
-          "source_ids": ["src_dev_environment"]
+          "source_ids": [
+            "src_dev_environment"
+          ]
         },
         "fb_stale_beach_house_purge": {
           "action_type": "corpus_pr",
           "classification": "corpus_candidate",
           "target_repo": "grubbyhacker/ykmcorpus",
-          "source_ids": ["src_beach_house"]
+          "source_ids": [
+            "src_beach_house"
+          ]
         },
         "fb_stale_substack_article_4": {
           "action_type": "corpus_pr",
           "classification": "corpus_candidate",
           "target_repo": "grubbyhacker/ykmcorpus",
-          "source_ids": ["src_substack_article_4"]
+          "source_ids": [
+            "src_substack_article_4"
+          ]
         },
         "fb_stale_resume_substack": {
           "action_type": "corpus_pr",
           "classification": "corpus_candidate",
           "target_repo": "grubbyhacker/ykmcorpus",
-          "source_ids": ["src_resume"]
+          "source_ids": [
+            "src_resume"
+          ]
         }
       }
     },
@@ -123,54 +135,70 @@
           "feedback_id": "fb_wrong_favorite_drink",
           "category": "wrong_content",
           "comment": "I searched for favorite drink but got instructions for adding Bromine to the hot tub in the document list.",
-          "result_ids": ["res_hot_tub_bromine"]
+          "result_ids": [
+            "res_hot_tub_bromine"
+          ]
         },
         {
           "event": "feedback",
           "feedback_id": "fb_wrong_work_history",
           "category": "wrong_content",
           "comment": "I searched for Roger's work history but got Beach House maintenance notes in the results.",
-          "result_ids": ["res_beach_house_maintenance"]
+          "result_ids": [
+            "res_beach_house_maintenance"
+          ]
         },
         {
           "event": "feedback",
           "feedback_id": "fb_wrong_writing_tone",
           "category": "wrong_content",
           "comment": "I asked about Roger's preferred writing tone and got thermostat setup instructions.",
-          "result_ids": ["res_thermostat_setup"]
+          "result_ids": [
+            "res_thermostat_setup"
+          ]
         },
         {
           "event": "feedback",
           "feedback_id": "fb_wrong_resume_details",
           "category": "wrong_content",
           "comment": "I searched for resume details but got Substack draft notes instead of the resume document.",
-          "result_ids": ["res_substack_draft_notes"]
+          "result_ids": [
+            "res_substack_draft_notes"
+          ]
         }
       ],
       "expected_feedback": {
         "fb_wrong_favorite_drink": {
-          "action_type": "issue",
-          "classification": "owner_action",
+          "action_type": "corpus_issue",
+          "classification": "corpus_issue",
           "target_repo": "grubbyhacker/ykmcorpus",
-          "result_ids": ["res_hot_tub_bromine"]
+          "result_ids": [
+            "res_hot_tub_bromine"
+          ]
         },
         "fb_wrong_work_history": {
-          "action_type": "issue",
-          "classification": "owner_action",
+          "action_type": "corpus_issue",
+          "classification": "corpus_issue",
           "target_repo": "grubbyhacker/ykmcorpus",
-          "result_ids": ["res_beach_house_maintenance"]
+          "result_ids": [
+            "res_beach_house_maintenance"
+          ]
         },
         "fb_wrong_writing_tone": {
-          "action_type": "issue",
-          "classification": "owner_action",
+          "action_type": "corpus_issue",
+          "classification": "corpus_issue",
           "target_repo": "grubbyhacker/ykmcorpus",
-          "result_ids": ["res_thermostat_setup"]
+          "result_ids": [
+            "res_thermostat_setup"
+          ]
         },
         "fb_wrong_resume_details": {
-          "action_type": "issue",
-          "classification": "owner_action",
+          "action_type": "corpus_issue",
+          "classification": "corpus_issue",
           "target_repo": "grubbyhacker/ykmcorpus",
-          "result_ids": ["res_substack_draft_notes"]
+          "result_ids": [
+            "res_substack_draft_notes"
+          ]
         }
       }
     },
@@ -211,25 +239,33 @@
           "action_type": "corpus_pr",
           "classification": "corpus_candidate",
           "target_repo": "grubbyhacker/ykmcorpus",
-          "source_ids": ["src_beach_house_hot_tub"]
+          "source_ids": [
+            "src_beach_house_hot_tub"
+          ]
         },
         "fb_unclear_resume_versions": {
           "action_type": "corpus_pr",
           "classification": "corpus_candidate",
           "target_repo": "grubbyhacker/ykmcorpus",
-          "source_ids": ["src_resume"]
+          "source_ids": [
+            "src_resume"
+          ]
         },
         "fb_unclear_thermostat_modes": {
           "action_type": "corpus_pr",
           "classification": "corpus_candidate",
           "target_repo": "grubbyhacker/ykmcorpus",
-          "source_ids": ["src_thermostat"]
+          "source_ids": [
+            "src_thermostat"
+          ]
         },
         "fb_unclear_article_outline": {
           "action_type": "corpus_pr",
           "classification": "corpus_candidate",
           "target_repo": "grubbyhacker/ykmcorpus",
-          "source_ids": ["src_substack_article_4"]
+          "source_ids": [
+            "src_substack_article_4"
+          ]
         }
       }
     },
@@ -263,24 +299,24 @@
       ],
       "expected_feedback": {
         "fb_owner_ansible_puppet": {
-          "action_type": "issue",
-          "classification": "owner_action",
-          "target_repo": "grubbyhacker/ykmcorpus"
+          "action_type": "product_issue",
+          "classification": "fallback",
+          "target_repo": "grubbyhacker/youknowme"
         },
         "fb_owner_updated_resume": {
-          "action_type": "issue",
-          "classification": "owner_action",
-          "target_repo": "grubbyhacker/ykmcorpus"
+          "action_type": "product_issue",
+          "classification": "fallback",
+          "target_repo": "grubbyhacker/youknowme"
         },
         "fb_owner_new_job": {
-          "action_type": "issue",
-          "classification": "owner_action",
-          "target_repo": "grubbyhacker/ykmcorpus"
+          "action_type": "product_issue",
+          "classification": "fallback",
+          "target_repo": "grubbyhacker/youknowme"
         },
         "fb_owner_multiuser_support": {
-          "action_type": "issue",
-          "classification": "owner_action",
-          "target_repo": "grubbyhacker/ykmcorpus"
+          "action_type": "product_issue",
+          "classification": "fallback",
+          "target_repo": "grubbyhacker/youknowme"
         }
       }
     },
@@ -338,36 +374,44 @@
       ],
       "expected_feedback": {
         "fb_agent_already_present": {
-          "action_type": "no_action",
-          "classification": "non_actionable"
+          "action_type": "product_issue",
+          "classification": "fallback",
+          "target_repo": "grubbyhacker/youknowme"
         },
         "fb_agent_duplicate_resume": {
-          "action_type": "no_action",
-          "classification": "non_actionable"
+          "action_type": "product_issue",
+          "classification": "fallback",
+          "target_repo": "grubbyhacker/youknowme"
         },
         "fb_agent_query_rephrased": {
-          "action_type": "no_action",
-          "classification": "non_actionable"
+          "action_type": "product_issue",
+          "classification": "fallback",
+          "target_repo": "grubbyhacker/youknowme"
         },
         "fb_agent_debug_note": {
-          "action_type": "no_action",
-          "classification": "non_actionable"
+          "action_type": "product_issue",
+          "classification": "fallback",
+          "target_repo": "grubbyhacker/youknowme"
         },
         "fb_non_actionable_weird": {
-          "action_type": "no_action",
-          "classification": "non_actionable"
+          "action_type": "product_issue",
+          "classification": "fallback",
+          "target_repo": "grubbyhacker/youknowme"
         },
         "fb_non_actionable_later": {
-          "action_type": "no_action",
-          "classification": "non_actionable"
+          "action_type": "product_issue",
+          "classification": "fallback",
+          "target_repo": "grubbyhacker/youknowme"
         },
         "fb_non_actionable_no_query": {
-          "action_type": "no_action",
-          "classification": "non_actionable"
+          "action_type": "product_issue",
+          "classification": "fallback",
+          "target_repo": "grubbyhacker/youknowme"
         },
         "fb_non_actionable_scratch": {
-          "action_type": "no_action",
-          "classification": "non_actionable"
+          "action_type": "product_issue",
+          "classification": "fallback",
+          "target_repo": "grubbyhacker/youknowme"
         }
       }
     }
