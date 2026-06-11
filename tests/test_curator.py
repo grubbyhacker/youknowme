@@ -2017,6 +2017,78 @@ def test_manual_live_uses_broker_and_model_fixtures_for_offline_preflight(
     assert report.execution_intent_count == 1
 
 
+def test_manual_live_feedback_issue_fixture_advances_checkpoint(
+    tmp_path: Path, monkeypatch
+) -> None:
+    intake = tmp_path / "intake"
+    feedback = intake / "feedback" / "feedback.jsonl"
+    feedback.parent.mkdir(parents=True)
+    line = (
+        '{"event":"feedback","feedback_id":"fb_1",'
+        '"comment":"This was not useful enough to act on."}\n'
+    )
+    feedback.write_text(line, encoding="utf-8")
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "run_id": "run-live-feedback-fixture",
+                "mode": "manual_live",
+                "enabled_actions": ["plan_feedback"],
+                "github_mutation_budget": {
+                    "max_new_objects_per_run": 1,
+                    "upload": 0,
+                    "feedback": 1,
+                },
+                "feedback_executor": "codex_proxy",
+                "feedback_agent_max_attempts": 1,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    broker_fixture = tmp_path / "broker-fixture.json"
+    broker_fixture.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "reachable": True,
+                "existing_branches": [],
+                "allowed_operations": ["issue.create", "pull.create"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="ignored",
+            intake=intake,
+            output=tmp_path / "output",
+            task=task,
+            broker_fixture=broker_fixture,
+        )
+    )
+
+    decisions = [
+        json.loads(line)
+        for line in (intake / "feedback" / "curator-decisions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    state = json.loads((intake / "feedback" / "curator-state.json").read_text(encoding="utf-8"))
+
+    assert report.status == "pass"
+    assert report.checkpoint_advanced is True
+    assert report.feedback_decisions_appended == 1
+    assert decisions[0]["decision"] == "issue_opened"
+    assert decisions[0]["feedback_id"] == "fb_1"
+    assert state["feedback_checkpoint"]["byte_offset"] == len(line)
+
+
 def test_manual_live_model_fixture_budget_fails_closed(
     tmp_path: Path, monkeypatch
 ) -> None:

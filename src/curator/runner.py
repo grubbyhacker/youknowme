@@ -2533,7 +2533,7 @@ def _feedback_execution_decisions(
     timestamp = datetime.now(UTC)
     decisions: list[FeedbackDecision] = []
     for result in results:
-        if result.status != "executed":
+        if result.status not in {"executed", "simulated"}:
             continue
         intent = intents_by_action.get(result.action_id)
         if intent is None:
