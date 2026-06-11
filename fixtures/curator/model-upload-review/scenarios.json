@@ -2,6 +2,49 @@
   "schema_version": "1",
   "cases": [
     {
+      "name": "important_birthdays_preference_policy_addition",
+      "upload_id": "upl_eval_important_birthdays",
+      "manifest": {
+        "upload_id": "upl_eval_important_birthdays",
+        "purpose": "Store Roger's important birthdays as a durable YouKnowMe note for future reminders and personal context retrieval.",
+        "suggested_type": "preference",
+        "suggested_tags": [
+          "birthday",
+          "family",
+          "personal",
+          "reminder"
+        ],
+        "suggested_related": []
+      },
+      "files": [
+        {
+          "filename": "important-birthdays.md",
+          "content": "---\nid: important-birthdays\ntype: preference\ntags: [birthday, personal, reminder]\n---\n\n# Important Birthdays to Remember\n\nThese are birthdays Roger wants remembered because they are personally important and easy to forget.\n\n## Birthdays\n\n| Person | Relationship / Context | Birthday | Notes |\n|---|---|---:|---|\n| Amanda | Wife | April 23, 1977 | Also referred to as Mandy. |\n| Grady | Son | May 22, 2003 |  |\n\n## Reminder Preference\n\nRemind Roger about these birthdays when relevant, especially if he asks about upcoming family events, dates, gifts, travel, or planning.\n"
+        }
+      ],
+      "expected": {
+        "decision": "integrated",
+        "path": "preferences/important-birthdays.md",
+        "type": "preference",
+        "required_tags": [
+          "birthday",
+          "personal",
+          "reminder"
+        ],
+        "policy_roots_add": [
+          "preferences"
+        ],
+        "policy_types_add": [
+          "preference"
+        ],
+        "policy_tags_add": [
+          "birthday",
+          "personal",
+          "reminder"
+        ]
+      }
+    },
+    {
       "name": "dev_environment_preference_policy_addition",
       "upload_id": "upl_eval_dev_environment",
       "manifest": {
