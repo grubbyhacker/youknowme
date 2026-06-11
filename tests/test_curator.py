@@ -53,6 +53,7 @@ from curator.models import (
     UploadBundleSnapshot,
     UploadQueueSnapshot,
     UploadCuratorMetadata,
+    UploadPlan,
     UploadReviewPreview,
 )
 from curator.execution import (
@@ -82,6 +83,7 @@ from curator.upload_pr import upload_review_pull_intent
 from ykm.curator import CuratorDryRunConfig, run_curator_dry_run
 from curator.runner import (
     _complete_pr_repair_handoffs,
+    _execute_agentic_upload_review_prs,
     _upload_review_model_request,
     _write_pending_pr_repair_handoffs,
     write_curator_reports,
@@ -4509,8 +4511,10 @@ def test_agentic_upload_review_creates_pr_after_validated_codex_diff(
     observation = observations[0]
     assert observation.status == "pass"
     assert observation.executor == "codex_proxy"
+    assert observation.attempts == 1
     assert observation.changed_files == ["homemaint/tooling.md"]
     assert observation.draft_paths == ["homemaint/tooling.md"]
+    assert "homemaint/tooling.md" in (observation.diff_stat or "")
     assert observation.returncode == 0
 
 
@@ -4580,6 +4584,69 @@ def test_agentic_upload_review_rejects_forbidden_codex_changes(
     assert observations[0].status == "fail"
     assert "forbidden" in observations[0].message
     assert observations[0].changed_files == [".github/workflows/validate.yml"]
+
+
+def test_runner_agentic_upload_review_respects_upload_mutation_budget(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    preview_one, bundle_one = _upload_agent_preview_and_bundle(tmp_path)
+    preview_two = preview_one.model_copy(
+        update={
+            "upload_id": "upl_second",
+            "action_id": "upl_act_2",
+            "idempotency_key": "upload:test-agentic-upload-second",
+            "branch": "curator/run-upload-agent/upload-upl-second-test",
+        }
+    )
+    bundle_two = bundle_one.model_copy(update={"upload_id": "upl_second"})
+    broker_fixture = tmp_path / "broker-fixture.json"
+    broker_fixture.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "reachable": True,
+                "allowed_operations": ["pull.create"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, list[str]] = {}
+
+    def fake_execute(**kwargs):
+        captured["upload_ids"] = [preview.upload_id for preview in kwargs["previews"]]
+        return [], []
+
+    monkeypatch.setattr("curator.runner.execute_agentic_upload_review_prs_in_checkout", fake_execute)
+
+    _execute_agentic_upload_review_prs(
+        config=CuratorDryRunConfig(
+            run_id="run-upload-agent",
+            intake=tmp_path / "intake",
+            output=tmp_path / "output",
+            broker_fixture=broker_fixture,
+        ),
+        run_id="run-upload-agent",
+        task_payload=None,
+        upload_plan=UploadPlan(
+            run_id="run-upload-agent",
+            included_upload_ids=["upl_tooling", "upl_second"],
+            review_previews=[preview_one, preview_two],
+            created_at=datetime.fromisoformat("2026-06-11T00:00:00+00:00"),
+        ),
+        upload_snapshot=UploadQueueSnapshot(
+            counts={"pending": 2},
+            pending_uploads=["upl_tooling", "upl_second"],
+            bundles=[bundle_one, bundle_two],
+        ),
+        model="ykm-codex-gpt-5-mini",
+        max_attempts=2,
+        max_upload_prs=1,
+        validation_command=["mise", "run", "validate"],
+    )
+
+    assert captured["upload_ids"] == ["upl_tooling"]
 
 
 def test_pr_repair_classifies_workflow_file_changes_as_permission_blocked() -> None:
@@ -7712,7 +7779,19 @@ def _fake_upload_agent_git(tmp_path: Path, monkeypatch) -> Path:
             "        paths.append('?? .github/workflows/validate.yml')\n"
             "    sys.stdout.write('\\n'.join(paths) + ('\\n' if paths else ''))\n"
             "    raise SystemExit(0)\n"
+            "if args[:3] == ['ls-files', '--others', '--exclude-standard']:\n"
+            "    cwd = pathlib.Path.cwd()\n"
+            "    paths = []\n"
+            "    if (cwd / 'homemaint' / 'tooling.md').exists():\n"
+            "        paths.append('homemaint/tooling.md')\n"
+            "    if (cwd / '.github' / 'workflows' / 'validate.yml').exists():\n"
+            "        paths.append('.github/workflows/validate.yml')\n"
+            "    sys.stdout.write('\\n'.join(paths) + ('\\n' if paths else ''))\n"
+            "    raise SystemExit(0)\n"
             "if args[:2] == ['diff', '--stat']:\n"
+            "    sys.stdout.write(' homemaint/tooling.md | 7 +++++++\\n')\n"
+            "    raise SystemExit(0)\n"
+            "if args[:3] == ['diff', '--cached', '--stat']:\n"
             "    sys.stdout.write(' homemaint/tooling.md | 7 +++++++\\n')\n"
             "    raise SystemExit(0)\n"
             "if args == ['diff', '--cached', '--quiet']:\n"

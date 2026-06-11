@@ -778,6 +778,7 @@ def _run_with_lock(
                     upload_snapshot=queue_snapshot,
                     model=upload_review_agent_model,
                     max_attempts=upload_review_max_attempts,
+                    max_upload_prs=_upload_pr_creation_budget(github_mutation_budget),
                     validation_command=upload_review_validation_command,
                 )
                 upload_review_observations.extend(agent_observations)
@@ -1853,6 +1854,7 @@ def _execute_agentic_upload_review_prs(
     upload_snapshot: UploadQueueSnapshot,
     model: str,
     max_attempts: int,
+    max_upload_prs: int,
     validation_command: list[str],
 ) -> tuple[list[ExecutionResult], list[UploadReviewObservation]]:
     adapter = (
@@ -1867,11 +1869,12 @@ def _execute_agentic_upload_review_prs(
     pending_keys = {
         intent.idempotency_key for intent in _load_pending_upload_pr_creation_intents(config.intake)
     }
-    previews = [
+    candidate_previews = [
         preview
         for preview in upload_plan.review_previews
         if preview.idempotency_key not in pending_keys and preview.idempotency_key not in retried_keys
     ]
+    previews = candidate_previews[:max_upload_prs]
     if not previews:
         return results, []
     new_results, observations = execute_agentic_upload_review_prs_in_checkout(
@@ -1906,6 +1909,14 @@ def _execute_agentic_upload_review_prs(
             if matching_intent is not None:
                 _delete_pending_upload_pr_creation_intent(config.intake, matching_intent)
     return results, observations
+
+
+def _upload_pr_creation_budget(github_mutation_budget: dict[str, int]) -> int:
+    max_new = github_mutation_budget.get("max_new_objects_per_run", 0)
+    upload = github_mutation_budget.get("upload", 0)
+    if max_new <= 0 or upload <= 0:
+        return 0
+    return min(max_new, upload)
 
 
 def _retry_pending_upload_pr_creations(intake: Path, broker_adapter) -> list[ExecutionResult]:
