@@ -740,7 +740,9 @@ def _run_with_lock(
                     message="upload PR creation skipped because upload-review validation failed",
                 )
             )
-        elif model_upload_review and upload_review_observations:
+        elif (model_upload_review and upload_review_observations) or _has_pending_upload_pr_creations(
+            config.intake
+        ):
             live_execution_results = _execute_upload_review_prs(
                 config=config,
                 run_id=run_id,
@@ -1649,8 +1651,13 @@ def _execute_upload_review_prs(
     observations: list[UploadReviewObservation],
     outputs: dict[str, UploadReviewModelOutput],
 ) -> list[ExecutionResult]:
+    adapter = (
+        FixtureBrokerAdapter.from_path(config.broker_fixture)
+        if config.broker_fixture is not None
+        else HttpBrokerAdapter(config.broker_url or "")
+    )
+    results = _retry_pending_upload_pr_creations(config.intake, adapter)
     if config.corpus_checkout is None:
-        results = []
         for preview in upload_plan.review_previews:
             output = outputs.get(preview.upload_id)
             intent = upload_review_pull_intent(
@@ -1671,19 +1678,26 @@ def _execute_upload_review_prs(
             )
         return results
     broker_remote_url = _broker_remote_url(config, task_payload)
-    adapter = (
-        FixtureBrokerAdapter.from_path(config.broker_fixture)
-        if config.broker_fixture is not None
-        else HttpBrokerAdapter(config.broker_url or "")
-    )
     previews_by_upload = {preview.upload_id: preview for preview in upload_plan.review_previews}
-    results = []
+    retried_keys = {
+        result.idempotency_key for result in results if result.operation == "pull.create"
+    }
+    pending_keys = {
+        intent.idempotency_key for intent in _load_pending_upload_pr_creation_intents(config.intake)
+    }
     for observation in observations:
         if observation.status != "pass":
             continue
         preview = previews_by_upload.get(observation.upload_id)
         output = outputs.get(observation.upload_id)
         if preview is None or output is None:
+            continue
+        intent = upload_review_pull_intent(
+            run_id=run_id,
+            preview=preview,
+            content_summary=output.content_summary,
+        )
+        if intent.idempotency_key in pending_keys or intent.idempotency_key in retried_keys:
             continue
         results.append(
             execute_upload_review_pr(
@@ -1692,9 +1706,63 @@ def _execute_upload_review_prs(
                 broker_adapter=adapter,
                 preview=preview,
                 output=output,
+                on_branch_pushed=lambda pushed_intent: _write_pending_upload_pr_creation_intent(
+                    config.intake,
+                    pushed_intent,
+                ),
             )
         )
+        if results[-1].status != "failed":
+            _delete_pending_upload_pr_creation_intent(config.intake, intent)
     return results
+
+
+def _retry_pending_upload_pr_creations(intake: Path, broker_adapter) -> list[ExecutionResult]:
+    results: list[ExecutionResult] = []
+    for intent in _load_pending_upload_pr_creation_intents(intake):
+        result = broker_adapter.create_pull(intent)
+        results.append(result)
+        if result.status != "failed":
+            _delete_pending_upload_pr_creation_intent(intake, intent)
+    return results
+
+
+def _has_pending_upload_pr_creations(intake: Path) -> bool:
+    pending_dir = _upload_pr_creation_pending_dir(intake)
+    return pending_dir.exists() and any(pending_dir.glob("*.json"))
+
+
+def _load_pending_upload_pr_creation_intents(intake: Path) -> list[ExecutionIntent]:
+    pending_dir = _upload_pr_creation_pending_dir(intake)
+    if not pending_dir.exists():
+        return []
+    intents: list[ExecutionIntent] = []
+    for path in sorted(pending_dir.glob("*.json")):
+        intents.append(ExecutionIntent.model_validate_json(path.read_text(encoding="utf-8")))
+    return intents
+
+
+def _write_pending_upload_pr_creation_intent(intake: Path, intent: ExecutionIntent) -> None:
+    pending_dir = _upload_pr_creation_pending_dir(intake)
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    path = _upload_pr_creation_path(intake, intent)
+    temp_path = path.with_suffix(".json.tmp")
+    temp_path.write_text(intent.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    temp_path.replace(path)
+
+
+def _delete_pending_upload_pr_creation_intent(intake: Path, intent: ExecutionIntent) -> None:
+    path = _upload_pr_creation_path(intake, intent)
+    if path.exists():
+        path.unlink()
+
+
+def _upload_pr_creation_pending_dir(intake: Path) -> Path:
+    return intake / "upload-pr-creations" / "pending"
+
+
+def _upload_pr_creation_path(intake: Path, intent: ExecutionIntent) -> Path:
+    return _upload_pr_creation_pending_dir(intake) / f"{_slug_for_filename(intent.idempotency_key)}.json"
 
 
 def _complete_pr_repair_handoffs(

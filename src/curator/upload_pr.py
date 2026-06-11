@@ -4,6 +4,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Callable
 
 from curator.markers import render_action_markers
 from curator.model_tasks import UploadReviewModelOutput
@@ -29,6 +30,7 @@ def execute_upload_review_pr(
     broker_adapter,
     preview: UploadReviewPreview,
     output: UploadReviewModelOutput,
+    on_branch_pushed: Callable[[ExecutionIntent], None] | None = None,
 ) -> ExecutionResult:
     intent = upload_review_pull_intent(
         run_id=run_id,
@@ -76,6 +78,8 @@ def execute_upload_review_pr(
                 env=env,
             )
             _run_git(["push", "origin", f"HEAD:refs/heads/{preview.branch}"], cwd=checkout, env=env)
+            if on_branch_pushed is not None:
+                on_branch_pushed(intent)
     except Exception as exc:  # noqa: BLE001 - live execution failures must be reportable.
         return _failed_result(intent, f"upload review PR branch push failed: {exc}")
     return broker_adapter.create_pull(intent)
