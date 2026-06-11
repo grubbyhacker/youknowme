@@ -54,6 +54,12 @@ class UploadReviewObservation(BaseModel):
     stdout_tail: str = ""
     stderr_tail: str = ""
     elapsed_seconds: float | None = None
+    executor: str | None = None
+    model: str | None = None
+    attempts: int = 0
+    changed_files: list[str] = Field(default_factory=list)
+    diff_stat: str | None = None
+    transcript_path: str | None = None
 
 
 def observe_upload_review_draft(

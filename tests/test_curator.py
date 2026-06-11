@@ -29,6 +29,7 @@ from curator.model_tasks import (
 )
 from curator.models import (
     ActionEvidence,
+    BrokerFixtureState,
     CuratorIssueSnapshot,
     CuratorPrReviewCommentSnapshot,
     CuratorPrReconciliation,
@@ -66,6 +67,7 @@ from curator.pr_repair import (
     _repair_prompt,
     _review_request_comment,
 )
+from curator.upload_agent import _upload_agent_prompt, execute_agentic_upload_review_prs
 from curator.pr_reconcile import reconcile_pr_snapshots
 from curator.pr_state import PrStateTransitionError, validate_pr_transition
 from curator.reconcile import build_reconciliation_summary
@@ -4450,6 +4452,136 @@ def test_pr_repair_prompt_includes_review_bodies_and_inline_threads() -> None:
     assert "This is not a reusable skill." in prompt
 
 
+def test_upload_agent_prompt_allows_policy_edits_and_requires_summary(tmp_path: Path) -> None:
+    preview, bundle = _upload_agent_preview_and_bundle(tmp_path)
+    prompt = _upload_agent_prompt(
+        run_id="run-upload-agent",
+        preview=preview,
+        bundle=bundle,
+        validation_command=["mise", "run", "validate"],
+        summary_path=tmp_path / "summary.json",
+        previous_validation=None,
+    )
+
+    assert "Edit markdown corpus files and `.ykm/corpus-policy.yaml` directly" in prompt
+    assert "not an immutable permission boundary" in prompt
+    assert "summary_path" in prompt
+    assert "content_summary" in prompt
+    assert "Do not commit, push" in prompt
+
+
+def test_agentic_upload_review_creates_pr_after_validated_codex_diff(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    preview, bundle = _upload_agent_preview_and_bundle(tmp_path)
+    broker = FixtureBrokerAdapter(
+        BrokerFixtureState(
+            schema_version="1",
+            reachable=True,
+            allowed_operations=["pull.create"],
+        )
+    )
+    _fake_upload_agent_git(tmp_path, monkeypatch)
+    _fake_upload_agent_codex(tmp_path, monkeypatch, mode="success")
+    _fake_mise(tmp_path, monkeypatch, exit_code=0, stdout="validation ok\n")
+    monkeypatch.setenv("BROKER_AGENT_ID", "ykm-curator")
+    monkeypatch.setenv("BROKER_AGENT_SECRET", "broker-secret")
+
+    results, observations = execute_agentic_upload_review_prs(
+        run_id="run-upload-agent",
+        mode="manual_live",
+        broker_remote_url="https://broker/git/grubbyhacker/ykmcorpus.git",
+        broker_adapter=broker,
+        previews=[preview],
+        bundles=[bundle],
+        model="ykm-codex-gpt-5-mini",
+        max_attempts=1,
+        validation_command=["mise", "run", "validate"],
+        output=tmp_path / "output",
+        codex_proxy_base_url="http://proxy:8092",
+        codex_proxy_token="proxy-token",
+    )
+
+    assert len(results) == 1
+    assert results[0].status == "simulated"
+    assert len(observations) == 1
+    observation = observations[0]
+    assert observation.status == "pass"
+    assert observation.executor == "codex_proxy"
+    assert observation.changed_files == ["homemaint/tooling.md"]
+    assert observation.draft_paths == ["homemaint/tooling.md"]
+    assert observation.returncode == 0
+
+
+def test_agentic_upload_review_validation_failure_does_not_create_pr(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    preview, bundle = _upload_agent_preview_and_bundle(tmp_path)
+    broker = FixtureBrokerAdapter(BrokerFixtureState(schema_version="1", reachable=True))
+    _fake_upload_agent_git(tmp_path, monkeypatch)
+    _fake_upload_agent_codex(tmp_path, monkeypatch, mode="success")
+    _fake_mise(tmp_path, monkeypatch, exit_code=1, stderr="bad corpus\n")
+    monkeypatch.setenv("BROKER_AGENT_ID", "ykm-curator")
+    monkeypatch.setenv("BROKER_AGENT_SECRET", "broker-secret")
+
+    results, observations = execute_agentic_upload_review_prs(
+        run_id="run-upload-agent",
+        mode="manual_live",
+        broker_remote_url="https://broker/git/grubbyhacker/ykmcorpus.git",
+        broker_adapter=broker,
+        previews=[preview],
+        bundles=[bundle],
+        model="ykm-codex-gpt-5-mini",
+        max_attempts=1,
+        validation_command=["mise", "run", "validate"],
+        output=tmp_path / "output",
+        codex_proxy_base_url="http://proxy:8092",
+        codex_proxy_token="proxy-token",
+    )
+
+    assert results == []
+    assert len(observations) == 1
+    assert observations[0].status == "fail"
+    assert observations[0].returncode == 1
+    assert "bad corpus" in observations[0].stderr_tail
+
+
+def test_agentic_upload_review_rejects_forbidden_codex_changes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    preview, bundle = _upload_agent_preview_and_bundle(tmp_path)
+    broker = FixtureBrokerAdapter(BrokerFixtureState(schema_version="1", reachable=True))
+    _fake_upload_agent_git(tmp_path, monkeypatch)
+    _fake_upload_agent_codex(tmp_path, monkeypatch, mode="workflow")
+    _fake_mise(tmp_path, monkeypatch, exit_code=0, stdout="validation ok\n")
+    monkeypatch.setenv("BROKER_AGENT_ID", "ykm-curator")
+    monkeypatch.setenv("BROKER_AGENT_SECRET", "broker-secret")
+
+    results, observations = execute_agentic_upload_review_prs(
+        run_id="run-upload-agent",
+        mode="manual_live",
+        broker_remote_url="https://broker/git/grubbyhacker/ykmcorpus.git",
+        broker_adapter=broker,
+        previews=[preview],
+        bundles=[bundle],
+        model="ykm-codex-gpt-5-mini",
+        max_attempts=1,
+        validation_command=["mise", "run", "validate"],
+        output=tmp_path / "output",
+        codex_proxy_base_url="http://proxy:8092",
+        codex_proxy_token="proxy-token",
+    )
+
+    assert results == []
+    assert len(observations) == 1
+    assert observations[0].status == "fail"
+    assert "forbidden" in observations[0].message
+    assert observations[0].changed_files == [".github/workflows/validate.yml"]
+
+
 def test_pr_repair_classifies_workflow_file_changes_as_permission_blocked() -> None:
     assert _has_workflow_changed_file(
         [
@@ -7484,6 +7616,114 @@ def _fake_corpus_checkout(tmp_path: Path) -> Path:
     (corpus / "pyproject.toml").write_text("[project]\nname = 'fake-corpus'\n", encoding="utf-8")
     (corpus / "scripts" / "validate_corpus.py").write_text("print('ok')\n", encoding="utf-8")
     return corpus
+
+
+def _upload_agent_preview_and_bundle(tmp_path: Path) -> tuple[UploadReviewPreview, UploadBundleSnapshot]:
+    pending = tmp_path / "intake" / "uploads" / "pending" / "upl_tooling"
+    files = pending / "files"
+    files.mkdir(parents=True)
+    (pending / "manifest.json").write_text(
+        json.dumps({"upload_id": "upl_tooling", "title": "Tooling note"}) + "\n",
+        encoding="utf-8",
+    )
+    (files / "tooling.md").write_text("# Tooling\n\nUse uv for Python dependencies.\n", encoding="utf-8")
+    preview = UploadReviewPreview(
+        upload_id="upl_tooling",
+        queue="pending",
+        action_id="upl_act_1",
+        idempotency_key="upload:test-agentic-upload",
+        current_state="pending",
+        proposed_state="claimed",
+        branch="curator/run-upload-agent/upload-upl-tooling-test",
+        reason="test upload",
+        draft_status="model_review_candidate",
+    )
+    bundle = UploadBundleSnapshot(
+        upload_id="upl_tooling",
+        queue="pending",
+        path=str(pending),
+        has_manifest=True,
+        manifest_upload_id="upl_tooling",
+        has_curator_metadata=False,
+    )
+    return preview, bundle
+
+
+def _fake_upload_agent_codex(tmp_path: Path, monkeypatch, *, mode: str) -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    script = bin_dir / "codex"
+    script.write_text(
+        (
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            "import pathlib\n"
+            "import re\n"
+            "import sys\n"
+            f"mode = {mode!r}\n"
+            "prompt = sys.argv[-1]\n"
+            "match = re.search(r'\"summary_path\": \"([^\"]+)\"', prompt)\n"
+            "summary = pathlib.Path(match.group(1))\n"
+            "summary.parent.mkdir(parents=True, exist_ok=True)\n"
+            "cwd = pathlib.Path.cwd()\n"
+            "if mode == 'workflow':\n"
+            "    path = cwd / '.github' / 'workflows' / 'validate.yml'\n"
+            "    path.parent.mkdir(parents=True, exist_ok=True)\n"
+            "    path.write_text('name: validate\\n')\n"
+            "    summary.write_text(json.dumps({'content_summary': 'A workflow edit.', 'draft_paths': []}))\n"
+            "else:\n"
+            "    path = cwd / 'homemaint' / 'tooling.md'\n"
+            "    path.parent.mkdir(parents=True, exist_ok=True)\n"
+            "    path.write_text('---\\nid: tooling\\ntype: procedure\\ntags: [home-maintenance]\\n---\\n\\n# Tooling\\n')\n"
+            "    summary.write_text(json.dumps({'content_summary': 'A tooling note about Python dependencies.', 'draft_paths': ['homemaint/tooling.md']}))\n"
+            "raise SystemExit(0)\n"
+        ),
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    return script
+
+
+def _fake_upload_agent_git(tmp_path: Path, monkeypatch) -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    script = bin_dir / "git"
+    script.write_text(
+        (
+            "#!/usr/bin/env python3\n"
+            "import pathlib\n"
+            "import sys\n"
+            "args = sys.argv[1:]\n"
+            "if args[:1] == ['clone']:\n"
+            "    target = pathlib.Path(args[-1])\n"
+            "    (target / '.ykm').mkdir(parents=True, exist_ok=True)\n"
+            "    (target / 'homemaint').mkdir(parents=True, exist_ok=True)\n"
+            "    (target / '.git').mkdir(parents=True, exist_ok=True)\n"
+            "    (target / '.ykm' / 'corpus-policy.yaml').write_text('corpus_roots:\\n  - homemaint\\nallowed_types:\\n  - procedure\\nallowed_tags:\\n  - home-maintenance\\n')\n"
+            "    (target / 'mise.toml').write_text('[tasks.validate]\\nrun = \"true\"\\n')\n"
+            "    raise SystemExit(0)\n"
+            "if args[:2] == ['status', '--porcelain']:\n"
+            "    cwd = pathlib.Path.cwd()\n"
+            "    paths = []\n"
+            "    if (cwd / 'homemaint' / 'tooling.md').exists():\n"
+            "        paths.append('?? homemaint/tooling.md')\n"
+            "    if (cwd / '.github' / 'workflows' / 'validate.yml').exists():\n"
+            "        paths.append('?? .github/workflows/validate.yml')\n"
+            "    sys.stdout.write('\\n'.join(paths) + ('\\n' if paths else ''))\n"
+            "    raise SystemExit(0)\n"
+            "if args[:2] == ['diff', '--stat']:\n"
+            "    sys.stdout.write(' homemaint/tooling.md | 7 +++++++\\n')\n"
+            "    raise SystemExit(0)\n"
+            "if args == ['diff', '--cached', '--quiet']:\n"
+            "    raise SystemExit(1)\n"
+            "raise SystemExit(0)\n"
+        ),
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    return script
 
 
 def _fake_mise(

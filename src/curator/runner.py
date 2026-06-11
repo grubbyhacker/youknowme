@@ -73,6 +73,7 @@ from curator.state import (
     write_curator_state,
 )
 from curator.upload_draft import ALLOWED_TAGS, ALLOWED_TYPES
+from curator.upload_agent import execute_agentic_upload_review_prs as execute_agentic_upload_review_prs_in_checkout
 from curator.upload_observe import UploadReviewObservation, observe_upload_review_draft
 from curator.upload_pr import execute_upload_review_pr, upload_review_pull_intent
 from curator.upload_state import transition_upload_metadata
@@ -116,6 +117,16 @@ def run_curator_dry_run(config: CuratorDryRunConfig) -> CuratorDryRunReport:
     feedback_model = task_model.feedback_model if task_model is not None else None
     model_upload_review = task_model.model_upload_review if task_model is not None else False
     upload_review_model = task_model.upload_review_model if task_model is not None else None
+    upload_review_executor = task_model.upload_review_executor if task_model is not None else None
+    upload_review_agent_model = (
+        task_model.upload_review_agent_model if task_model is not None else "ykm-codex-gpt-5-mini"
+    )
+    upload_review_max_attempts = task_model.upload_review_max_attempts if task_model is not None else None
+    upload_review_validation_command = (
+        task_model.upload_review_validation_command
+        if task_model is not None
+        else ["mise", "run", "validate"]
+    )
     pr_repair_executor = task_model.pr_repair_executor if task_model is not None else None
     pr_repair_model = (
         task_model.pr_repair_model if task_model is not None else "ykm-codex-gpt-5-mini"
@@ -154,6 +165,10 @@ def run_curator_dry_run(config: CuratorDryRunConfig) -> CuratorDryRunReport:
         "feedback_model": feedback_model,
         "model_upload_review": model_upload_review,
         "upload_review_model": upload_review_model,
+        "upload_review_executor": upload_review_executor,
+        "upload_review_agent_model": upload_review_agent_model,
+        "upload_review_max_attempts": upload_review_max_attempts,
+        "upload_review_validation_command": upload_review_validation_command,
         "pr_repair_executor": pr_repair_executor,
         "pr_repair_model": pr_repair_model,
         "pr_repair_max_per_run": pr_repair_max_per_run,
@@ -202,6 +217,10 @@ def _run_with_lock(
     feedback_model: str | None,
     model_upload_review: bool,
     upload_review_model: str | None,
+    upload_review_executor: str | None,
+    upload_review_agent_model: str,
+    upload_review_max_attempts: int | None,
+    upload_review_validation_command: list[str],
     pr_repair_executor: str | None,
     pr_repair_model: str,
     pr_repair_max_per_run: int,
@@ -334,7 +353,7 @@ def _run_with_lock(
         upload_plan = UploadPlan(run_id=run_id, created_at=datetime.now(UTC))
     upload_review_observations: list[UploadReviewObservation] = []
     upload_model_outputs: dict[str, UploadReviewModelOutput] = {}
-    if "plan_uploads" in enabled_actions and model_upload_review:
+    if "plan_uploads" in enabled_actions and model_upload_review and upload_review_executor is None:
         (
             observations,
             upload_model_outputs,
@@ -527,6 +546,8 @@ def _run_with_lock(
         mode == "manual_live" and _requires_broker(feedback_plan, upload_plan)
     ) or config.enable_broker_reads or (
         "repair_prs" in enabled_actions and pr_repair_executor == "codex_proxy"
+    ) or (
+        "plan_uploads" in enabled_actions and upload_review_executor == "codex_proxy"
     )
     _probe_broker(config, probes, required=requires_broker)
     if config.broker_fixture is not None:
@@ -583,6 +604,8 @@ def _run_with_lock(
         mode == "manual_live" and model_call_budget.get("max_calls_per_run", 0) > 0
     ) or model_feedback_planning or model_upload_review or (
         "repair_prs" in enabled_actions and pr_repair_executor == "codex_proxy"
+    ) or (
+        "plan_uploads" in enabled_actions and upload_review_executor == "codex_proxy"
     )
     _probe_model_proxy(config, probes, required=requires_model_proxy)
     _probe_model_budget(config, probes, model_call_budget)
@@ -734,7 +757,65 @@ def _run_with_lock(
             upload_plan_paths,
             probes,
         )
-        if upload_review_validation_failure_count:
+        if upload_review_executor == "codex_proxy":
+            if upload_review_max_attempts is None:
+                probes.append(
+                    CuratorProbe(
+                        name="agentic-upload-review",
+                        status="fail",
+                        message=(
+                            "upload_review_executor=codex_proxy requires "
+                            "upload_review_max_attempts in the task contract"
+                        ),
+                    )
+                )
+            else:
+                live_execution_results, agent_observations = _execute_agentic_upload_review_prs(
+                    config=config,
+                    run_id=run_id,
+                    task_payload=task_payload,
+                    upload_plan=upload_plan,
+                    upload_snapshot=queue_snapshot,
+                    model=upload_review_agent_model,
+                    max_attempts=upload_review_max_attempts,
+                    validation_command=upload_review_validation_command,
+                )
+                upload_review_observations.extend(agent_observations)
+                upload_review_validation_failure_count = sum(
+                    1 for observation in upload_review_observations if observation.status == "fail"
+                )
+                upload_pr_metadata_paths, upload_pr_metadata_probes = (
+                    _apply_upload_pr_execution_results(
+                        run_id=run_id,
+                        upload_snapshot=queue_snapshot,
+                        upload_plan=upload_plan,
+                        results=live_execution_results,
+                    )
+                )
+                upload_metadata_update_paths.extend(upload_pr_metadata_paths)
+                probes.extend(upload_pr_metadata_probes)
+                probes.append(
+                    CuratorProbe(
+                        name="agentic-upload-review",
+                        status=(
+                            "fail"
+                            if any(result.status == "failed" for result in live_execution_results)
+                            or upload_review_validation_failure_count
+                            else "pass"
+                        ),
+                        message="agentic upload review execution completed",
+                        details={
+                            "result_count": len(live_execution_results),
+                            "failed_count": sum(
+                                1
+                                for result in live_execution_results
+                                if result.status == "failed"
+                            ),
+                            "validation_failure_count": upload_review_validation_failure_count,
+                        },
+                    )
+                )
+        elif upload_review_validation_failure_count:
             probes.append(
                 CuratorProbe(
                     name="manual-live-upload-pr",
@@ -927,6 +1008,10 @@ def _empty_report(
     feedback_model: str | None,
     model_upload_review: bool,
     upload_review_model: str | None,
+    upload_review_executor: str | None,
+    upload_review_agent_model: str,
+    upload_review_max_attempts: int | None,
+    upload_review_validation_command: list[str],
     pr_repair_executor: str | None,
     pr_repair_model: str,
     pr_repair_max_per_run: int,
@@ -1139,6 +1224,10 @@ def _read_task(
             "feedback_model",
             "model_upload_review",
             "upload_review_model",
+            "upload_review_executor",
+            "upload_review_agent_model",
+            "upload_review_max_attempts",
+            "upload_review_validation_command",
             "pr_repair_executor",
             "pr_repair_model",
             "pr_repair_max_per_run",
@@ -1753,6 +1842,70 @@ def _execute_upload_review_prs(
         if results[-1].status != "failed":
             _delete_pending_upload_pr_creation_intent(config.intake, intent)
     return results
+
+
+def _execute_agentic_upload_review_prs(
+    *,
+    config: CuratorDryRunConfig,
+    run_id: str,
+    task_payload: dict[str, Any] | None,
+    upload_plan: UploadPlan,
+    upload_snapshot: UploadQueueSnapshot,
+    model: str,
+    max_attempts: int,
+    validation_command: list[str],
+) -> tuple[list[ExecutionResult], list[UploadReviewObservation]]:
+    adapter = (
+        FixtureBrokerAdapter.from_path(config.broker_fixture)
+        if config.broker_fixture is not None
+        else HttpBrokerAdapter(config.broker_url or "")
+    )
+    results = _retry_pending_upload_pr_creations(config.intake, adapter)
+    retried_keys = {
+        result.idempotency_key for result in results if result.operation == "pull.create"
+    }
+    pending_keys = {
+        intent.idempotency_key for intent in _load_pending_upload_pr_creation_intents(config.intake)
+    }
+    previews = [
+        preview
+        for preview in upload_plan.review_previews
+        if preview.idempotency_key not in pending_keys and preview.idempotency_key not in retried_keys
+    ]
+    if not previews:
+        return results, []
+    new_results, observations = execute_agentic_upload_review_prs_in_checkout(
+        run_id=run_id,
+        mode="manual_live",
+        broker_remote_url=_broker_remote_url(config, task_payload),
+        broker_adapter=adapter,
+        previews=previews,
+        bundles=upload_snapshot.bundles,
+        model=model,
+        max_attempts=max_attempts,
+        validation_command=validation_command,
+        output=config.output,
+        codex_proxy_base_url=config.codex_proxy_base_url or config.model_proxy_url or "http://gh-agent-proxy:8092",
+        codex_proxy_token=config.codex_proxy_token or config.model_proxy_token,
+        on_branch_pushed=lambda pushed_intent: _write_pending_upload_pr_creation_intent(
+            config.intake,
+            pushed_intent,
+        ),
+    )
+    results.extend(new_results)
+    for result in new_results:
+        if result.status != "failed":
+            matching_intent = next(
+                (
+                    upload_review_pull_intent(run_id=run_id, preview=preview)
+                    for preview in previews
+                    if preview.action_id == result.action_id
+                ),
+                None,
+            )
+            if matching_intent is not None:
+                _delete_pending_upload_pr_creation_intent(config.intake, matching_intent)
+    return results, observations
 
 
 def _retry_pending_upload_pr_creations(intake: Path, broker_adapter) -> list[ExecutionResult]:

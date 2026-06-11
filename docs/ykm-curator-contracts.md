@@ -57,6 +57,10 @@ The Curator task payload is a JSON object:
   "feedback_model": null,
   "model_upload_review": false,
   "upload_review_model": null,
+  "upload_review_executor": null,
+  "upload_review_agent_model": "ykm-codex-gpt-5-mini",
+  "upload_review_max_attempts": null,
+  "upload_review_validation_command": ["mise", "run", "validate"],
   "pr_repair_executor": null,
   "pr_repair_model": "ykm-codex-gpt-5-mini",
   "pr_repair_max_per_run": 1,
@@ -115,6 +119,18 @@ increase `validation_failure_count`; skipped non-integrated model decisions are 
 apply draft files. `needs_owner_action` should be reserved for uploads that cannot be turned into a
 small reviewable markdown and policy diff from the supplied context.
 
+`upload_review_executor: "codex_proxy"` is the agentic upload-review path. It makes Codex the
+primary upload executor rather than asking a structured model to return a draft JSON object. The
+executor clones `ykmcorpus` through the broker Git remote, creates the deterministic upload branch,
+passes the upload bundle and validation command to Codex through the scoped Codex proxy, and lets
+Codex edit corpus markdown plus `.ykm/corpus-policy.yaml` directly. The task contract must also set
+`upload_review_max_attempts`; Curator does not choose a hidden retry count for a live profile.
+Codex must leave validation passing and write a bounded sidecar summary containing a one-sentence
+`content_summary` and final markdown `draft_paths`. Curator then revalidates the checkout, rejects
+forbidden changes such as `.env*` and `.github/workflows/*`, commits and pushes only passing diffs,
+and opens the PR through broker `pull.create`. No GitHub mutation is made before final validation
+passes.
+
 `repair_prs` is an explicit `enabled_actions` value for maintaining open Curator-authored PRs after
 owner feedback. It requires `reconcile` plus `pr_repair_executor`. The `fixture` executor is for
 tests only. The `codex_proxy` executor clones the existing Curator branch through broker Git, writes
@@ -136,12 +152,11 @@ has explicit workflow write permission. With the current least-privilege App sco
 are reported as rejected repair results so repository-maintenance fixes can be handled separately.
 
 For upload review only, `manual_live` can now turn passing integrated observations into review PRs.
-The Curator clones `ykmcorpus` through the broker Git remote, creates the deterministic
-`curator/<run_id>/...` branch, reapplies the validated model draft, runs `mise run validate` again in
-that exact checkout, commits, pushes through broker credentials, and opens a PR through broker
-`pull.create` with Curator metadata. It does not move upload queue directories or write bundle
-`curator.json` as part of PR creation. Feedback issue/PR execution and PR maintenance writes remain
-guarded until their execution contracts are enabled.
+The legacy model path reapplies a validated model draft before PR creation. The agentic path uses
+the same checkout that Codex edited, so direct policy edits and file moves are preserved exactly.
+Successful PR creation marks upload metadata as `pr_opened`; failed validation or forbidden changes
+leave the queue unadvanced and record the failure in the run report. Feedback issue/PR execution
+and PR maintenance writes remain guarded until their execution contracts are enabled.
 
 The package also exposes native CLI entrypoints as `curator run`, `curator inspect-task`, and
 `curator inspect-report`. `inspect-task` validates a task contract without acquiring the run lock or
