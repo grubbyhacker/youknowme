@@ -58,8 +58,9 @@ UPLOAD_TOOL_DESCRIPTION = (
     "in the protected intake queue for later human or Curator processing."
 )
 FEEDBACK_TOOL_DESCRIPTION = (
-    "Record bounded feedback about missing, stale, wrong, or unclear YouKnowMe content. Feedback is "
-    "an inert protected log for future Curator review; it is not indexed or shown in query results."
+    "Record bounded feedback in an inert protected log for future YouKnowMe Curator review. Include "
+    "a clear comment and optional source, section, result, or upload evidence; it is not indexed, "
+    "and the Curator decides whether it becomes a corpus PR, a corpus issue, or a product issue."
 )
 PROTECTED_RESOURCE_METADATA_PATHS = (
     "/.well-known/oauth-protected-resource",
@@ -251,8 +252,8 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
 
     @mcp.tool(description=FEEDBACK_TOOL_DESCRIPTION)
     def feedback(
-        category: str,
         comment: str,
+        category: str | None = None,
         source_id: str | None = None,
         section_id: str | None = None,
         result_ids: list[str] | None = None,

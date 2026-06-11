@@ -200,6 +200,7 @@ class UploadResponse(BaseModel):
 class FeedbackRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    comment: str = Field(min_length=1, max_length=2000)
     category: Literal[
         "missing_content",
         "wrong_content",
@@ -209,8 +210,7 @@ class FeedbackRequest(BaseModel):
         "needs_owner_action",
         "positive_content",
         "non_actionable",
-    ]
-    comment: str = Field(min_length=1, max_length=2000)
+    ] | None = None
     source_id: str | None = Field(default=None, max_length=200)
     section_id: str | None = Field(default=None, max_length=200)
     result_ids: list[str] = Field(default_factory=list, max_length=10)
@@ -247,8 +247,8 @@ class FeedbackLogRecord(BaseModel):
     feedback_id: str
     auth_path: str
     build_id: str | None
-    category: str
     comment: str
+    category: str | None = None
     source_id: str | None = None
     section_id: str | None = None
     result_ids: list[str] = Field(default_factory=list)

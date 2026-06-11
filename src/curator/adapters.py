@@ -279,6 +279,26 @@ class FixtureBrokerAdapter:
             for intent in intents
         ]
 
+    def create_issue(self, intent: ExecutionIntent) -> ExecutionResult:
+        if intent.operation != "issue.create":
+            return ExecutionResult(
+                action_id=intent.action_id,
+                operation=intent.operation,
+                idempotency_key=intent.idempotency_key,
+                status="failed",
+                target_repo=intent.target_repo,
+                message=f"unsupported broker operation for create_issue: {intent.operation}",
+            )
+        return ExecutionResult(
+            action_id=intent.action_id,
+            operation=intent.operation,
+            idempotency_key=intent.idempotency_key,
+            status="simulated",
+            target_repo=intent.target_repo,
+            issue_number=1,
+            message="broker fixture simulated issue.create",
+        )
+
 
 class HttpBrokerAdapter:
     def __init__(
@@ -633,6 +653,64 @@ class HttpBrokerAdapter:
             pr_number=_int_value(raw.get("number")) if isinstance(raw, dict) else None,
             url=_str_value(raw.get("html_url")) if isinstance(raw, dict) else None,
             message="broker pull.create succeeded",
+        )
+
+    def create_issue(self, intent: ExecutionIntent) -> ExecutionResult:
+        if intent.operation != "issue.create":
+            return ExecutionResult(
+                action_id=intent.action_id,
+                operation=intent.operation,
+                idempotency_key=intent.idempotency_key,
+                status="failed",
+                target_repo=intent.target_repo,
+                message=f"unsupported broker operation for create_issue: {intent.operation}",
+            )
+        try:
+            response = self._request(
+                "POST",
+                f"/v1/repos/{intent.target_repo}/issues",
+                authenticated=True,
+                idempotency_key=intent.idempotency_key,
+                json_body={
+                    "title": intent.title or "YouKnowMe Curator feedback",
+                    "body": intent.body or "",
+                    "labels": intent.labels,
+                    "assignees": intent.assignees,
+                    "metadata": _curator_metadata(intent),
+                    "permissions": ["issues:write"],
+                },
+            )
+            if response.status_code >= 400:
+                return ExecutionResult(
+                    action_id=intent.action_id,
+                    operation=intent.operation,
+                    idempotency_key=intent.idempotency_key,
+                    status="failed",
+                    target_repo=intent.target_repo,
+                    message=(
+                        "broker issue.create failed with HTTP "
+                        f"{response.status_code}: {response.text[:500]}"
+                    ),
+                )
+            raw = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            return ExecutionResult(
+                action_id=intent.action_id,
+                operation=intent.operation,
+                idempotency_key=intent.idempotency_key,
+                status="failed",
+                target_repo=intent.target_repo,
+                message=f"broker issue.create failed: {exc}",
+            )
+        return ExecutionResult(
+            action_id=intent.action_id,
+            operation=intent.operation,
+            idempotency_key=intent.idempotency_key,
+            status="executed",
+            target_repo=intent.target_repo,
+            issue_number=_int_value(raw.get("number")) if isinstance(raw, dict) else None,
+            url=_str_value(raw.get("html_url")) if isinstance(raw, dict) else None,
+            message="broker issue.create succeeded",
         )
 
     def add_issue_comment(

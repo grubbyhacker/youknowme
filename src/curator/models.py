@@ -12,11 +12,20 @@ CURATOR_REPORT_SCHEMA_VERSION = CURATOR_SCHEMA_VERSION
 DEFAULT_STALE_LOCK_TIMEOUT_SECONDS = 7200
 DEFAULT_LOCK_PATH = "/data/intake/curator-run.lock"
 DEFAULT_TARGET_REPO = "grubbyhacker/ykmcorpus"
+DEFAULT_PRODUCT_REPO = "grubbyhacker/youknowme"
 UPLOAD_QUEUE_DIRS = ("pending", "claimed", "processed", "rejected", "archive", "deferred")
 
 CuratorMode = Literal["dry_run", "state_only", "manual_live"]
 CuratorEnabledAction = Literal["reconcile", "plan_feedback", "plan_uploads", "repair_prs"]
-CuratorActionType = Literal["no_action", "issue", "corpus_pr", "link_to_upload", "defer"]
+CuratorActionType = Literal[
+    "corpus_pr",
+    "corpus_issue",
+    "product_issue",
+    "no_action",
+    "issue",
+    "link_to_upload",
+    "defer",
+]
 CuratorActionExecution = Literal["not_executed", "executed", "skipped"]
 CuratorActionValidation = Literal["accepted", "rejected"]
 CuratorRunStatus = Literal["pass", "fail"]
@@ -32,6 +41,7 @@ ExecutionOperation = Literal[
 ]
 PrRepairExecutor = Literal["fixture", "codex_proxy"]
 UploadReviewExecutor = Literal["codex_proxy"]
+FeedbackExecutor = Literal["codex_proxy"]
 PrRepairStatus = Literal[
     "validated",
     "validation_failed",
@@ -117,6 +127,13 @@ class CuratorTask(BaseModel):
     model_call_budget: ModelCallBudget = Field(default_factory=ModelCallBudget)
     model_feedback_planning: bool = False
     feedback_model: str | None = None
+    feedback_executor: FeedbackExecutor | None = None
+    feedback_agent_model: str = "ykm-codex-gpt-5-mini"
+    feedback_agent_max_attempts: int | None = Field(default=None, ge=1)
+    feedback_agent_validation_command: list[str] = Field(
+        default_factory=lambda: ["mise", "run", "validate"],
+        min_length=1,
+    )
     model_upload_review: bool = False
     upload_review_model: str | None = None
     upload_review_executor: UploadReviewExecutor | None = None

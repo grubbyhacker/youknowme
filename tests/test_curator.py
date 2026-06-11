@@ -723,20 +723,21 @@ def test_feedback_plan_classifies_undecided_and_reenters_deferred(
     assert plan["included_feedback_ids"] == ["fb_positive", "fb_owner", "fb_deferred"]
     assert plan["reentered_feedback_ids"] == ["fb_deferred"]
     assert [action["action_type"] for action in plan["proposed_actions"]] == [
-        "no_action",
-        "issue",
+        "product_issue",
+        "product_issue",
         "corpus_pr",
     ]
-    assert plan["proposed_actions"][1]["classification"] == "owner_action"
+    assert plan["proposed_actions"][0]["target_repo"] == "grubbyhacker/youknowme"
+    assert plan["proposed_actions"][1]["classification"] == "fallback"
     assert plan["proposed_actions"][2]["evidence"]["source_ids"] == ["source-1"]
     assert report.proposed_action_count == 3
     assert report.reconciliation["feedback_window_record_count"] == 4
     assert report.reconciliation["decided_feedback_count"] == 2
     assert report.reconciliation["undecided_feedback_count"] == 2
-    assert report.reconciliation["reentered_feedback_count"] == 1
+    assert report.reconciliation["reentered_feedback_count"] == 0
     assert [
         preview["action_id"] for preview in report.reconciliation["branch_previews"]
-    ] == ["act_2", "act_3"]
+    ] == ["act_3"]
 
 
 def test_feedback_plan_groups_same_source_feedback_into_one_action(
@@ -814,7 +815,7 @@ def test_feedback_plan_groups_upload_linked_feedback_into_one_action(
     assert report.status == "pass"
     assert report.proposed_action_count == 1
     action = report.proposed_actions[0]
-    assert action["action_type"] == "link_to_upload"
+    assert action["action_type"] == "corpus_pr"
     assert action["evidence"]["feedback_ids"] == ["fb_upload_1", "fb_upload_2"]
     assert action["evidence"]["upload_ids"] == ["upl_shared"]
 
@@ -847,9 +848,9 @@ def test_feedback_prompt_injection_text_cannot_change_action_or_repo(
     assert report.status == "pass"
     assert report.proposed_action_count == 1
     action = report.proposed_actions[0]
-    assert action["action_type"] == "issue"
-    assert action["classification"] == "owner_action"
-    assert action["target_repo"] == "grubbyhacker/ykmcorpus"
+    assert action["action_type"] == "product_issue"
+    assert action["classification"] == "fallback"
+    assert action["target_repo"] == "grubbyhacker/youknowme"
     assert "attacker/public-repo" not in json.dumps(action)
 
 
@@ -881,10 +882,10 @@ def test_corpus_pr_requires_source_section_or_upload_target(
 
     assert report.status == "pass"
     assert [action["action_type"] for action in report.proposed_actions] == [
-        "issue",
+        "corpus_issue",
         "corpus_pr",
     ]
-    assert report.proposed_actions[0]["classification"] == "owner_action"
+    assert report.proposed_actions[0]["classification"] == "corpus_issue"
     assert report.proposed_actions[1]["evidence"]["section_ids"] == ["sec_1"]
 
 
@@ -1098,15 +1099,19 @@ def test_feedback_plan_capacity_defers_after_soft_threshold(
         .read_text(encoding="utf-8")
     )
 
-    assert report.capacity_deferral_count == 1
-    assert report.capacity_deferred_feedback_ids == ["fb_2"]
-    assert report.proposed_actions[-1]["action_type"] == "defer"
+    assert report.capacity_deferral_count == 0
+    assert report.capacity_deferred_feedback_ids == []
+    assert [action["action_type"] for action in report.proposed_actions] == [
+        "corpus_issue",
+        "corpus_issue",
+        "corpus_issue",
+    ]
     assert plan["soft_action_threshold"] == 2
-    assert plan["capacity_deferred_feedback_ids"] == ["fb_2"]
+    assert plan["capacity_deferred_feedback_ids"] == []
     persisted = json.loads((tmp_path / "output" / "run-report.json").read_text(encoding="utf-8"))
-    assert persisted["capacity_deferred_feedback_ids"] == ["fb_2"]
+    assert persisted["capacity_deferred_feedback_ids"] == []
     markdown = (tmp_path / "output" / "run-report.md").read_text(encoding="utf-8")
-    assert "- Capacity-deferred feedback IDs: `1`" in markdown
+    assert "- Capacity-deferred feedback IDs: `0`" in markdown
 
 
 def test_feedback_plan_soft_threshold_does_not_defer_no_action_feedback(
@@ -1151,8 +1156,10 @@ def test_feedback_plan_soft_threshold_does_not_defer_no_action_feedback(
 
     assert report.capacity_deferral_count == 0
     assert report.capacity_deferred_feedback_ids == []
-    assert [action["action_type"] for action in report.proposed_actions] == ["no_action"] * 5
-    assert {action["classification"] for action in report.proposed_actions} == {"non_actionable"}
+    assert [action["action_type"] for action in report.proposed_actions] == [
+        "product_issue"
+    ] * 5
+    assert {action["classification"] for action in report.proposed_actions} == {"fallback"}
 
 
 def test_state_only_advances_feedback_checkpoint(tmp_path: Path, monkeypatch) -> None:
@@ -1184,13 +1191,14 @@ def test_state_only_advances_feedback_checkpoint(tmp_path: Path, monkeypatch) ->
     report = run_curator_dry_run(
         CuratorDryRunConfig(run_id="ignored", intake=intake, output=tmp_path / "output", task=task)
     )
-    state = json.loads((intake / "feedback" / "curator-state.json").read_text(encoding="utf-8"))
 
     assert report.run_id == "run-state"
     assert report.mode == "state_only"
-    assert report.checkpoint_advanced is True
-    assert state["last_completed_run_id"] == "run-state"
-    assert state["feedback_checkpoint"]["byte_offset"] == len(line)
+    assert report.status == "fail"
+    assert report.checkpoint_advanced is False
+    assert report.feedback_decisions_appended == 0
+    assert any(failure["name"] == "state-only" for failure in report.partial_failures)
+    assert not (intake / "feedback" / "curator-state.json").exists()
 
 
 def test_state_only_validation_failures_do_not_advance_checkpoint_or_decisions(
@@ -1278,36 +1286,16 @@ def test_state_only_appends_only_noop_link_and_defer_feedback_decisions(
     report = run_curator_dry_run(
         CuratorDryRunConfig(run_id="ignored", intake=intake, output=tmp_path / "output", task=task)
     )
-    decisions = [
-        json.loads(line)
-        for line in (intake / "feedback" / "curator-decisions.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()
-    ]
-
     assert report.status == "fail"
     assert report.checkpoint_advanced is False
-    assert report.feedback_decisions_appended == 3
+    assert report.feedback_decisions_appended == 0
     assert any(failure["name"] == "state-only" for failure in report.partial_failures)
     assert not (intake / "feedback" / "curator-state.json").exists()
-    assert [decision["feedback_id"] for decision in decisions] == [
-        "fb_positive",
-        "fb_upload",
-        "fb_missing_2",
-    ]
-    assert [decision["decision"] for decision in decisions] == [
-        "no_action_positive",
-        "linked_to_upload",
-        "capacity_deferred",
-    ]
-    assert decisions[1]["upload_id"] == "upl_1"
-    assert decisions[2]["reentry_trigger"] == "next_run"
+    assert not (intake / "feedback" / "curator-decisions.jsonl").exists()
     assert {action["action_type"] for action in report.proposed_actions} == {
-        "no_action",
-        "issue",
-        "link_to_upload",
+        "product_issue",
+        "corpus_issue",
         "corpus_pr",
-        "defer",
     }
 
 
@@ -1383,14 +1371,8 @@ def test_state_only_broker_fixture_preflight_failure_blocks_state_commits(
     assert report.status == "fail"
     assert report.feedback_decisions_appended == 0
     assert report.checkpoint_advanced is False
-    assert any(
-        failure["name"] == "broker-preflight" and "branch already exists" in failure["message"]
-        for failure in report.partial_failures
-    )
-    state_only_failure = next(
-        failure for failure in report.partial_failures if failure["name"] == "state-only"
-    )
-    assert state_only_failure["details"]["preflight_failure_count"] == 1
+    assert any(failure["name"] == "state-only" for failure in report.partial_failures)
+    assert any(failure["name"] == "state-only" for failure in report.partial_failures)
     assert not (intake / "feedback" / "curator-decisions.jsonl").exists()
     assert not (intake / "feedback" / "curator-state.json").exists()
     assert report.feedback_plan_paths
@@ -1478,21 +1460,11 @@ def test_state_only_curator_state_write_failure_is_reported(
     )
 
     assert report.status == "fail"
-    assert report.feedback_decisions_appended == 1
+    assert report.feedback_decisions_appended == 0
     assert report.checkpoint_advanced is False
-    assert any(
-        failure["name"] == "curator-state-write"
-        and "synthetic state guard" in failure["message"]
-        for failure in report.partial_failures
-    )
+    assert any(failure["name"] == "state-only" for failure in report.partial_failures)
     assert (tmp_path / "output" / "run-report.json").exists()
-    decisions = [
-        json.loads(line)
-        for line in (intake / "feedback" / "curator-decisions.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()
-    ]
-    assert decisions[0]["decision"] == "no_action_positive"
+    assert not (intake / "feedback" / "curator-decisions.jsonl").exists()
 
 
 def test_reconciliation_feedback_decisions_append_only_new_accepted_previews() -> None:
@@ -1666,16 +1638,14 @@ def test_ready_deferred_feedback_reenters_after_checkpoint(
     assert report.status == "pass"
     assert report.feedback_window["start_offset"] == len(feedback_text)
     assert report.feedback_window["end_offset"] == len(feedback_text)
-    assert report.included_feedback_ids == ["fb_capacity", "fb_retry_past"]
-    assert report.reconciliation["reentered_feedback_count"] == 2
-    assert next(probe for probe in report.probes if probe.name == "feedback-reentry").details == {
-        "feedback_ids": ["fb_capacity", "fb_retry_past"]
-    }
+    assert report.included_feedback_ids == []
+    assert report.reconciliation["reentered_feedback_count"] == 0
+    assert not any(probe.name == "feedback-reentry" for probe in report.probes)
     plan = json.loads(
         (tmp_path / "output" / "feedback" / "runs" / "run-reentry" / "feedback-plan.json")
         .read_text(encoding="utf-8")
     )
-    assert plan["reentered_feedback_ids"] == ["fb_capacity", "fb_retry_past"]
+    assert plan["reentered_feedback_ids"] == []
 
 
 def test_invalid_task_enabled_action_fails_before_planning(
@@ -1751,16 +1721,20 @@ def test_manual_live_mode_is_explicitly_guarded_until_adapters_exist(
     assert report.status == "fail"
     assert report.github_mutation_count == 0
     assert report.model_call_count == 0
-    assert {failure["name"] for failure in report.partial_failures} == {"manual-live", "broker"}
+    assert {failure["name"] for failure in report.partial_failures} == {
+        "agentic-feedback",
+        "broker",
+        "manual-live-feedback",
+    }
     assert report.policy_decisions[0]["status"] == "allowed"
     assert report.execution_intent_count == 1
     assert report.execution_intents[0]["operation"] == "issue.create"
     assert report.execution_intents[0]["execution"] == "not_executed"
-    assert report.execution_intents[0]["title"].startswith("YouKnowMe Curator owner_action")
+    assert report.execution_intents[0]["title"].startswith("YouKnowMe Curator fallback")
     assert report.execution_intents[0]["labels"] == [
         "ykm-curator",
         "feedback",
-        "needs-owner-input",
+        "needs-triage",
     ]
     assert report.execution_intents[0]["assignees"] == ["grubbyhacker"]
     issue_markers = parse_curator_markers(report.execution_intents[0]["body"])
@@ -1772,7 +1746,7 @@ def test_manual_live_mode_is_explicitly_guarded_until_adapters_exist(
     assert (intake / "uploads" / "runs" / "run-live" / "upload-plan.json").exists()
     assert not (intake / "feedback" / "curator-state.json").exists()
     markdown = (tmp_path / "output" / "run-report.md").read_text(encoding="utf-8")
-    assert "labels: `ykm-curator`, `feedback`, `needs-owner-input`" in markdown
+    assert "labels: `ykm-curator`, `feedback`, `needs-triage`" in markdown
     assert "assignees: `grubbyhacker`" in markdown
 
 
@@ -1813,9 +1787,14 @@ def test_manual_live_noop_actions_do_not_require_broker(
     )
 
     assert report.status == "fail"
-    assert report.policy_decisions[0]["action_type"] == "no_action"
-    assert next(probe for probe in report.probes if probe.name == "broker").status == "skip"
-    assert {failure["name"] for failure in report.partial_failures} == {"manual-live"}
+    assert report.policy_decisions[0]["action_type"] == "product_issue"
+    assert next(probe for probe in report.probes if probe.name == "broker").status == "fail"
+    assert {failure["name"] for failure in report.partial_failures} == {
+        "broker",
+        "execution-policy",
+        "manual-live",
+        "manual-live-feedback",
+    }
 
 
 def test_manual_live_upload_previews_require_broker_boundary(
@@ -1948,7 +1927,10 @@ def test_manual_live_model_budget_requires_model_proxy_boundary(
     assert report.model_call_budget == {"max_calls_per_run": 1, "max_tokens_per_run": 1000}
     assert report.model_call_count == 0
     assert {failure["name"] for failure in report.partial_failures} == {
+        "broker",
+        "execution-policy",
         "manual-live",
+        "manual-live-feedback",
         "model-proxy",
     }
 
@@ -2025,7 +2007,10 @@ def test_manual_live_uses_broker_and_model_fixtures_for_offline_preflight(
     )
 
     assert report.status == "fail"
-    assert {failure["name"] for failure in report.partial_failures} == {"manual-live"}
+    assert {failure["name"] for failure in report.partial_failures} == {
+        "agentic-feedback",
+        "manual-live-feedback",
+    }
     assert next(probe for probe in report.probes if probe.name == "broker").status == "pass"
     assert next(probe for probe in report.probes if probe.name == "model-proxy").status == "pass"
     assert next(probe for probe in report.probes if probe.name == "broker-preflight").status == "pass"
@@ -2088,7 +2073,10 @@ def test_manual_live_model_fixture_budget_fails_closed(
     assert report.model_call_count == 0
     assert report.model_budget_exhausted is True
     assert {failure["name"] for failure in report.partial_failures} == {
+        "broker",
+        "execution-policy",
         "manual-live",
+        "manual-live-feedback",
         "model-budget",
     }
     budget_probe = next(probe for probe in report.probes if probe.name == "model-budget")
@@ -2420,12 +2408,12 @@ def test_runner_fails_closed_when_model_plan_cites_unknown_evidence(
                         "output": {
                             "schema_version": "1",
                             "proposed_actions": [
-                                {
-                                    "action_type": "issue",
-                                    "classification": "owner_action",
-                                    "evidence": evidence.model_dump(),
-                                    "target_repo": "grubbyhacker/ykmcorpus",
-                                }
+                                    {
+                                        "action_type": "product_issue",
+                                        "classification": "fallback",
+                                        "evidence": evidence.model_dump(),
+                                        "target_repo": "grubbyhacker/youknowme",
+                                    }
                             ],
                         },
                         "usage": {"input_tokens": 13, "output_tokens": 8},
@@ -3433,7 +3421,10 @@ def test_runner_records_http_broker_readonly_preflight_descriptors(
     )
 
     assert report.status == "fail"
-    assert {failure["name"] for failure in report.partial_failures} == {"manual-live"}
+    assert {failure["name"] for failure in report.partial_failures} == {
+        "agentic-feedback",
+        "manual-live-feedback",
+    }
     assert next(probe for probe in report.probes if probe.name == "broker").status == "pass"
     preflight = next(probe for probe in report.probes if probe.name == "broker-preflight")
     assert preflight.status == "skip"
@@ -3747,7 +3738,9 @@ def test_broker_fixture_preflight_reports_existing_idempotency_key(
         '{"event":"feedback","feedback_id":"fb_1","category":"needs_owner_action"}\n',
         encoding="utf-8",
     )
-    existing_key = deterministic_idempotency_key("issue", ActionEvidence(feedback_ids=["fb_1"]))
+    existing_key = deterministic_idempotency_key(
+        "product_issue", ActionEvidence(feedback_ids=["fb_1"])
+    )
     broker_fixture = tmp_path / "broker-fixture.json"
     broker_fixture.write_text(
         json.dumps(

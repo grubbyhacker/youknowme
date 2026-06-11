@@ -12,6 +12,7 @@ from curator.models import (
     FeedbackInputRecord,
     FeedbackPlan,
     FeedbackWindow,
+    DEFAULT_PRODUCT_REPO,
     DEFAULT_TARGET_REPO,
     ProposedAction,
     UploadBundleSnapshot,
@@ -25,7 +26,8 @@ from curator.state import deterministic_idempotency_key
 from curator.upload_draft import draft_upload_corpus_change
 
 
-REENTER_DECISIONS = {"deferred", "capacity_deferred"}
+TERMINAL_FEEDBACK_DECISIONS = {"issue_opened", "pr_opened"}
+REENTER_DECISIONS: set[str] = set()
 IMMEDIATE_REENTRY_TRIGGERS = {"next_run"}
 
 
@@ -34,20 +36,8 @@ def ready_reentry_feedback_ids(
     *,
     now: datetime | None = None,
 ) -> set[str]:
-    current_time = now or datetime.now(UTC)
-    ready: set[str] = set()
-    for feedback_id, decision in latest_decisions.items():
-        if decision.decision == "capacity_deferred":
-            ready.add(feedback_id)
-            continue
-        if decision.decision != "deferred":
-            continue
-        if decision.reentry_trigger in IMMEDIATE_REENTRY_TRIGGERS:
-            ready.add(feedback_id)
-        elif decision.reentry_trigger == "retry_after" and decision.retry_after is not None:
-            if decision.retry_after <= current_time:
-                ready.add(feedback_id)
-    return ready
+    _ = (latest_decisions, now)
+    return set()
 
 
 def build_feedback_plan(
@@ -65,9 +55,7 @@ def build_feedback_plan(
     referenced_source_ids: set[str] = set()
     referenced_section_ids: set[str] = set()
     referenced_result_ids: set[str] = set()
-    capacity_deferred_feedback_ids: list[str] = []
     action_index = 1
-    github_object_action_count = 0
 
     for raw_record in feedback_records:
         try:
@@ -75,7 +63,7 @@ def build_feedback_plan(
         except ValidationError:
             continue
         decision = latest_decisions.get(record.feedback_id)
-        if decision is not None and decision.decision not in REENTER_DECISIONS:
+        if decision is not None and decision.decision in TERMINAL_FEEDBACK_DECISIONS:
             continue
         if decision is not None:
             reentered.append(record.feedback_id)
@@ -88,17 +76,7 @@ def build_feedback_plan(
             referenced_section_ids.add(record.section_id)
         referenced_result_ids.update(record.result_ids)
         action = _action_for_record(run_id, action_index, record)
-        if (
-            action.action_type in {"issue", "corpus_pr"}
-            and github_object_action_count >= soft_action_threshold
-        ):
-            capacity_deferred_feedback_ids.append(record.feedback_id)
-            proposed_actions.append(_action_for_record(run_id, action_index, record, force_defer=True))
-            action_index += 1
-            continue
         proposed_actions.append(action)
-        if action.action_type in {"issue", "corpus_pr"}:
-            github_object_action_count += 1
         action_index += 1
     proposed_actions = _merge_groupable_actions(proposed_actions)
 
@@ -112,7 +90,6 @@ def build_feedback_plan(
         referenced_section_ids=sorted(referenced_section_ids),
         referenced_result_ids=sorted(referenced_result_ids),
         soft_action_threshold=soft_action_threshold,
-        capacity_deferred_feedback_ids=capacity_deferred_feedback_ids,
         proposed_actions=proposed_actions,
         created_at=datetime.now(UTC),
     )
@@ -288,8 +265,6 @@ def _action_for_record(
     run_id: str,
     action_index: int,
     record: FeedbackInputRecord,
-    *,
-    force_defer: bool = False,
 ) -> ProposedAction:
     evidence = ActionEvidence(
         feedback_ids=[record.feedback_id],
@@ -298,42 +273,39 @@ def _action_for_record(
         section_ids=[record.section_id] if record.section_id else [],
         result_ids=record.result_ids,
     )
-    category = "upload_linked" if record.upload_id and not force_defer else record.category
     action_type, classification = _classify(
-        category,
-        force_defer=force_defer,
+        record.category,
         has_corpus_target=bool(record.source_id or record.section_id or record.upload_id),
     )
+    target_repo = _target_repo_for_action(action_type)
     return ProposedAction(
         action_id=f"act_{action_index}",
         action_type=action_type,
         classification=classification,
         idempotency_key=deterministic_idempotency_key(action_type, evidence),
         evidence=evidence,
-        target_repo=DEFAULT_TARGET_REPO if action_type in {"issue", "corpus_pr"} else None,
+        target_repo=target_repo,
         validation="accepted",
         execution="not_executed",
     )
 
 
 def _classify(
-    category: str | None, *, force_defer: bool, has_corpus_target: bool
+    category: str | None, *, has_corpus_target: bool
 ) -> tuple[str, str]:
-    if force_defer:
-        return "defer", "capacity"
-    if category == "upload_linked":
-        return "link_to_upload", "upload_linked"
-    if category == "positive_content":
-        return "no_action", "positive"
-    if category in {"non_actionable", "agent_note"}:
-        return "no_action", "non_actionable"
-    if category == "needs_owner_action":
-        return "issue", "owner_action"
     if category in {"missing_content", "wrong_content", "stale_content", "unclear_content"}:
         if not has_corpus_target:
-            return "issue", "owner_action"
+            return "corpus_issue", "corpus_issue"
         return "corpus_pr", "corpus_candidate"
-    return "no_action", "insufficient_evidence"
+    return "product_issue", "fallback"
+
+
+def _target_repo_for_action(action_type: str) -> str:
+    if action_type in {"corpus_pr", "corpus_issue"}:
+        return DEFAULT_TARGET_REPO
+    if action_type == "product_issue":
+        return DEFAULT_PRODUCT_REPO
+    raise ValueError(f"feedback planner produced unsupported action type: {action_type}")
 
 
 def _upload_needs_deterministic_review(bundle: UploadBundleSnapshot) -> bool:

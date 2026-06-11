@@ -54,6 +54,7 @@ from curator.execution import (
     reconciliation_feedback_reentry_decisions,
     state_only_feedback_decisions,
 )
+from curator.feedback_agent import execute_agentic_feedback_actions
 from curator.planning import build_feedback_plan, build_upload_plan, ready_reentry_feedback_ids
 from curator.policy import evaluate_feedback_action_policy, policy_from_budget
 from curator.pr_repair import execute_pr_repairs
@@ -89,6 +90,7 @@ DEFAULT_FORBIDDEN_ENV = (
     "YKM_CF_ACCESS_CLIENT_SECRET",
 )
 DEFAULT_CORPUS_REPO = "grubbyhacker/ykmcorpus"
+DEFAULT_PRODUCT_REPO = "grubbyhacker/youknowme"
 MAX_UPLOAD_REVIEW_FILES = 5
 MAX_UPLOAD_REVIEW_FILE_CHARS = 20000
 MAX_UPLOAD_REVIEW_MANIFEST_CHARS = 20000
@@ -115,6 +117,16 @@ def run_curator_dry_run(config: CuratorDryRunConfig) -> CuratorDryRunReport:
         task_model.model_feedback_planning if task_model is not None else False
     )
     feedback_model = task_model.feedback_model if task_model is not None else None
+    feedback_executor = task_model.feedback_executor if task_model is not None else None
+    feedback_agent_model = (
+        task_model.feedback_agent_model if task_model is not None else "ykm-codex-gpt-5-mini"
+    )
+    feedback_agent_max_attempts = task_model.feedback_agent_max_attempts if task_model is not None else None
+    feedback_agent_validation_command = (
+        task_model.feedback_agent_validation_command
+        if task_model is not None
+        else ["mise", "run", "validate"]
+    )
     model_upload_review = task_model.model_upload_review if task_model is not None else False
     upload_review_model = task_model.upload_review_model if task_model is not None else None
     upload_review_executor = task_model.upload_review_executor if task_model is not None else None
@@ -163,6 +175,10 @@ def run_curator_dry_run(config: CuratorDryRunConfig) -> CuratorDryRunReport:
         "model_call_budget": model_call_budget,
         "model_feedback_planning": model_feedback_planning,
         "feedback_model": feedback_model,
+        "feedback_executor": feedback_executor,
+        "feedback_agent_model": feedback_agent_model,
+        "feedback_agent_max_attempts": feedback_agent_max_attempts,
+        "feedback_agent_validation_command": feedback_agent_validation_command,
         "model_upload_review": model_upload_review,
         "upload_review_model": upload_review_model,
         "upload_review_executor": upload_review_executor,
@@ -215,6 +231,10 @@ def _run_with_lock(
     model_call_budget: dict[str, int],
     model_feedback_planning: bool,
     feedback_model: str | None,
+    feedback_executor: str | None,
+    feedback_agent_model: str,
+    feedback_agent_max_attempts: int | None,
+    feedback_agent_validation_command: list[str],
     model_upload_review: bool,
     upload_review_model: str | None,
     upload_review_executor: str | None,
@@ -488,9 +508,10 @@ def _run_with_lock(
         feedback_plan.proposed_actions,
         policy_from_budget(github_mutation_budget),
     )
-    execution_intents = build_execution_intents(
+    feedback_execution_intents = build_execution_intents(
         run_id, feedback_plan.proposed_actions, policy_decisions
     )
+    execution_intents = [*feedback_execution_intents]
     execution_intents.extend(
         _upload_review_execution_intents(
             run_id=run_id,
@@ -530,8 +551,8 @@ def _run_with_lock(
                 message=f"{branch_collision_count} proposed Curator branch names collide with existing metadata",
             )
         )
-    simulated_execution_results = []
-    live_execution_results = []
+    simulated_execution_results: list[ExecutionResult] = []
+    live_execution_results: list[ExecutionResult] = []
     policy_denial_count = sum(1 for decision in policy_decisions if decision.status == "denied")
     if policy_denial_count:
         probes.append(
@@ -606,6 +627,9 @@ def _run_with_lock(
         "repair_prs" in enabled_actions and pr_repair_executor == "codex_proxy"
     ) or (
         "plan_uploads" in enabled_actions and upload_review_executor == "codex_proxy"
+    ) or (
+        feedback_executor == "codex_proxy"
+        and any(intent.operation == "pull.create" for intent in feedback_execution_intents)
     )
     _probe_model_proxy(config, probes, required=requires_model_proxy)
     _probe_model_budget(config, probes, model_call_budget)
@@ -622,6 +646,7 @@ def _run_with_lock(
     feedback_plan_paths: list[str] = []
     upload_plan_paths: list[str] = []
     decisions_appended = 0
+    live_feedback_decisions: list[FeedbackDecision] = []
     upload_metadata_update_paths: list[str] = []
     if mode == "state_only":
         _record_feedback_plan_write(
@@ -757,6 +782,91 @@ def _run_with_lock(
             upload_plan_paths,
             probes,
         )
+        if feedback_execution_intents:
+            if feedback_executor != "codex_proxy":
+                probes.append(
+                    CuratorProbe(
+                        name="agentic-feedback",
+                        status="fail",
+                        message="manual_live feedback processing requires feedback_executor=codex_proxy",
+                    )
+                )
+            elif feedback_agent_max_attempts is None:
+                probes.append(
+                    CuratorProbe(
+                        name="agentic-feedback",
+                        status="fail",
+                        message=(
+                            "feedback_executor=codex_proxy requires "
+                            "feedback_agent_max_attempts in the task contract"
+                        ),
+                    )
+                )
+            elif config.broker_url is None and config.broker_fixture is None:
+                probes.append(
+                    CuratorProbe(
+                        name="agentic-feedback",
+                        status="fail",
+                        message="manual_live feedback processing requires a broker URL or fixture",
+                    )
+                )
+            else:
+                feedback_broker = (
+                    FixtureBrokerAdapter.from_path(config.broker_fixture)
+                    if config.broker_fixture is not None
+                    else HttpBrokerAdapter(config.broker_url or "")
+                )
+                feedback_results = execute_agentic_feedback_actions(
+                    run_id=run_id,
+                    mode=mode,
+                    broker_remote_url=_broker_remote_url(config, task_payload)
+                    if (config.broker_url or _task_broker_remote_url(task_payload))
+                    else "",
+                    broker_adapter=feedback_broker,
+                    intents=feedback_execution_intents,
+                    feedback_records=feedback_records,
+                    model=feedback_agent_model,
+                    max_attempts=feedback_agent_max_attempts,
+                    validation_command=feedback_agent_validation_command,
+                    output=config.output,
+                    codex_proxy_base_url=(
+                        config.codex_proxy_base_url
+                        or config.model_proxy_url
+                        or "http://gh-agent-proxy:8092"
+                    ),
+                    codex_proxy_token=config.codex_proxy_token or config.model_proxy_token,
+                )
+                live_execution_results.extend(feedback_results)
+                feedback_decisions = _feedback_execution_decisions(
+                    run_id=run_id,
+                    intents=feedback_execution_intents,
+                    results=feedback_results,
+                )
+                live_feedback_decisions.extend(feedback_decisions)
+                appended, decision_append_probe = _append_feedback_decisions_safely(
+                    decisions_path,
+                    feedback_decisions,
+                )
+                decisions_appended += appended
+                if decision_append_probe is not None:
+                    probes.append(decision_append_probe)
+                probes.append(
+                    CuratorProbe(
+                        name="agentic-feedback",
+                        status=(
+                            "fail"
+                            if any(result.status == "failed" for result in feedback_results)
+                            else "pass"
+                        ),
+                        message="agentic feedback execution completed",
+                        details={
+                            "result_count": len(feedback_results),
+                            "failed_count": sum(
+                                1 for result in feedback_results if result.status == "failed"
+                            ),
+                        },
+                    )
+                )
         if upload_review_executor == "codex_proxy":
             if upload_review_max_attempts is None:
                 probes.append(
@@ -770,7 +880,7 @@ def _run_with_lock(
                     )
                 )
             else:
-                live_execution_results, agent_observations = _execute_agentic_upload_review_prs(
+                upload_results, agent_observations = _execute_agentic_upload_review_prs(
                     config=config,
                     run_id=run_id,
                     task_payload=task_payload,
@@ -781,6 +891,7 @@ def _run_with_lock(
                     max_upload_prs=_upload_pr_creation_budget(github_mutation_budget),
                     validation_command=upload_review_validation_command,
                 )
+                live_execution_results.extend(upload_results)
                 upload_review_observations.extend(agent_observations)
                 upload_review_validation_failure_count = sum(
                     1 for observation in upload_review_observations if observation.status == "fail"
@@ -790,7 +901,7 @@ def _run_with_lock(
                         run_id=run_id,
                         upload_snapshot=queue_snapshot,
                         upload_plan=upload_plan,
-                        results=live_execution_results,
+                        results=upload_results,
                     )
                 )
                 upload_metadata_update_paths.extend(upload_pr_metadata_paths)
@@ -800,16 +911,16 @@ def _run_with_lock(
                         name="agentic-upload-review",
                         status=(
                             "fail"
-                            if any(result.status == "failed" for result in live_execution_results)
+                            if any(result.status == "failed" for result in upload_results)
                             or upload_review_validation_failure_count
                             else "pass"
                         ),
                         message="agentic upload review execution completed",
                         details={
-                            "result_count": len(live_execution_results),
+                            "result_count": len(upload_results),
                             "failed_count": sum(
                                 1
-                                for result in live_execution_results
+                                for result in upload_results
                                 if result.status == "failed"
                             ),
                             "validation_failure_count": upload_review_validation_failure_count,
@@ -827,7 +938,7 @@ def _run_with_lock(
         elif (model_upload_review and upload_review_observations) or _has_pending_upload_pr_creations(
             config.intake
         ):
-            live_execution_results = _execute_upload_review_prs(
+            upload_results = _execute_upload_review_prs(
                 config=config,
                 run_id=run_id,
                 task_payload=task_payload,
@@ -835,12 +946,13 @@ def _run_with_lock(
                 observations=upload_review_observations,
                 outputs=upload_model_outputs,
             )
+            live_execution_results.extend(upload_results)
             upload_pr_metadata_paths, upload_pr_metadata_probes = (
                 _apply_upload_pr_execution_results(
                     run_id=run_id,
                     upload_snapshot=queue_snapshot,
                     upload_plan=upload_plan,
-                    results=live_execution_results,
+                    results=upload_results,
                 )
             )
             upload_metadata_update_paths.extend(upload_pr_metadata_paths)
@@ -850,19 +962,19 @@ def _run_with_lock(
                     name="manual-live-upload-pr",
                     status=(
                         "fail"
-                        if any(result.status == "failed" for result in live_execution_results)
+                        if any(result.status == "failed" for result in upload_results)
                         else "pass"
                     ),
                     message="manual_live upload PR execution completed",
                     details={
-                        "result_count": len(live_execution_results),
+                        "result_count": len(upload_results),
                         "failed_count": sum(
-                            1 for result in live_execution_results if result.status == "failed"
+                            1 for result in upload_results if result.status == "failed"
                         ),
                     },
                 )
             )
-        elif "repair_prs" not in enabled_actions:
+        elif "repair_prs" not in enabled_actions and not feedback_execution_intents:
             probes.append(
                 CuratorProbe(
                     name="manual-live",
@@ -870,14 +982,30 @@ def _run_with_lock(
                     message="manual_live adapters are not enabled; policy preflight only was performed",
                 )
             )
-        if any(intent.operation != "pull.create" for intent in execution_intents):
+        unresolved_feedback_ids = _state_only_unresolved_feedback_ids(
+            feedback_plan,
+            [
+                *[
+                    decision
+                    for decision in latest_decisions.values()
+                    if decision.decision in {"issue_opened", "pr_opened"}
+                ],
+                *live_feedback_decisions,
+            ],
+        )
+        if feedback_plan.included_feedback_ids and unresolved_feedback_ids:
             probes.append(
                 CuratorProbe(
-                    name="manual-live",
+                    name="manual-live-feedback",
                     status="fail",
-                    message="manual_live feedback issue/PR adapters are not enabled",
+                    message="manual_live checkpoint not advanced because feedback remains unresolved",
+                    details={"feedback_ids": unresolved_feedback_ids},
                 )
             )
+        if feedback_plan.included_feedback_ids and not any(probe.status == "fail" for probe in probes):
+            state_write_probe = _write_curator_state_safely(state_path, proposed_state)
+            probes.append(state_write_probe)
+            checkpoint_advanced = state_write_probe.status == "pass"
 
     feedback_count = _count_jsonl(feedback_path, "feedback", probes)
     query_log_count = _count_query_logs(config.logs, probes) if config.logs is not None else 0
@@ -1007,6 +1135,10 @@ def _empty_report(
     model_call_budget: dict[str, int],
     model_feedback_planning: bool,
     feedback_model: str | None,
+    feedback_executor: str | None,
+    feedback_agent_model: str,
+    feedback_agent_max_attempts: int | None,
+    feedback_agent_validation_command: list[str],
     model_upload_review: bool,
     upload_review_model: str | None,
     upload_review_executor: str | None,
@@ -1400,7 +1532,8 @@ def _check_forbidden_env(probes: list[CuratorProbe]) -> None:
 
 def _requires_broker(feedback_plan: FeedbackPlan, upload_plan: UploadPlan) -> bool:
     return any(
-        action.action_type in {"issue", "corpus_pr"} for action in feedback_plan.proposed_actions
+        action.action_type in {"issue", "corpus_issue", "product_issue", "corpus_pr"}
+        for action in feedback_plan.proposed_actions
     ) or bool(upload_plan.review_previews)
 
 
@@ -1553,22 +1686,17 @@ def _feedback_planning_model_request(
         "constraints": [
             "Return only valid JSON matching the response schema.",
             "Use only durable evidence identifiers present in feedback_records.",
-            "Do not propose GitHub mutations for positive or non-actionable feedback.",
-            "Use action_type no_action, issue, corpus_pr, link_to_upload, or defer.",
-            "Use classification positive, non_actionable, owner_action, corpus_candidate, upload_linked, capacity, or insufficient_evidence.",
+            "Every feedback record becomes exactly one actionable GitHub outcome.",
+            "Use action_type corpus_pr, corpus_issue, or product_issue.",
+            "Use classification corpus_candidate, corpus_issue, or fallback.",
             "Do not include action_id, idempotency_key, validation, or execution fields; the controller assigns them.",
             "Cover every included feedback_id in at least one proposed action.",
-            "A feedback_id is durable evidence for issue, no_action, and defer actions.",
-            "Use issue with classification owner_action for needs_owner_action feedback.",
-            "Use issue with classification owner_action for untargeted missing_content, wrong_content, stale_content, and unclear_content feedback.",
+            "A feedback_id is durable evidence for issue actions.",
+            "Use corpus_issue with classification corpus_issue for untargeted missing_content, wrong_content, stale_content, and unclear_content feedback.",
             "Use corpus_pr with classification corpus_candidate for missing_content, wrong_content, stale_content, and unclear_content feedback when source_id, section_id, or upload_id evidence identifies the corpus target.",
-            "Use no_action with classification non_actionable for agent_note and non_actionable feedback.",
-            "Use no_action with classification positive for positive_content feedback.",
             "Use corpus_pr only with source_id, section_id, or upload_id evidence.",
-            "Use link_to_upload only with upload_id evidence.",
-            f"Use target_repo {DEFAULT_CORPUS_REPO} for issue and corpus_pr actions.",
-            "Use defer only when a record cannot be safely classified from its category and evidence.",
-            "Classify agent_note, non_actionable, and positive_content as no_action unless durable evidence proves otherwise.",
+            f"Use target_repo {DEFAULT_CORPUS_REPO} for corpus_pr and corpus_issue actions.",
+            f"Use product_issue with target_repo {DEFAULT_PRODUCT_REPO} for functionality feedback, non-actionable feedback, praise, duplicates, ambiguity, or anything you cannot confidently classify.",
             "Prefer one grouped action over many identical actions when action_type, classification, target_repo, and evidence kind match.",
         ],
     }
@@ -2393,6 +2521,52 @@ def _state_only_unresolved_feedback_ids(
 ) -> list[str]:
     decided = {decision.feedback_id for decision in decisions}
     return sorted(feedback_id for feedback_id in plan.included_feedback_ids if feedback_id not in decided)
+
+
+def _feedback_execution_decisions(
+    *,
+    run_id: str,
+    intents: list[ExecutionIntent],
+    results: list[ExecutionResult],
+) -> list[FeedbackDecision]:
+    intents_by_action = {intent.action_id: intent for intent in intents}
+    timestamp = datetime.now(UTC)
+    decisions: list[FeedbackDecision] = []
+    for result in results:
+        if result.status != "executed":
+            continue
+        intent = intents_by_action.get(result.action_id)
+        if intent is None:
+            continue
+        if result.operation == "pull.create":
+            decision = "pr_opened"
+        elif result.operation == "issue.create":
+            decision = "issue_opened"
+        else:
+            continue
+        for feedback_id in intent.evidence.feedback_ids:
+            decisions.append(
+                FeedbackDecision(
+                    feedback_id=feedback_id,
+                    run_id=run_id,
+                    plan_action_id=intent.action_id,
+                    decision=decision,
+                    pr_number=result.pr_number,
+                    issue_number=result.issue_number,
+                    source_id=intent.evidence.source_ids[0]
+                    if intent.evidence.source_ids
+                    else None,
+                    section_id=intent.evidence.section_ids[0]
+                    if intent.evidence.section_ids
+                    else None,
+                    upload_id=intent.evidence.upload_ids[0]
+                    if intent.evidence.upload_ids
+                    else None,
+                    reason=result.message or "feedback GitHub action executed",
+                    timestamp=timestamp,
+                )
+            )
+    return decisions
 
 
 def _append_feedback_decisions_safely(
