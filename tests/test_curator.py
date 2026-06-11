@@ -34,6 +34,7 @@ from curator.models import (
     CuratorRunReport,
     CuratorTask,
     ExecutionIntent,
+    ExecutionResult,
     FeedbackDecision,
     FeedbackDecisionPreview,
     FeedbackPlan,
@@ -72,7 +73,11 @@ from curator.upload_state import (
 from curator.upload_observe import apply_upload_review_draft_to_checkout, observe_upload_review_draft
 from curator.upload_pr import upload_review_pull_intent
 from ykm.curator import CuratorDryRunConfig, run_curator_dry_run
-from curator.runner import _complete_pr_repair_handoffs, write_curator_reports
+from curator.runner import (
+    _complete_pr_repair_handoffs,
+    _write_pending_pr_repair_handoffs,
+    write_curator_reports,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -4424,6 +4429,7 @@ def test_pr_repair_handoff_posts_comment_dismisses_reviews_resolves_threads_and_
         status="pushed",
         message="pushed",
         changed_files=[".ykm/corpus-policy.yaml", "preferences/dev-environment.md"],
+        repair_head_sha="abc123repair",
         review_request_comment=_review_request_comment(
             CuratorPrReconciliation(
                 pr_number=5,
@@ -4478,11 +4484,163 @@ def test_pr_repair_handoff_posts_comment_dismisses_reviews_resolves_threads_and_
         "issue.label.remove",
     ]
     assert all(result.status == "simulated" for result in results)
+    assert results[0].idempotency_key == "pr-repair-comment:5:abc123repair"
+    assert results[1].idempotency_key == "pr-repair-dismiss-review:5:abc123repair:123"
+    assert results[2].idempotency_key == "pr-repair-resolve-thread:5:abc123repair:PRRT_123"
     assert "YKM-Curator-Run: run" in repair.review_request_comment
     assert repair.review_request_comment_status == "posted"
     assert repair.dismissed_review_count == 1
     assert repair.resolved_thread_count == 1
     assert repair.label_update_count == 2
+
+
+def test_pr_repair_handoff_stops_when_comment_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FailingCommentAdapter:
+        def add_issue_comment(self, **kwargs) -> ExecutionResult:
+            return ExecutionResult(
+                action_id=kwargs["action_id"],
+                operation="issue.comment",
+                idempotency_key=kwargs["idempotency_key"],
+                status="failed",
+                target_repo=kwargs["target_repo"],
+                pr_number=kwargs["issue_number"],
+                message="comment failed",
+            )
+
+        def dismiss_pull_review(self, **_kwargs) -> ExecutionResult:
+            raise AssertionError("handoff should not dismiss reviews after comment failure")
+
+        def resolve_review_thread(self, **_kwargs) -> ExecutionResult:
+            raise AssertionError("handoff should not resolve threads after comment failure")
+
+        def add_issue_label(self, **_kwargs) -> ExecutionResult:
+            raise AssertionError("handoff should not add labels after comment failure")
+
+        def remove_issue_label(self, **_kwargs) -> ExecutionResult:
+            raise AssertionError("handoff should not remove labels after comment failure")
+
+    monkeypatch.setattr(
+        "curator.runner.FixtureBrokerAdapter.from_path",
+        lambda _path: FailingCommentAdapter(),
+    )
+    broker_fixture = tmp_path / "broker-fixture.json"
+    broker_fixture.write_text(
+        json.dumps({"schema_version": "1", "reachable": True}) + "\n",
+        encoding="utf-8",
+    )
+    repair = PrRepairResult(
+        pr_number=5,
+        branch="curator/run/upload",
+        pr_state="changes_requested",
+        executor="codex_proxy",
+        model="ykm-codex-gpt-5-mini",
+        status="pushed",
+        message="pushed",
+        changed_files=["preferences/dev-environment.md"],
+        repair_head_sha="abc123repair",
+        review_request_comment="Curator repair completed and this PR is ready for review again.",
+        review_request_comment_status="pending",
+        pushed=True,
+    )
+    snapshot = CuratorPrSnapshot(
+        number=5,
+        state="open",
+        body="YKM-Curator-Run: run\n",
+        branch="curator/run/upload",
+        labels=["ym-curator: needs work"],
+        reviews=[CuratorPrReviewSnapshot(database_id=123, state="CHANGES_REQUESTED")],
+        review_threads=[CuratorPrReviewThreadSnapshot(id="PRRT_123", is_resolved=False)],
+    )
+
+    results = _complete_pr_repair_handoffs(
+        config=CuratorDryRunConfig(
+            run_id="run",
+            intake=tmp_path / "intake",
+            output=tmp_path / "output",
+            broker_fixture=broker_fixture,
+        ),
+        results=[repair],
+        snapshots=[snapshot],
+    )
+
+    assert len(results) == 1
+    assert results[0].operation == "issue.comment"
+    assert results[0].status == "failed"
+    assert results[0].idempotency_key == "pr-repair-comment:5:abc123repair"
+    assert repair.review_request_comment_status == "failed"
+    assert repair.review_request_comment_message == "comment failed"
+    assert repair.dismissed_review_count == 0
+    assert repair.resolved_thread_count == 0
+    assert repair.label_update_count == 0
+
+
+def test_runner_retries_pending_pr_repair_handoff_and_deletes_outbox(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    intake = tmp_path / "intake"
+    (intake / "feedback").mkdir(parents=True)
+    (intake / "feedback" / "feedback.jsonl").write_text("", encoding="utf-8")
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "run_id": "run-pr-repair-retry",
+                "mode": "manual_live",
+                "enabled_actions": ["reconcile", "repair_prs"],
+                "pr_repair_executor": "fixture",
+                "pr_repair_max_per_run": 0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    broker_fixture = tmp_path / "broker-fixture.json"
+    broker_fixture.write_text(
+        json.dumps({"schema_version": "1", "reachable": True, "pr_snapshots": []}) + "\n",
+        encoding="utf-8",
+    )
+    pending = PrRepairResult(
+        pr_number=5,
+        branch="curator/run/upload",
+        pr_state="changes_requested",
+        executor="codex_proxy",
+        model="ykm-codex-gpt-5-mini",
+        status="pushed",
+        message="pending handoff retry",
+        changed_files=["preferences/dev-environment.md"],
+        repair_head_sha="abc123repair",
+        review_request_comment="Curator repair completed and this PR is ready for review again.",
+        review_request_comment_status="pending",
+        pushed=True,
+    )
+    _write_pending_pr_repair_handoffs(intake, [pending])
+    pending_path = intake / "pr-repair-handoffs" / "pending" / "pr-5-abc123repair.json"
+    assert pending_path.exists()
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="ignored",
+            intake=intake,
+            output=tmp_path / "output",
+            task=task,
+            broker_fixture=broker_fixture,
+        )
+    )
+
+    assert report.status == "pass"
+    assert report.pr_repair_result_count == 1
+    assert report.pr_repair_results[0]["review_request_comment_status"] == "posted"
+    handoff_results = [
+        result for result in report.simulated_execution_results if result["operation"] == "issue.comment"
+    ]
+    assert len(handoff_results) == 1
+    assert not pending_path.exists()
 
 
 def test_runner_codex_proxy_repair_requires_proxy_credentials(

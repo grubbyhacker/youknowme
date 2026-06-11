@@ -244,6 +244,7 @@ def _execute_one_repair(
                 cwd=checkout,
                 env=git_env,
             )
+            repair_head_sha = _git_output(["rev-parse", "HEAD"], cwd=checkout, env=git_env).strip()
             _run_git(["push", "origin", f"HEAD:refs/heads/{branch}"], cwd=checkout, env=git_env)
             return _repair_result(
                 reconciliation,
@@ -252,6 +253,7 @@ def _execute_one_repair(
                 status="pushed",
                 message="PR repair validated and pushed to the existing Curator branch.",
                 changed_files=changed_files,
+                repair_head_sha=repair_head_sha,
                 diff_stat=diff_stat,
                 validation_command=validation_command,
                 validation_returncode=validation.returncode,
@@ -588,6 +590,7 @@ def _repair_result(
     status: str,
     message: str,
     changed_files: list[str] | None = None,
+    repair_head_sha: str | None = None,
     diff_stat: str | None = None,
     validation_command: list[str],
     validation_returncode: int | None = None,
@@ -608,6 +611,7 @@ def _repair_result(
         status=status,
         message=message,
         changed_files=changed_files or [],
+        repair_head_sha=repair_head_sha,
         diff_stat=diff_stat,
         validation_command=validation_command,
         validation_returncode=validation_returncode,
