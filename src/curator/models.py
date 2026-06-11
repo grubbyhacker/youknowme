@@ -572,6 +572,7 @@ class PrRepairResult(BaseModel):
     status: PrRepairStatus
     message: str
     changed_files: list[str] = Field(default_factory=list)
+    repair_head_sha: str | None = None
     diff_stat: str | None = None
     validation_command: list[str] = Field(default_factory=list)
     validation_returncode: int | None = None

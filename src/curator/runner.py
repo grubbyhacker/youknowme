@@ -376,6 +376,9 @@ def _run_with_lock(
     pr_repair_results = []
     pr_repair_handoff_results: list[ExecutionResult] = []
     if "repair_prs" in enabled_actions:
+        pending_pr_repair_handoffs = (
+            _load_pending_pr_repair_handoffs(config.intake) if mode == "manual_live" else []
+        )
         if pr_repair_executor is None:
             probes.append(
                 CuratorProbe(
@@ -393,7 +396,7 @@ def _run_with_lock(
                 )
             )
         else:
-            pr_repair_results = execute_pr_repairs(
+            new_pr_repair_results = execute_pr_repairs(
                 run_id=run_id,
                 mode=mode,
                 reconciliations=reconciliation.pr_reconciliations,
@@ -413,9 +416,10 @@ def _run_with_lock(
                 ),
                 codex_proxy_token=config.codex_proxy_token or config.model_proxy_token,
             )
+            pr_repair_results = pending_pr_repair_handoffs + new_pr_repair_results
             failed_repairs = [
                 result
-                for result in pr_repair_results
+                for result in new_pr_repair_results
                 if result.status
                 in {"validation_failed", "executor_failed", "push_failed", "rejected"}
             ]
@@ -425,17 +429,23 @@ def _run_with_lock(
                     status="fail" if failed_repairs else "pass",
                     message="PR repair execution completed",
                     details={
-                        "result_count": len(pr_repair_results),
+                        "result_count": len(new_pr_repair_results),
+                        "pending_handoff_count": len(pending_pr_repair_handoffs),
                         "failed_count": len(failed_repairs),
                     },
                 )
             )
             if mode == "manual_live":
+                _write_pending_pr_repair_handoffs(config.intake, pr_repair_results)
                 pr_repair_handoff_results = _complete_pr_repair_handoffs(
                     config=config,
                     results=pr_repair_results,
                     snapshots=pr_snapshots,
                 )
+                if pr_repair_handoff_results and all(
+                    result.status != "failed" for result in pr_repair_handoff_results
+                ):
+                    _delete_pending_pr_repair_handoffs(config.intake, pr_repair_results)
                 if pr_repair_handoff_results:
                     failed_comments = [
                         result
@@ -1704,8 +1714,9 @@ def _complete_pr_repair_handoffs(
         if not result.pushed or not result.review_request_comment:
             continue
         snapshot = snapshots_by_number.get(result.pr_number)
+        repair_key = _pr_repair_handoff_key(result)
         action_id = f"pr_repair_comment_{result.pr_number}"
-        idempotency_key = f"pr-repair-comment:{result.pr_number}:{result.branch or 'unknown'}"
+        idempotency_key = f"pr-repair-comment:{result.pr_number}:{repair_key}"
         comment_result = adapter.add_issue_comment(
             target_repo=DEFAULT_CORPUS_REPO,
             issue_number=result.pr_number,
@@ -1718,6 +1729,8 @@ def _complete_pr_repair_handoffs(
         )
         result.review_request_comment_message = comment_result.message
         handoff_results.append(comment_result)
+        if comment_result.status == "failed":
+            continue
 
         for review in (snapshot.reviews if snapshot else []):
             if review.state.lower() != "changes_requested":
@@ -1732,8 +1745,7 @@ def _complete_pr_repair_handoffs(
                 message=_repair_resolution_message(result),
                 action_id=f"pr_repair_dismiss_review_{result.pr_number}_{review_id}",
                 idempotency_key=(
-                    f"pr-repair-dismiss-review:{result.pr_number}:{result.branch or 'unknown'}:"
-                    f"{review_id}"
+                    f"pr-repair-dismiss-review:{result.pr_number}:{repair_key}:{review_id}"
                 ),
             )
             if dismiss_result.status != "failed":
@@ -1750,8 +1762,7 @@ def _complete_pr_repair_handoffs(
                 message=_repair_resolution_message(result),
                 action_id=f"pr_repair_resolve_thread_{result.pr_number}_{thread.id}",
                 idempotency_key=(
-                    f"pr-repair-resolve-thread:{result.pr_number}:{result.branch or 'unknown'}:"
-                    f"{thread.id}"
+                    f"pr-repair-resolve-thread:{result.pr_number}:{repair_key}:{thread.id}"
                 ),
             )
             if resolve_result.status != "failed":
@@ -1766,7 +1777,7 @@ def _complete_pr_repair_handoffs(
                 label=CURATOR_WAITING_REVIEW_LABEL,
                 action_id=f"pr_repair_add_waiting_review_{result.pr_number}",
                 idempotency_key=(
-                    f"pr-repair-label-add:{result.pr_number}:{result.branch or 'unknown'}:"
+                    f"pr-repair-label-add:{result.pr_number}:{repair_key}:"
                     f"{CURATOR_WAITING_REVIEW_LABEL}"
                 ),
             )
@@ -1780,7 +1791,7 @@ def _complete_pr_repair_handoffs(
                 label=CURATOR_NEEDS_WORK_LABEL,
                 action_id=f"pr_repair_remove_needs_work_{result.pr_number}",
                 idempotency_key=(
-                    f"pr-repair-label-remove:{result.pr_number}:{result.branch or 'unknown'}:"
+                    f"pr-repair-label-remove:{result.pr_number}:{repair_key}:"
                     f"{CURATOR_NEEDS_WORK_LABEL}"
                 ),
             )
@@ -1788,6 +1799,53 @@ def _complete_pr_repair_handoffs(
                 result.label_update_count += 1
             handoff_results.append(label_result)
     return handoff_results
+
+
+def _load_pending_pr_repair_handoffs(intake: Path) -> list[PrRepairResult]:
+    pending_dir = _pr_repair_handoff_pending_dir(intake)
+    if not pending_dir.exists():
+        return []
+    handoffs: list[PrRepairResult] = []
+    for path in sorted(pending_dir.glob("*.json")):
+        handoffs.append(PrRepairResult.model_validate_json(path.read_text(encoding="utf-8")))
+    return handoffs
+
+
+def _write_pending_pr_repair_handoffs(intake: Path, results: list[PrRepairResult]) -> None:
+    pending_dir = _pr_repair_handoff_pending_dir(intake)
+    for result in results:
+        if not result.pushed or not result.review_request_comment:
+            continue
+        pending_dir.mkdir(parents=True, exist_ok=True)
+        path = _pr_repair_handoff_path(intake, result)
+        temp_path = path.with_suffix(".json.tmp")
+        temp_path.write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        temp_path.replace(path)
+
+
+def _delete_pending_pr_repair_handoffs(intake: Path, results: list[PrRepairResult]) -> None:
+    for result in results:
+        path = _pr_repair_handoff_path(intake, result)
+        if path.exists():
+            path.unlink()
+
+
+def _pr_repair_handoff_pending_dir(intake: Path) -> Path:
+    return intake / "pr-repair-handoffs" / "pending"
+
+
+def _pr_repair_handoff_path(intake: Path, result: PrRepairResult) -> Path:
+    key = _slug_for_filename(_pr_repair_handoff_key(result))
+    return _pr_repair_handoff_pending_dir(intake) / f"pr-{result.pr_number}-{key}.json"
+
+
+def _pr_repair_handoff_key(result: PrRepairResult) -> str:
+    return result.repair_head_sha or result.branch or "unknown"
+
+
+def _slug_for_filename(value: str) -> str:
+    slug = "".join(char if char.isalnum() or char in {"-", "_", "."} else "-" for char in value)
+    return slug[:80] or "unknown"
 
 
 def _repair_resolution_message(result: PrRepairResult) -> str:
