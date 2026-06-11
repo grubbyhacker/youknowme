@@ -108,6 +108,7 @@ def build_upload_review_scenario_request(
             "Do not weaken validation limits, remove existing policy values, or include secrets.",
             "Use decision integrated only when files contain normalized corpus markdown for review.",
             "Use decision needs_owner_action when the upload cannot be safely normalized from the supplied context.",
+            "Set content_summary to one short sentence that identifies the uploaded document for a PR reviewer without copying intake excerpts.",
             "Keep rationale short and state why any policy additions are needed.",
         ],
     }

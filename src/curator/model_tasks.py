@@ -68,6 +68,7 @@ class UploadReviewModelOutput(BaseModel):
     schema_version: Literal["1"] = CURATOR_SCHEMA_VERSION
     upload_id: str
     decision: UploadDecision
+    content_summary: str = Field(min_length=1, max_length=300)
     files: list[UploadReviewDraftFile] = Field(default_factory=list)
     policy_patch: UploadReviewPolicyPatch = Field(default_factory=UploadReviewPolicyPatch)
     rationale: str = Field(max_length=1000)

@@ -2445,6 +2445,7 @@ def test_model_response_output_rejects_task_name_mismatch() -> None:
             "schema_version": "1",
             "upload_id": "upl_1",
             "decision": "deferred",
+            "content_summary": "Upload review needs owner input.",
             "files": [],
             "policy_patch": {"allowed_types_add": [], "allowed_tags_add": []},
             "rationale": "needs owner input",
@@ -5679,6 +5680,7 @@ def test_upload_review_observe_applies_model_draft_to_temp_checkout_and_validate
             }
         ],
         policy_patch={"allowed_types_add": [], "allowed_tags_add": ["uv"]},
+        content_summary="A tooling note about uv usage.",
         rationale="The note is normalized into corpus markdown.",
         reason="ready for validation",
     )
@@ -5721,6 +5723,7 @@ def test_upload_review_policy_patch_can_add_corpus_root_type_and_tag(tmp_path: P
             "allowed_types_add": ["project"],
             "allowed_tags_add": ["vps"],
         },
+        content_summary="A VPS hardening project note.",
         rationale="A review PR can ask for the bounded schema addition.",
         reason="ready for validation",
     )
@@ -5751,6 +5754,7 @@ def test_upload_review_observe_records_validation_failure(
             }
         ],
         policy_patch={"allowed_types_add": [], "allowed_tags_add": []},
+        content_summary="A malformed draft note for validation failure coverage.",
         rationale="The note is normalized into corpus markdown.",
         reason="ready for validation",
     )
@@ -5828,6 +5832,7 @@ def test_runner_observes_model_upload_review_draft_validation(
                                 "allowed_types_add": [],
                                 "allowed_tags_add": [],
                             },
+                            "content_summary": "A tooling note about Python development setup.",
                             "rationale": "The upload can be normalized.",
                             "reason": "ready for validation",
                         },
@@ -5938,6 +5943,7 @@ def test_runner_manual_live_creates_upload_review_pr_after_validation(
                                 "allowed_types_add": [],
                                 "allowed_tags_add": [],
                             },
+                            "content_summary": "A tooling note about Python development setup.",
                             "rationale": "The upload can be normalized.",
                             "reason": "ready for validation",
                         },
@@ -5989,6 +5995,9 @@ def test_runner_manual_live_creates_upload_review_pr_after_validation(
         "YouKnowMe Curator upload review: homemaint/tooling.md"
     )
     assert "- Page: `homemaint/tooling.md`" in report.execution_intents[0]["body"]
+    assert "- Content: A tooling note about Python development setup." in report.execution_intents[0][
+        "body"
+    ]
     assert report.simulated_execution_results[0]["status"] == "simulated"
     assert report.simulated_execution_results[0]["branch"].startswith(
         "curator/run-upload-pr/upload-upl-tooling-"

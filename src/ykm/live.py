@@ -27,7 +27,7 @@ class LiveMcpConfig:
 
 
 def live_auth_headers_from_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
-    values = env or os.environ
+    values = os.environ if env is None else env
     client_id = values.get("YKM_CF_ACCESS_CLIENT_ID", "").strip()
     client_secret = values.get("YKM_CF_ACCESS_CLIENT_SECRET", "").strip()
     if client_id and client_secret:
@@ -61,7 +61,7 @@ def live_config_from_env(
     timeout_seconds: float | None = None,
     env: Mapping[str, str] | None = None,
 ) -> LiveMcpConfig:
-    values = env or os.environ
+    values = os.environ if env is None else env
     resolved_url = (url or values.get("YKM_LIVE_MCP_URL") or DEFAULT_LIVE_MCP_URL).strip()
     resolved_timeout = timeout_seconds
     if resolved_timeout is None:

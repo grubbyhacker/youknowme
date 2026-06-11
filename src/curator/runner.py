@@ -331,6 +331,7 @@ def _run_with_lock(
     else:
         upload_plan = UploadPlan(run_id=run_id, created_at=datetime.now(UTC))
     upload_review_observations: list[UploadReviewObservation] = []
+    upload_model_outputs: dict[str, UploadReviewModelOutput] = {}
     if "plan_uploads" in enabled_actions and model_upload_review:
         (
             observations,
@@ -464,6 +465,7 @@ def _run_with_lock(
             run_id=run_id,
             upload_plan=upload_plan,
             observations=upload_review_observations,
+            outputs=upload_model_outputs,
         )
     )
     metadata_error_count = sum(1 for bundle in queue_snapshot.bundles if bundle.metadata_error)
@@ -1612,14 +1614,19 @@ def _upload_review_execution_intents(
     run_id: str,
     upload_plan: UploadPlan,
     observations: list[UploadReviewObservation],
+    outputs: dict[str, UploadReviewModelOutput],
 ) -> list[ExecutionIntent]:
     passing_upload_ids = {
         observation.upload_id for observation in observations if observation.status == "pass"
     }
     return [
-        upload_review_pull_intent(run_id=run_id, preview=preview)
+        upload_review_pull_intent(
+            run_id=run_id,
+            preview=preview,
+            content_summary=outputs[preview.upload_id].content_summary,
+        )
         for preview in upload_plan.review_previews
-        if preview.upload_id in passing_upload_ids
+        if preview.upload_id in passing_upload_ids and preview.upload_id in outputs
     ]
 
 
@@ -1635,7 +1642,12 @@ def _execute_upload_review_prs(
     if config.corpus_checkout is None:
         results = []
         for preview in upload_plan.review_previews:
-            intent = upload_review_pull_intent(run_id=run_id, preview=preview)
+            output = outputs.get(preview.upload_id)
+            intent = upload_review_pull_intent(
+                run_id=run_id,
+                preview=preview,
+                content_summary=output.content_summary if output is not None else None,
+            )
             results.append(
                 ExecutionResult(
                     action_id=intent.action_id,
@@ -1845,6 +1857,7 @@ def _upload_review_model_request(
             "Use decision needs_owner_action only when the upload lacks enough context, has unresolved safety concerns, or cannot be turned into a small reviewable corpus-policy and markdown diff.",
             "Do not weaken validation limits, remove existing policy values, or include secrets.",
             "Use decision integrated only when files contain normalized corpus markdown for review.",
+            "Set content_summary to one short sentence that identifies the uploaded document for a PR reviewer without copying intake excerpts.",
             "Keep rationale short and state why any policy additions are needed.",
         ],
     }

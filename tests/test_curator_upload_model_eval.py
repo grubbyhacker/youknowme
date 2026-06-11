@@ -38,6 +38,7 @@ def test_upload_review_scenario_expected_outputs_score(case) -> None:
             "allowed_types_add": case.expected.policy_types_add,
             "allowed_tags_add": case.expected.policy_tags_add,
         },
+        content_summary="Development environment preferences for Python tooling on Roger's Mac.",
         rationale="Fixture output preserves the upload purpose and proposes minimal policy additions.",
         reason="ready for draft corpus PR",
     )
@@ -68,6 +69,7 @@ def test_upload_review_prompt_carries_policy_agency_advice() -> None:
     assert any("Do not drop a central concrete tag" in item for item in prompt_input["constraints"])
     assert any("delimiter lines are exactly three hyphens" in item for item in prompt_input["constraints"])
     assert any("only id, type, tags, aliases, and related" in item for item in prompt_input["constraints"])
+    assert any("content_summary" in item for item in prompt_input["constraints"])
 
 
 def test_upload_review_response_schema_is_strict_json_schema() -> None:
@@ -77,6 +79,7 @@ def test_upload_review_response_schema_is_strict_json_schema() -> None:
         "schema_version",
         "upload_id",
         "decision",
+        "content_summary",
         "files",
         "policy_patch",
         "rationale",
