@@ -3005,6 +3005,50 @@ def test_http_broker_adapter_creates_pull_with_curator_metadata() -> None:
     assert body["permissions"] == ["contents:write", "pull_requests:write"]
 
 
+def test_http_broker_adapter_creates_issue_via_reporter_mcp(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_call(url: str, name: str, arguments: dict[str, object]) -> dict[str, object]:
+        captured["url"] = url
+        captured["name"] = name
+        captured["arguments"] = arguments
+        return {
+            "result": {
+                "structuredContent": {
+                    "number": 44,
+                    "html_url": "https://github.invalid/grubbyhacker/youknowme/issues/44",
+                }
+            }
+        }
+
+    monkeypatch.setenv("YKM_REPORTER_MCP_URL", "http://issue-reporter:8090/mcp")
+    monkeypatch.setattr("curator.adapters._call_reporter_mcp_tool", fake_call)
+    intent = ExecutionIntent(
+        action_id="act_1",
+        operation="issue.create",
+        idempotency_key="product_issue:abc123",
+        target_repo="grubbyhacker/youknowme",
+        evidence=ActionEvidence(feedback_ids=["fb_1"]),
+        title="Feedback issue",
+        body="body",
+        labels=["ykm-curator", "feedback", "needs-triage"],
+    )
+
+    result = HttpBrokerAdapter("http://broker:8080").create_issue(intent)
+
+    assert result.status == "executed"
+    assert result.issue_number == 44
+    assert result.url == "https://github.invalid/grubbyhacker/youknowme/issues/44"
+    assert captured["url"] == "http://issue-reporter:8090/mcp"
+    assert captured["name"] == "broker_report_issue"
+    arguments = captured["arguments"]
+    assert isinstance(arguments, dict)
+    assert arguments["repo"] == "grubbyhacker/youknowme"
+    assert arguments["dedupe_key"] == "product_issue:abc123"
+    assert arguments["labels"] == ["needs-triage"]
+    assert arguments["source_agent_id"] == "ykm-curator"
+
+
 def test_http_broker_adapter_posts_issue_comment_with_agent_auth() -> None:
     captured: dict[str, object] = {}
 

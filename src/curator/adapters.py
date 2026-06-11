@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
@@ -31,6 +32,7 @@ from curator.models import (
 
 
 ModelOutputT = TypeVar("ModelOutputT", bound=BaseModel)
+REPORTER_ALLOWED_LABELS = {"needs-triage"}
 
 
 class BrokerAdapter(Protocol):
@@ -665,6 +667,11 @@ class HttpBrokerAdapter:
                 target_repo=intent.target_repo,
                 message=f"unsupported broker operation for create_issue: {intent.operation}",
             )
+        reporter_mcp_url = os.getenv("YKM_REPORTER_MCP_URL", "").strip()
+        if reporter_mcp_url:
+            reporter_result = _create_issue_via_reporter_mcp(reporter_mcp_url, intent)
+            if reporter_result is not None:
+                return reporter_result
         try:
             response = self._request(
                 "POST",
@@ -1464,6 +1471,150 @@ def _int_value(value: Any) -> int | None:
         return None
     if isinstance(value, int):
         return value
+    return None
+
+
+def _create_issue_via_reporter_mcp(url: str, intent: ExecutionIntent) -> ExecutionResult | None:
+    try:
+        raw = _call_reporter_mcp_tool(
+            url,
+            "broker_report_issue",
+            {
+                "repo": intent.target_repo,
+                "title": intent.title or "YouKnowMe Curator feedback",
+                "body": intent.body or "",
+                "dedupe_key": intent.idempotency_key,
+                "labels": [label for label in intent.labels if label in REPORTER_ALLOWED_LABELS],
+                "source_agent_id": "ykm-curator",
+            },
+        )
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        return ExecutionResult(
+            action_id=intent.action_id,
+            operation=intent.operation,
+            idempotency_key=intent.idempotency_key,
+            status="failed",
+            target_repo=intent.target_repo,
+            message=f"reporter MCP issue.create failed: {exc}",
+        )
+    result = raw.get("result")
+    if isinstance(result, dict) and result.get("isError") is True:
+        return ExecutionResult(
+            action_id=intent.action_id,
+            operation=intent.operation,
+            idempotency_key=intent.idempotency_key,
+            status="failed",
+            target_repo=intent.target_repo,
+            message=f"reporter MCP issue.create failed: {result}",
+        )
+    payload = _reporter_tool_payload(result)
+    if not isinstance(payload, dict):
+        return ExecutionResult(
+            action_id=intent.action_id,
+            operation=intent.operation,
+            idempotency_key=intent.idempotency_key,
+            status="failed",
+            target_repo=intent.target_repo,
+            message="reporter MCP issue.create returned no structured payload",
+        )
+    return ExecutionResult(
+        action_id=intent.action_id,
+        operation=intent.operation,
+        idempotency_key=intent.idempotency_key,
+        status="executed",
+        target_repo=intent.target_repo,
+        issue_number=_int_value(payload.get("number")),
+        url=_str_value(payload.get("html_url") or payload.get("url")),
+        message="reporter MCP issue.create succeeded",
+    )
+
+
+def _call_reporter_mcp_tool(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    with httpx.Client(timeout=30.0) as client:
+        init_response = client.post(
+            url,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+            },
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "ykm-curator", "version": "1"},
+                },
+            },
+        )
+        init_response.raise_for_status()
+        session_id = init_response.headers.get("mcp-session-id")
+        if not session_id:
+            raise ValueError("reporter MCP initialize response did not include a session id")
+        headers = {
+            "Mcp-Session-Id": session_id,
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+        client.post(
+            url,
+            headers=headers,
+            json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+        )
+        response = client.post(
+            url,
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments},
+            },
+        )
+        response.raise_for_status()
+    payload = _mcp_response_json(response.text)
+    if "error" in payload:
+        raise ValueError(payload["error"])
+    return payload
+
+
+def _mcp_response_json(text: str) -> dict[str, Any]:
+    stripped = text.strip()
+    if stripped.startswith("{"):
+        payload = json.loads(stripped)
+        if not isinstance(payload, dict):
+            raise ValueError("MCP response JSON was not an object")
+        return payload
+    for line in stripped.splitlines():
+        if not line.startswith("data:"):
+            continue
+        payload = json.loads(line.removeprefix("data:").strip())
+        if isinstance(payload, dict):
+            return payload
+    raise ValueError("MCP response did not contain a JSON message")
+
+
+def _reporter_tool_payload(result: Any) -> dict[str, Any] | None:
+    if not isinstance(result, dict):
+        return None
+    structured = result.get("structuredContent")
+    if isinstance(structured, dict):
+        return structured
+    content = result.get("content")
+    if isinstance(content, list):
+        for item in content:
+            if not isinstance(item, dict) or item.get("type") != "text":
+                continue
+            text = item.get("text")
+            if not isinstance(text, str):
+                continue
+            try:
+                payload = json.loads(text)
+            except ValueError:
+                continue
+            if isinstance(payload, dict):
+                return payload
     return None
 
 
