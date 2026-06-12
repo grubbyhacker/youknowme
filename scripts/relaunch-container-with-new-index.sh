@@ -8,12 +8,12 @@ Usage:
 
 Options:
   --artifact PATH       GitHub Actions artifact ZIP containing one .tar.gz, .sha256, and build-report.json.
-  --deploy-root PATH    Deployment root. Default: /opt/youknowme
+  --deploy-root PATH    Deployment data root. Default: /docker/youknowme/data
   --image NAME          Docker image to run and validate with. Default: youknowme:phase1e
   --container NAME      Container name. Default: youknowme-phase1e
   --network NAME        Docker network. Default: roger-knowledge-private
   --alias NAME          Docker network alias. May be repeated. Defaults: roger-knowledge-mcp, youknowme
-  --env-file PATH       Runtime env file. Default: <deploy-root>/runtime.env
+  --env-file PATH       Runtime env file. Default: /docker/youknowme/runtime.env
   --host-port PORT      Publish host PORT to container port 8765 and smoke via localhost.
   --compose-dir PATH    Recreate the service with Docker Compose from PATH instead of docker run.
   --compose-service NAME
@@ -24,7 +24,7 @@ EOF
 }
 
 ARTIFACT_ZIP=""
-DEPLOY_ROOT="/opt/youknowme"
+DEPLOY_ROOT="/docker/youknowme/data"
 IMAGE="youknowme:phase1e"
 CONTAINER="youknowme-phase1e"
 NETWORK="roger-knowledge-private"
@@ -103,7 +103,7 @@ if [[ ${#ALIASES[@]} -eq 0 ]]; then
   ALIASES=(roger-knowledge-mcp youknowme)
 fi
 if [[ -z "$ENV_FILE" ]]; then
-  ENV_FILE="$DEPLOY_ROOT/runtime.env"
+  ENV_FILE="/docker/youknowme/runtime.env"
 fi
 
 require_command() {
@@ -269,7 +269,7 @@ CURRENT_LINK="$DEPLOY_ROOT/index-current"
 PREVIOUS_LINK="$DEPLOY_ROOT/index-previous"
 OLD_TARGET=""
 if [[ -L "$CURRENT_LINK" ]]; then
-  OLD_TARGET="$(readlink "$CURRENT_LINK")"
+  OLD_TARGET="$(readlink -f "$CURRENT_LINK")"
 elif [[ -e "$CURRENT_LINK" ]]; then
   echo "$CURRENT_LINK exists but is not a symlink; refusing to replace it" >&2
   exit 1
@@ -277,17 +277,36 @@ fi
 
 repoint_current() {
   local target="$1"
+  local link_target
   local tmp_link="$DEPLOY_ROOT/.index-current.next"
+  link_target="$(python3 - "$DEPLOY_ROOT" "$target" <<'PY'
+from __future__ import annotations
+
+import os
+import sys
+
+print(os.path.relpath(sys.argv[2], sys.argv[1]))
+PY
+)"
   rm -f "$tmp_link"
-  ln -s "$target" "$tmp_link"
+  ln -s "$link_target" "$tmp_link"
   rm -f "$CURRENT_LINK"
   mv "$tmp_link" "$CURRENT_LINK"
 }
 
 if [[ -n "$OLD_TARGET" ]]; then
   tmp_prev="$DEPLOY_ROOT/.index-previous.next"
+  prev_target="$(python3 - "$DEPLOY_ROOT" "$OLD_TARGET" <<'PY'
+from __future__ import annotations
+
+import os
+import sys
+
+print(os.path.relpath(sys.argv[2], sys.argv[1]))
+PY
+)"
   rm -f "$tmp_prev"
-  ln -s "$OLD_TARGET" "$tmp_prev"
+  ln -s "$prev_target" "$tmp_prev"
   rm -f "$PREVIOUS_LINK"
   mv "$tmp_prev" "$PREVIOUS_LINK"
 fi
@@ -313,7 +332,7 @@ fi
 
 run_container() {
   local active_index
-  active_index="$(readlink "$CURRENT_LINK")"
+  active_index="$(readlink -f "$CURRENT_LINK")"
   if [[ -z "$active_index" ]]; then
     echo "Current index symlink is not set: $CURRENT_LINK" >&2
     return 1

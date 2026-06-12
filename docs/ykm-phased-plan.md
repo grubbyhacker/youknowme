@@ -118,7 +118,7 @@ route from the POC to production YKM.
 Completed so far:
 
 - Built and loaded `youknowme:phase1e` for `linux/amd64` on `hermes-vps`.
-- Deployed `.ykm/real-index` to `/opt/youknowme/index` read-only.
+- Deployed `.ykm/real-index` to the production index mount read-only.
 - Wrote root-only runtime env on the VPS using the existing POC Cloudflare Access app values.
 - Started production `youknowme-phase1e` on the existing `roger-knowledge-private` network.
 - Cut over the existing tunnel origin alias `roger-knowledge-mcp` from the stopped POC container to

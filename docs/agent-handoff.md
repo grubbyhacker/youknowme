@@ -10,20 +10,19 @@ https://mcp.fleiglabs.cc/mcp
 -> youknowme-phase1e
 ```
 
-`POC/` remains reference-only and is still the rollback target. Do not create new production content
-inside `POC/`, and do not start another `cloudflared` with the existing tunnel token.
+The tunnel container and origin container are managed by the `/docker/youknowme` Compose project.
+Do not start another `cloudflared` with the existing tunnel token.
 
 Production container state:
 
 - `youknowme-phase1e` is the live origin container.
-- The intended production management surface is `/docker/youknowme/docker-compose.yml`; runtime data
-  remains under `/opt/youknowme`.
-- `roger-knowledge-cloudflared-phase0` remains the existing tunnel container and was not replaced.
-- `roger-knowledge-mcp-phase0` is stopped and retained for rollback.
-- Runtime directory on the VPS: `/opt/youknowme`.
-- Runtime env on the VPS: `/opt/youknowme/runtime.env` with mode `0600`; do not print or commit it.
-- Index mount: `/opt/youknowme/index:/data/index:ro`.
-- Protected log mount: `/opt/youknowme/logs:/data/logs`.
+- Production management surface: `/docker/youknowme/docker-compose.yml`.
+- Runtime env on the VPS: `/docker/youknowme/runtime.env` with mode `0600`; do not print or commit it.
+- Tunnel token env on the VPS: `/docker/youknowme/.env` with mode `0600`; do not print or commit it.
+- Data root on the VPS: `/docker/youknowme/data`.
+- Index mount: `/docker/youknowme/data/index-current:/data/index:ro`.
+- Protected log mount: `/docker/youknowme/data/logs:/data/logs`.
+- Protected intake mount: `/docker/youknowme/data/intake:/data/intake`.
 
 Current deployed index:
 
@@ -67,7 +66,7 @@ Build and deploy the production image from the development machine:
 ```bash
 docker build --platform linux/amd64 -t youknowme:phase1e .
 docker save youknowme:phase1e | ssh hermes-vps 'docker load'
-COPYFILE_DISABLE=1 tar -C .ykm/real-index -cf - . | ssh hermes-vps 'mkdir -p /opt/youknowme/index && tar -C /opt/youknowme/index -xf - && chmod -R a+rX /opt/youknowme/index && find /opt/youknowme/index -name "._*" -delete'
+scp deploy/youknowme/docker-compose.yml hermes-vps:/docker/youknowme/docker-compose.yml
 ```
 
 Restart production on the VPS:
@@ -75,13 +74,7 @@ Restart production on the VPS:
 ```bash
 ssh hermes-vps '
 cd /docker/youknowme
-YKM_IMAGE=youknowme:phase1e \
-YKM_CONTAINER_NAME=youknowme-phase1e \
-YKM_ENV_FILE=/opt/youknowme/runtime.env \
-YKM_INDEX_MOUNT=/opt/youknowme/index-current \
-YKM_LOG_DIR=/opt/youknowme/logs \
-YKM_INTAKE_DIR=/opt/youknowme/intake \
-docker compose up -d --force-recreate youknowme
+docker compose up -d --force-recreate
 '
 ```
 
@@ -101,7 +94,7 @@ docker compose up -d --force-recreate youknowme
   MCP route.
 - Hermes service-token MCP is enabled through the public Cloudflare Access route. The service-token
   JWT was observed with `email=None` and a `common_name`; that `common_name` is configured in
-  `/opt/youknowme/runtime.env` as `YKM_ALLOWED_SERVICE_COMMON_NAMES`.
+  `/docker/youknowme/runtime.env` as `YKM_ALLOWED_SERVICE_COMMON_NAMES`.
 - Hermes Agent and Claude.ai were tested successfully after the service-token rollout.
 - Red-team probes after rollout all failed closed: public no-auth `401`, public fake service-token
   headers `401`, private origin no-JWT `401`, spoofed email header `401`, local-secret header in

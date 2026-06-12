@@ -72,9 +72,9 @@ upload-triggered wake path until the manual and scheduled lifecycle has proven r
 
 YKM already exposes two staged write paths:
 
-- `upload` writes bounded markdown bundles under `/opt/youknowme/intake/uploads/pending`.
+- `upload` writes bounded markdown bundles under `/docker/youknowme/data/intake/uploads/pending`.
 - `feedback` appends bounded JSONL observations under
-  `/opt/youknowme/intake/feedback/feedback.jsonl`.
+  `/docker/youknowme/data/intake/feedback/feedback.jsonl`.
 
 The Phase 3 queue contract already reserves these upload directories:
 

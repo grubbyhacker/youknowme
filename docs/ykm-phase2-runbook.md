@@ -10,7 +10,7 @@ serving, or new public surfaces.
 
 Phase 1E is live on `hermes-vps` at `https://mcp.fleiglabs.cc/mcp` through the existing Cloudflare
 Tunnel / Access route. Production serves the Phase 1 index from a read-only mount and writes protected
-query logs under `/opt/youknowme/logs`.
+query logs under `/docker/youknowme/data/logs`.
 
 The completion evidence says:
 

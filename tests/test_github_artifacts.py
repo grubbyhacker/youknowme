@@ -140,6 +140,11 @@ def test_read_build_report_and_match_current_manifest(tmp_path: Path) -> None:
     )
 
 
+def test_cli_defaults_to_production_compose_data_tree() -> None:
+    assert cli.PRODUCTION_APP_ROOT == Path("/docker/youknowme")
+    assert cli.PRODUCTION_DATA_ROOT == Path("/docker/youknowme/data")
+
+
 def test_cli_returns_current_exit_code_without_path_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

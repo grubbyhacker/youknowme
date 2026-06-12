@@ -8,7 +8,7 @@ sandbox-broker operator REST launch profile design in
 
 Deployed on 2026-06-09:
 
-- sandbox-broker config: `/docker/gh-agent-broker/configs/sandbox-beta.yaml`;
+- sandbox-broker config: `/docker/gh-agent-broker/configs/sandbox.yaml`;
 - broker env: `/docker/gh-agent-broker/.env`;
 - Curator image: `youknowme:curator-launcher-20260609`;
 - launcher user: `sandbox-curator-timer`;
@@ -86,10 +86,10 @@ templates:
     environment:
       GH_AGENT_PROXY_URL: "http://gh-agent-proxy:8092"
     extra_mounts:
-      - source_path: "/opt/youknowme/intake"
+      - source_path: "/docker/youknowme/data/intake"
         mount_path: "/data/intake"
         readonly: false
-      - source_path: "/opt/youknowme/logs"
+      - source_path: "/docker/youknowme/data/logs"
         mount_path: "/data/logs"
         readonly: true
 ```
