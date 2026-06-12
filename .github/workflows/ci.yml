@@ -105,7 +105,7 @@ jobs:
         with:
           images: ghcr.io/grubbyhacker/youknowme
           tags: |
-            type=sha,prefix=sha-
+            type=sha,prefix=sha-,format=long
             type=ref,event=branch
 
       - name: Build and push
