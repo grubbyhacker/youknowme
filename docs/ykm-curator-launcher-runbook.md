@@ -4,7 +4,7 @@ This runbook maintains the live Curator launcher on `hermes-vps`.
 
 ## Current Deployment
 
-- sandbox-broker config: `/docker/gh-agent-broker/configs/sandbox-beta.yaml`
+- sandbox-broker config: `/docker/gh-agent-broker/configs/sandbox.yaml`
 - broker env: `/docker/gh-agent-broker/.env`
 - deterministic Curator image: `youknowme:curator-policy-tools-20260611-002930`
 - manual model Curator image: `youknowme:curator-policy-tools-20260611-002930`
@@ -211,7 +211,7 @@ mise run curator-model-eval
 The live upload profile should remain fixed for mode, enabled actions, budgets, model, image, mounts,
 repo, and credentials. Once sandbox-broker supports parameterized launch profiles, scope live upload
 runs with the broker wrapper's `parameters.upload_ids` map instead of editing
-`configs/sandbox-beta.yaml`.
+`configs/sandbox.yaml`.
 
 Preview the resolved launch first:
 
@@ -349,7 +349,7 @@ docker save youknowme:curator-launcher-YYYYMMDD | ssh hermes-vps 'docker load'
 
 On the VPS:
 
-1. Back up `/docker/gh-agent-broker/configs/sandbox-beta.yaml`.
+1. Back up `/docker/gh-agent-broker/configs/sandbox.yaml`.
 2. Change `templates.ykm-curator-dry-run.image` to the new tag.
 3. Validate compose rendering.
 4. Recreate `sandbox-broker`.
@@ -361,7 +361,7 @@ Commands:
 ssh hermes-vps '
 cd /docker/gh-agent-broker
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
-cp configs/sandbox-beta.yaml "configs/sandbox-beta.yaml.bak-curator-image-$stamp"
+cp configs/sandbox.yaml "configs/sandbox.yaml.bak-curator-image-$stamp"
 docker compose config >/tmp/gh-agent-broker-compose-rendered.yaml
 docker compose up -d sandbox-broker
 curl -fsS http://127.0.0.1:8091/healthz
@@ -374,7 +374,7 @@ systemctl start ykm-curator-launch.service
 For launch-profile, template, token-env, or operator-principal changes:
 
 1. Disable the timer if the change could break launches.
-2. Back up `/docker/gh-agent-broker/configs/sandbox-beta.yaml` and `/docker/gh-agent-broker/.env`.
+2. Back up `/docker/gh-agent-broker/configs/sandbox.yaml` and `/docker/gh-agent-broker/.env`.
 3. Edit config/env.
 4. Run `docker compose config`.
 5. Recreate `sandbox-broker`.
@@ -387,9 +387,9 @@ ssh hermes-vps '
 systemctl disable --now ykm-curator-launch.timer
 cd /docker/gh-agent-broker
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
-cp configs/sandbox-beta.yaml "configs/sandbox-beta.yaml.bak-$stamp"
+cp configs/sandbox.yaml "configs/sandbox.yaml.bak-$stamp"
 cp .env ".env.bak-$stamp"
-# edit configs/sandbox-beta.yaml and .env
+# edit configs/sandbox.yaml and .env
 docker compose config >/tmp/gh-agent-broker-compose-rendered.yaml
 docker compose up -d sandbox-broker
 curl -fsS http://127.0.0.1:8091/healthz
@@ -426,7 +426,7 @@ If a config change breaks sandbox-broker:
 ```bash
 ssh hermes-vps '
 cd /docker/gh-agent-broker
-cp configs/sandbox-beta.yaml.bak-<STAMP> configs/sandbox-beta.yaml
+cp configs/sandbox.yaml.bak-<STAMP> configs/sandbox.yaml
 cp .env.bak-<STAMP> .env
 docker compose up -d sandbox-broker
 curl -fsS http://127.0.0.1:8091/healthz

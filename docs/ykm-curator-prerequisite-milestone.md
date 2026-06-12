@@ -379,14 +379,14 @@ Live operator paths:
 
 - Broker compose root: `/docker/gh-agent-broker`.
 - Broker config: `/docker/gh-agent-broker/configs/production.yaml`.
-- Sandbox config: `/docker/gh-agent-broker/configs/sandbox-beta.yaml`.
+- Sandbox config: `/docker/gh-agent-broker/configs/sandbox.yaml`.
 - Reporter config: `/docker/gh-agent-broker/configs/reporter.yaml`.
 - Proxy config: `/docker/gh-agent-broker/configs/proxy.yaml`.
 - Private env: `/docker/gh-agent-broker/.env`.
 - Sandbox runs: `/srv/hermes-sandbox-broker/runs`.
 - Sandbox audit log: `/srv/hermes-sandbox-broker/audit/sandbox-audit.jsonl`.
-- YKM intake mount source: `/opt/youknowme/intake`.
-- YKM logs mount source: `/opt/youknowme/logs`.
+- YKM intake mount source: `/docker/youknowme/data/intake`.
+- YKM logs mount source: `/docker/youknowme/data/logs`.
 
 Live service names:
 

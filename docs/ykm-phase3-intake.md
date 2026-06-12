@@ -90,7 +90,7 @@ Phase 3 does not automate corpus integration. The intended later flow is:
 2. Human reviews and merges.
 3. Merge to corpus `main` triggers a full index rebuild.
 4. The rebuild runs eval/smoke checks and produces a manifest-backed artifact.
-5. Deployment atomically swaps `/opt/youknowme/index` to the new artifact and restarts YKM.
+5. Deployment atomically swaps `/docker/youknowme/data/index-current` to the new artifact and restarts YKM.
 6. Smoke checks verify `health`, `query`, `retrieve`, and fail-closed auth behavior.
 
 Preferred maturation is a GitHub Actions build on corpus merge if OpenRouter-backed embeddings remain

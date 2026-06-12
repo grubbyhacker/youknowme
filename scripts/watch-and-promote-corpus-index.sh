@@ -7,20 +7,20 @@ Usage:
   scripts/watch-and-promote-corpus-index.sh [options]
 
 Options:
-  --deploy-root PATH      Deployment root. Default: /opt/youknowme
+  --deploy-root PATH      Deployment data root. Default: /docker/youknowme/data
   --image NAME            YKM image containing ykm-download-latest-corpus-index. Default: youknowme:phase1e
   --app-id ID             GitHub App ID. Default: 4001682
   --installation-id ID    GitHub App installation ID. Default: 138954168
-  --private-key PATH      GitHub App private key path under deploy root.
-                          Default: <deploy-root>/secrets/ykmcorpus-build-watcher.private-key.pem
-  --promote-script PATH   Host promotion script. Default: <deploy-root>/bin/relaunch-container-with-new-index.sh
+  --private-key PATH      GitHub App private key path.
+                          Default: /docker/youknowme/secrets/ykmcorpus-build-watcher.private-key.pem
+  --promote-script PATH   Host promotion script. Default: ./scripts/relaunch-container-with-new-index.sh
   --watcher-arg ARG       Additional argument forwarded to the containerized watcher. May be repeated.
   --promote-arg ARG       Additional argument forwarded to the host promotion script. May be repeated.
   --help                  Show this help.
 EOF
 }
 
-DEPLOY_ROOT="/opt/youknowme"
+DEPLOY_ROOT="/docker/youknowme/data"
 IMAGE="youknowme:phase1e"
 APP_ID="4001682"
 INSTALLATION_ID="138954168"
@@ -76,10 +76,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$PRIVATE_KEY" ]]; then
-  PRIVATE_KEY="$DEPLOY_ROOT/secrets/ykmcorpus-build-watcher.private-key.pem"
+  PRIVATE_KEY="/docker/youknowme/secrets/ykmcorpus-build-watcher.private-key.pem"
 fi
 if [[ -z "$PROMOTE_SCRIPT" ]]; then
-  PROMOTE_SCRIPT="$DEPLOY_ROOT/bin/relaunch-container-with-new-index.sh"
+  PROMOTE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/relaunch-container-with-new-index.sh"
 fi
 
 require_command() {
@@ -94,6 +94,7 @@ require_command docker
 DEPLOY_ROOT="$(cd "$DEPLOY_ROOT" && pwd)"
 PRIVATE_KEY="$(cd "$(dirname "$PRIVATE_KEY")" && pwd)/$(basename "$PRIVATE_KEY")"
 PROMOTE_SCRIPT="$(cd "$(dirname "$PROMOTE_SCRIPT")" && pwd)/$(basename "$PROMOTE_SCRIPT")"
+PRIVATE_KEY_DIR="$(dirname "$PRIVATE_KEY")"
 INCOMING_DIR="$DEPLOY_ROOT/incoming"
 STATE_DIR="$DEPLOY_ROOT/watcher-state"
 ARTIFACT_PATH_FILE="$STATE_DIR/latest-artifact.path"
@@ -114,6 +115,7 @@ set +e
 docker run --rm \
   --user root \
   -v "$DEPLOY_ROOT:$DEPLOY_ROOT" \
+  -v "$PRIVATE_KEY_DIR:$PRIVATE_KEY_DIR:ro" \
   "$IMAGE" \
   ykm-download-latest-corpus-index \
     --app-id "$APP_ID" \

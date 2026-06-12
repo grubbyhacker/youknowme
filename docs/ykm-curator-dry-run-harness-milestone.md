@@ -84,7 +84,8 @@ Forbidden environment variables are reported by name only, never by value.
 
 The sandbox-broker template should use this shape. The current `hermes-vps` template uses
 `youknowme:curator-dry-run-20260608`, which is a stable tag for the verified post-PR #7 YKM image.
-It runs as `1000:1000` because the live `/opt/youknowme/intake` and `/opt/youknowme/logs` trees are
+It runs as `1000:1000` because the live `/docker/youknowme/data/intake` and
+`/docker/youknowme/data/logs` trees are
 owned by the VPS `ubuntu` user.
 
 ```yaml
@@ -115,10 +116,10 @@ templates:
     environment:
       GH_AGENT_PROXY_URL: "http://gh-agent-proxy:8092"
     extra_mounts:
-      - source_path: "/opt/youknowme/intake"
+      - source_path: "/docker/youknowme/data/intake"
         mount_path: "/data/intake"
         readonly: true
-      - source_path: "/opt/youknowme/logs"
+      - source_path: "/docker/youknowme/data/logs"
         mount_path: "/data/logs"
         readonly: true
 ```
