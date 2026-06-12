@@ -18,10 +18,16 @@ RUN uv sync --frozen --no-dev --no-editable && rm -rf /root/.cache/uv
 FROM node:24-bookworm-slim AS codex
 
 ARG CODEX_VERSION=0.139.0
+ARG TARGETARCH
 
-RUN npm install -g \
-    @openai/codex@${CODEX_VERSION} \
-    @openai/codex-linux-x64@npm:@openai/codex@${CODEX_VERSION}-linux-x64
+RUN case "$TARGETARCH" in \
+      amd64) CODEX_NATIVE_ALIAS="@openai/codex-linux-x64"; CODEX_NATIVE_PACKAGE="@openai/codex@${CODEX_VERSION}-linux-x64" ;; \
+      arm64) CODEX_NATIVE_ALIAS="@openai/codex-linux-arm64"; CODEX_NATIVE_PACKAGE="@openai/codex@${CODEX_VERSION}-linux-arm64" ;; \
+      *) echo "Unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac && \
+    npm install -g \
+      @openai/codex@${CODEX_VERSION} \
+      "${CODEX_NATIVE_ALIAS}@npm:${CODEX_NATIVE_PACKAGE}"
 
 FROM python:3.12-slim AS runtime
 
