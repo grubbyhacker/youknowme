@@ -17,6 +17,8 @@ Production container state:
 
 - `youknowme-phase1e` is the live origin container.
 - Production management surface: `/docker/youknowme/docker-compose.yml`.
+- The production Compose file is generated from the `vps-ops` Ansible role; this repository no
+  longer carries a manual production Compose artifact.
 - Runtime env on the VPS: `/docker/youknowme/runtime.env` with mode `0600`; do not print or commit it.
 - Tunnel token env on the VPS: `/docker/youknowme/.env` with mode `0600`; do not print or commit it.
 - Data root on the VPS: `/docker/youknowme/data`.
@@ -66,7 +68,6 @@ Build and deploy the production image from the development machine:
 ```bash
 docker build --platform linux/amd64 -t youknowme:phase1e .
 docker save youknowme:phase1e | ssh hermes-vps 'docker load'
-scp deploy/youknowme/docker-compose.yml hermes-vps:/docker/youknowme/docker-compose.yml
 ```
 
 Restart production on the VPS:
