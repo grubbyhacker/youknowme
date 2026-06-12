@@ -18,6 +18,8 @@ from ykm.github_artifacts import (
 
 
 CURRENT_EXIT_CODE = 10
+PRODUCTION_APP_ROOT = Path("/docker/youknowme")
+PRODUCTION_DATA_ROOT = PRODUCTION_APP_ROOT / "data"
 
 
 def main() -> int:
@@ -33,8 +35,8 @@ def main() -> int:
     parser.add_argument("--installation-id", default=os.getenv("YKM_GITHUB_INSTALLATION_ID"))
     parser.add_argument("--private-key", default=os.getenv("YKM_GITHUB_PRIVATE_KEY_PATH"))
     parser.add_argument("--api-url", default=os.getenv("YKM_GITHUB_API_URL", "https://api.github.com"))
-    parser.add_argument("--out-dir", type=Path, default=Path("/opt/youknowme/incoming"))
-    parser.add_argument("--deploy-root", type=Path, default=Path("/opt/youknowme"))
+    parser.add_argument("--out-dir", type=Path, default=PRODUCTION_DATA_ROOT / "incoming")
+    parser.add_argument("--deploy-root", type=Path, default=PRODUCTION_DATA_ROOT)
     parser.add_argument(
         "--artifact-path-file",
         type=Path,
@@ -48,7 +50,7 @@ def main() -> int:
     parser.add_argument(
         "--promote-script",
         type=Path,
-        default=Path("/opt/youknowme/bin/relaunch-container-with-new-index.sh"),
+        default=Path("scripts/relaunch-container-with-new-index.sh"),
     )
     parser.add_argument(
         "--promote",

@@ -244,7 +244,7 @@ This milestone stops at artifact production.
 Out of scope:
 
 - automatically downloading the artifact to `hermes-vps`;
-- swapping `/opt/youknowme/index`;
+- swapping `/docker/youknowme/data/index-current`;
 - restarting the serving container;
 - adding webhooks or a deploy broker;
 - hot reload;
