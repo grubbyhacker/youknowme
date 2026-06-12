@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/ci.yml"
+      - ".github/workflows/deploy-production.yml"
       - "AGENTS.md"
       - "Dockerfile"
       - "README.md"
@@ -21,6 +22,7 @@ on:
       - main
     paths:
       - ".github/workflows/ci.yml"
+      - ".github/workflows/deploy-production.yml"
       - "AGENTS.md"
       - "Dockerfile"
       - "README.md"
