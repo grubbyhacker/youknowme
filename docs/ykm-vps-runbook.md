@@ -6,6 +6,8 @@ This runbook records the current production deployment on `hermes-vps`.
 
 - Public MCP URL: `https://mcp.fleiglabs.cc/mcp`.
 - Production Compose project: `/docker/youknowme`.
+- Production Compose is generated from the `vps-ops` Ansible role; this repository no longer carries
+  a manual production Compose artifact.
 - Production image tag on the VPS: `youknowme:phase1e`.
 - Production origin container: `youknowme-phase1e`.
 - Tunnel container managed by the same Compose project: `roger-knowledge-cloudflared-phase0`.
@@ -45,7 +47,6 @@ From the repository root on the development machine:
 ```bash
 docker build --platform linux/amd64 -t youknowme:phase1e .
 docker save youknowme:phase1e | ssh hermes-vps 'docker load'
-scp deploy/youknowme/docker-compose.yml hermes-vps:/docker/youknowme/docker-compose.yml
 ssh hermes-vps '
 cd /docker/youknowme
 docker compose config >/tmp/youknowme-compose-rendered.yaml
