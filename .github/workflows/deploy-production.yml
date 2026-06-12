@@ -1,0 +1,117 @@
+name: Deploy Production
+
+# Required repository secrets:
+# - DEPLOY_SSH_PRIVATE_KEY: ed25519 private key for github-deployer@srv1656293.hstgr.cloud
+# - VPS_OPS_READ_TOKEN: fine-grained PAT with read access to grubbyhacker/vps-ops
+# - ANSIBLE_VAULT_PASSWORD: password for decrypting ansible-vault secrets in vps-ops
+
+on:
+  workflow_run:
+    workflows: ["YKM CI"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy youknowme
+    runs-on: ubuntu-latest
+    environment: production
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.event == 'push'
+
+    steps:
+      - name: Checkout vps-ops
+        uses: actions/checkout@v4
+        with:
+          repository: grubbyhacker/vps-ops
+          token: ${{ secrets.VPS_OPS_READ_TOKEN }}
+          path: vps-ops
+
+      - name: Install Ansible
+        run: |
+          python3 -m pip install --user "ansible==10.*"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install Ansible collections
+        working-directory: vps-ops
+        run: ansible-galaxy collection install -r requirements.yml
+
+      - name: Write deploy SSH key
+        env:
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+        run: |
+          install -m 0600 /dev/null /tmp/hermes-deploy
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > /tmp/hermes-deploy
+
+      - name: Write vault password
+        env:
+          ANSIBLE_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
+        run: |
+          mkdir -p ~/.config/vps-ops
+          install -m 0600 /dev/null ~/.config/vps-ops/vault-password
+          printf '%s' "$ANSIBLE_VAULT_PASSWORD" > ~/.config/vps-ops/vault-password
+
+      - name: Wait for VPS SSH
+        working-directory: vps-ops
+        run: |
+          set -euo pipefail
+
+          mapfile -t hosts < <(
+            ansible-playbook -i inventory/production.yml playbooks/deploy-youknowme.yml --list-hosts |
+              awk '/^[[:space:]]+[A-Za-z0-9_.-]+$/ { print $1 }'
+          )
+
+          if [[ "${#hosts[@]}" -eq 0 ]]; then
+            echo "::error::No deploy hosts resolved from vps-ops inventory"
+            exit 1
+          fi
+
+          for host in "${hosts[@]}"; do
+            inventory_json="$(ansible-inventory -i inventory/production.yml --host "$host")"
+            ssh_host="$(jq -r --arg host "$host" '.ansible_host // .ansible_ssh_host // $host' <<<"$inventory_json")"
+            ssh_user="$(jq -r '.ansible_user // .ansible_ssh_user // "github-deployer"' <<<"$inventory_json")"
+            ssh_port="$(jq -r '.ansible_port // .ansible_ssh_port // 22' <<<"$inventory_json")"
+            endpoint="${ssh_user}@${ssh_host}"
+
+            for attempt in 1 2 3 4 5; do
+              if ssh \
+                -o BatchMode=yes \
+                -o ConnectTimeout=10 \
+                -o ConnectionAttempts=1 \
+                -o StrictHostKeyChecking=accept-new \
+                -o AddressFamily=inet \
+                -p "$ssh_port" \
+                -i /tmp/hermes-deploy \
+                "$endpoint" \
+                'echo "SSH OK"'; then
+                echo "SSH preflight succeeded for ${host} (${endpoint}:${ssh_port})"
+                break
+              fi
+
+              if [[ "$attempt" -eq 5 ]]; then
+                echo "::error::SSH preflight failed for ${host} (${endpoint}:${ssh_port}) after ${attempt} attempts"
+                exit 1
+              fi
+
+              delay=$((attempt * 10))
+              echo "SSH attempt ${attempt} failed for ${host} (${endpoint}:${ssh_port}), waiting ${delay}s..."
+              sleep "$delay"
+            done
+          done
+
+      - name: Deploy youknowme
+        working-directory: vps-ops
+        run: |
+          ansible-playbook -i inventory/production.yml playbooks/deploy-youknowme.yml \
+            -e "ykm_image=ghcr.io/grubbyhacker/youknowme:sha-${{ github.event.workflow_run.head_sha }}" \
+            -e "ansible_ssh_private_key_file=/tmp/hermes-deploy"
+
+      - name: Clean up secrets
+        if: always()
+        run: |
+          rm -f /tmp/hermes-deploy
+          rm -f ~/.config/vps-ops/vault-password
