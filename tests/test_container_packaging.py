@@ -6,13 +6,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_dockerfile_serves_existing_index_with_livez_healthcheck() -> None:
+def test_dockerfile_serves_existing_index_with_readyz_healthcheck() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
     assert "YKM_INDEX_PATH=/data/index" in dockerfile
     assert "ykm serve --index" in dockerfile
     assert "--host 0.0.0.0" in dockerfile
-    assert "/livez" in dockerfile
+    assert "/readyz" in dockerfile
     assert "USER ykm" in dockerfile
 
 
@@ -24,6 +24,8 @@ def test_compose_mounts_index_read_only_and_logs_writable() -> None:
     assert "read_only: true" in compose
     assert "target: /data/logs" in compose
     assert "source: ${YKM_CONTAINER_LOG_DIR:-.ykm/container-smoke/logs}" in compose
+    assert "/readyz" in compose
+    assert "/livez only proves the process is up" in compose
     assert "source: ." not in compose
     assert "target: /app" not in compose
 

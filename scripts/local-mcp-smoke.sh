@@ -60,7 +60,7 @@ uv run ykm serve --index "$INDEX_DIR" --mode local --host 127.0.0.1 --port "$POR
 SERVER_PID=$!
 
 for _ in {1..50}; do
-  if curl -fsS "http://127.0.0.1:$PORT/livez" >/dev/null 2>&1; then
+  if curl -fsS "http://127.0.0.1:$PORT/readyz" >/dev/null 2>&1; then
     break
   fi
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -93,6 +93,9 @@ async def main() -> None:
     livez = httpx.get(f"{base_url}/livez", timeout=10)
     livez.raise_for_status()
     assert livez.json() == {"status": "ok", "service": "YouKnowMe"}
+    readyz = httpx.get(f"{base_url}/readyz", timeout=10)
+    readyz.raise_for_status()
+    assert readyz.json() == {"status": "ready", "service": "YouKnowMe"}
 
     forbidden = httpx.post(f"{base_url}/mcp", timeout=10)
     assert forbidden.status_code == 403, forbidden.text

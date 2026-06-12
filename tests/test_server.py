@@ -1,18 +1,32 @@
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
+from typing import Any
 
 from starlette.testclient import TestClient
 
+import ykm.server as server_module
 from ykm.build import build_index
 from ykm.embeddings import FakeEmbeddingProvider
 from ykm.server import (
+    INDEX_LOADING_MESSAGE,
     FEEDBACK_TOOL_DESCRIPTION,
     QUERY_TOOL_DESCRIPTION,
     SEARCH_TOOL_DESCRIPTION,
     UPLOAD_TOOL_DESCRIPTION,
     create_app,
 )
+
+
+def wait_until_ready(client: TestClient) -> None:
+    for _ in range(100):
+        response = client.get("/readyz")
+        if response.status_code == 200:
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"index did not become ready: {response.text}")
 
 
 def test_tool_descriptions_advertise_owner_specific_triggering() -> None:
@@ -64,6 +78,58 @@ def test_http_health_has_no_provenance(tmp_path: Path, monkeypatch) -> None:
     assert response.json() == {"status": "ok", "service": "YouKnowMe"}
 
 
+def test_create_app_does_not_load_index_synchronously(tmp_path: Path, monkeypatch) -> None:
+    def fail_if_called(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("index loading should run from lifespan")
+
+    monkeypatch.setenv("YKM_EMBEDDING_PROVIDER", "fake")
+    monkeypatch.setenv("YKM_LOCAL_AUTH_SECRET", "secret")
+    monkeypatch.setattr(server_module, "YkmIndex", fail_if_called)
+
+    client = TestClient(create_app(tmp_path / "missing-index", mode="local"))
+
+    assert client.get("/livez").status_code == 200
+    response = client.get("/readyz")
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "loading",
+        "detail": INDEX_LOADING_MESSAGE,
+    }
+
+
+def test_lifespan_loads_index_in_background(tmp_path: Path, monkeypatch) -> None:
+    started = threading.Event()
+    finish = threading.Event()
+
+    class BlockingIndex:
+        def __init__(self, _path: Path, _provider: FakeEmbeddingProvider) -> None:
+            started.set()
+            if not finish.wait(5):
+                raise TimeoutError("test index load timed out")
+
+    monkeypatch.setenv("YKM_EMBEDDING_PROVIDER", "fake")
+    monkeypatch.setenv("YKM_LOCAL_AUTH_SECRET", "secret")
+    monkeypatch.setattr(server_module, "YkmIndex", BlockingIndex)
+
+    with TestClient(create_app(tmp_path / "index", mode="local")) as client:
+        assert started.wait(5)
+        assert client.get("/livez").status_code == 200
+
+        ready = client.get("/readyz")
+        assert ready.status_code == 503
+        assert ready.json() == {
+            "status": "loading",
+            "detail": INDEX_LOADING_MESSAGE,
+        }
+
+        mcp = client.post("/mcp", headers={"X-YKM-Local-Secret": "secret"})
+        assert mcp.status_code == 503
+        assert mcp.json() == {"detail": INDEX_LOADING_MESSAGE}
+
+        finish.set()
+        wait_until_ready(client)
+
+
 def test_local_mcp_path_requires_local_secret(tmp_path: Path, monkeypatch) -> None:
     index_path = tmp_path / "index"
     build_index(Path("fixtures/corpus"), index_path, FakeEmbeddingProvider())
@@ -85,6 +151,7 @@ def test_local_mcp_path_accepts_local_secret_before_transport_validation(
     monkeypatch.setenv("YKM_LOCAL_AUTH_SECRET", "secret")
 
     with TestClient(create_app(index_path, mode="local")) as client:
+        wait_until_ready(client)
         response = client.post("/mcp", headers={"X-YKM-Local-Secret": "secret"})
 
     assert response.status_code == 400
