@@ -33,11 +33,70 @@ Before opening or updating a PR, run both `mise run lint` and the full `mise run
 there is a concrete blocker. Focused tests are useful while iterating, but they are not enough for
 presubmit.
 
+## Deployment
+
+Production deploys happen automatically through GitHub Actions. The workflow is
+`.github/workflows/deploy-production.yml` and it is triggered after YKM CI passes on a push to
+`main`.
+
+The production deploy runs Ansible from the `grubbyhacker/vps-ops` repository over SSH to
+`hermes-vps` (`srv1656293.hstgr.cloud`). The deploy user is `github-deployer`.
+
+Agents must never SSH directly to `hermes-vps` to make operational changes. All production changes
+must go through the GitHub Actions deployment pipeline. Diagnostic read-only checks such as
+`docker inspect` or logs are acceptable only when explicitly authorized.
+
+The GitHub production environment gate requires approval before the deploy proceeds.
+
+## Local Staging
+
+Staging runs on localhost with Docker from the `grubbyhacker/vps-ops` repository:
+
+```bash
+mise run deploy:staging -- youknowme
+```
+
+Staging uses `YKM_AUTH_MODE=local` and requires the local auth header:
+
+```text
+X-YKM-Local-Secret: staging-local-secret
+```
+
+When staging is running, the service is available at `http://127.0.0.1:8765`.
+
+The staging index must be rsynced from production before staging can start. The expected local path
+is `~/staging/youknowme/data/index-current`.
+
+## Docker Image
+
+CI builds and publishes the Docker image on every push to `main`.
+
+Images are multi-arch for `linux/amd64` and `linux/arm64`, and are published to
+`ghcr.io/grubbyhacker/youknowme` with `sha-` tags.
+
+## Health Endpoints
+
+Use `/livez` for liveness. It returns `200` as soon as uvicorn starts.
+
+Use `/readyz` for readiness and health checks. It returns `200` only after the index is fully
+loaded.
+
+## Auth Modes
+
+`public` mode requires a Cloudflare Access JWT and is used in production.
+
+`local` mode requires the `X-YKM-Local-Secret` header and is used in staging and development.
+
 ## Git Workflow
 
 `main` is protected. Always create or switch to a feature branch before making implementation changes.
 
 Do not make changes on `main` and then waste time porting them to a feature branch later.
+
+Use the standard flow: feature branch, pull request, CI passing, then merge. CI must pass for lint
+and tests before merge. The Docker image is published by CI on pushes to `main`.
+
+Do not push directly to `main`.
 
 Delete old feature branches after they are merged or no longer needed.
 
