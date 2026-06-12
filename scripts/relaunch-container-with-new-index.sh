@@ -391,7 +391,7 @@ smoke_mcp_fails_closed() {
 
 wait_for_smoke() {
   for _ in {1..80}; do
-    if smoke_url /livez 2>/dev/null && smoke_mcp_fails_closed 2>/dev/null; then
+    if smoke_url /readyz 2>/dev/null && smoke_mcp_fails_closed 2>/dev/null; then
       return 0
     fi
     if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then

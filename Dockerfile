@@ -63,6 +63,6 @@ USER ykm
 EXPOSE 8765
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "from urllib.request import urlopen; urlopen('http://127.0.0.1:8765/livez', timeout=3).read()"
+    CMD python -c "from urllib.request import urlopen; urlopen('http://127.0.0.1:8765/readyz', timeout=3).read()"
 
 CMD ["sh", "-c", "ykm serve --index \"$YKM_INDEX_PATH\" --mode \"${YKM_AUTH_MODE:-local}\" --host 0.0.0.0 --port \"${YKM_PORT:-8765}\""]

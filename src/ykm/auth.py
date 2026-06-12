@@ -62,6 +62,7 @@ class AuthVerifier:
     def verify_request(self, request: Request) -> AuthDecision:
         if request.url.path in {
             "/livez",
+            "/readyz",
             "/health",
             "/.well-known/oauth-protected-resource",
             "/.well-known/oauth-protected-resource/mcp",

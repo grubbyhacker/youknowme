@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
@@ -9,6 +11,8 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
@@ -29,6 +33,8 @@ from ykm.logging import JsonlLogger, now_utc
 
 SERVICE_NAME = "YouKnowMe"
 MCP_PATH = "/mcp"
+INDEX_LOADING_MESSAGE = "index loading, retry shortly"
+module_logger = logging.getLogger(__name__)
 QUERY_TOOL_DESCRIPTION = (
     "Search YouKnowMe, Roger's private owner-specific memory. Use this before answering questions "
     "about Roger, his homes, devices, procedures, maintenance notes, preferences, work history, "
@@ -68,11 +74,20 @@ PROTECTED_RESOURCE_METADATA_PATHS = (
 )
 
 
+class IndexReadinessMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path in {MCP_PATH, f"{MCP_PATH}/"} and request.app.state.index is None:
+            return JSONResponse(
+                {"detail": request.app.state.index_error or INDEX_LOADING_MESSAGE}, 503
+            )
+        return await call_next(request)
+
+
 def create_app(index_path: Path, mode: str = "local") -> Starlette:
     auth_config = AuthConfig.from_env(mode)
-    index = YkmIndex(index_path, provider_from_env())
+    provider = provider_from_env()
     intake = IntakeStore(Path(os.getenv("YKM_INTAKE_PATH", "/data/intake")))
-    logger = JsonlLogger(
+    query_logger = JsonlLogger(
         Path(os.getenv("YKM_LOG_PATH")) if os.getenv("YKM_LOG_PATH") else None,
         int(os.getenv("YKM_LOG_RETENTION_DAYS", "90")),
     )
@@ -100,6 +115,12 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
         ),
     )
 
+    def loaded_index() -> YkmIndex:
+        index = app.state.index
+        if index is None:
+            raise RuntimeError(INDEX_LOADING_MESSAGE)
+        return index
+
     @mcp.tool(description=QUERY_TOOL_DESCRIPTION)
     def query(
         query: str,
@@ -112,6 +133,7 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
         started = time.perf_counter()
         error = None
         response = None
+        index = loaded_index()
         try:
             response = index.query(
                 QueryRequest(
@@ -128,7 +150,7 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
             error = exc.__class__.__name__
             raise
         finally:
-            logger.write(
+            query_logger.write(
                 QueryLogRecord(
                     timestamp=now_utc(),
                     event="query",
@@ -147,6 +169,7 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
 
     @mcp.tool(description=RETRIEVE_TOOL_DESCRIPTION)
     def retrieve(locator: str, kind: str = "source_id") -> dict[str, Any]:
+        index = loaded_index()
         response = index.retrieve(RetrieveRequest(locator=locator, kind=kind))
         return response.model_dump(mode="json")
 
@@ -155,6 +178,7 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
         started = time.perf_counter()
         error = None
         response = None
+        index = loaded_index()
         try:
             response = index.query(QueryRequest(query=query, limit=5))
             return [
@@ -179,7 +203,7 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
             error = exc.__class__.__name__
             raise
         finally:
-            logger.write(
+            query_logger.write(
                 QueryLogRecord(
                     timestamp=now_utc(),
                     event="search",
@@ -198,6 +222,7 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
 
     @mcp.tool(description=FETCH_TOOL_DESCRIPTION)
     def fetch(id: str) -> dict[str, Any]:
+        index = loaded_index()
         response = index.retrieve(RetrieveRequest(locator=id, kind="source_id"))
         if not response.found:
             return {
@@ -227,6 +252,7 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
 
     @mcp.tool(description=HEALTH_TOOL_DESCRIPTION)
     def health() -> dict[str, Any]:
+        index = loaded_index()
         return index.health().model_dump(mode="json")
 
     @mcp.tool(description=UPLOAD_TOOL_DESCRIPTION)
@@ -237,6 +263,7 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
         suggested_tags: list[str] | None = None,
         suggested_related: list[str] | None = None,
     ) -> dict[str, Any]:
+        index = loaded_index()
         response = intake.stage_upload(
             UploadRequest(
                 files=[UploadFileInput(**file) for file in files],
@@ -259,6 +286,7 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
         result_ids: list[str] | None = None,
         upload_id: str | None = None,
     ) -> dict[str, Any]:
+        index = loaded_index()
         response = intake.record_feedback(
             FeedbackRequest(
                 category=category,
@@ -276,6 +304,17 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
     async def livez(_request) -> JSONResponse:
         return JSONResponse({"status": "ok", "service": SERVICE_NAME})
 
+    async def readyz(request: Request) -> JSONResponse:
+        if request.app.state.index is None:
+            return JSONResponse(
+                {
+                    "status": "loading",
+                    "detail": request.app.state.index_error or INDEX_LOADING_MESSAGE,
+                },
+                503,
+            )
+        return JSONResponse({"status": "ready", "service": SERVICE_NAME})
+
     async def oauth_protected_resource_metadata(_request) -> JSONResponse:
         return JSONResponse(
             {
@@ -286,13 +325,28 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
         )
 
     @asynccontextmanager
-    async def lifespan(_app):
+    async def lifespan(app: Starlette):
+        async def load_index() -> None:
+            try:
+                app.state.index = await asyncio.to_thread(YkmIndex, index_path, provider)
+            except Exception:
+                module_logger.exception("Failed to load YouKnowMe index")
+                app.state.index_error = "index failed to load"
+
+        load_task = asyncio.create_task(load_index())
         async with mcp.session_manager.run():
             yield
+        if not load_task.done():
+            load_task.cancel()
+            try:
+                await load_task
+            except asyncio.CancelledError:
+                pass
 
     app = Starlette(
         routes=[
             Route("/livez", livez, methods=["GET"]),
+            Route("/readyz", readyz, methods=["GET"]),
             Route("/health", livez, methods=["GET"]),
             *[
                 Route(path, oauth_protected_resource_metadata, methods=["GET"])
@@ -302,5 +356,9 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
         ],
         lifespan=lifespan,
     )
+    app.state.index = None
+    app.state.index_error = None
+
+    app.add_middleware(IndexReadinessMiddleware)
     app.add_middleware(AuthMiddleware, verifier=AuthVerifier(auth_config))
     return app
