@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -156,6 +158,83 @@ def test_local_mcp_path_accepts_local_secret_before_transport_validation(
 
     assert response.status_code == 400
     assert response.text == "Invalid Content-Type header"
+
+
+def test_curator_status_requires_local_secret(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("YKM_EMBEDDING_PROVIDER", "fake")
+    monkeypatch.setenv("YKM_LOCAL_AUTH_SECRET", "secret")
+    monkeypatch.setenv("YKM_INTAKE_PATH", str(tmp_path / "intake"))
+
+    client = TestClient(create_app(tmp_path / "index", mode="local"))
+    response = client.get("/curator/status")
+
+    assert response.status_code == 403
+
+
+def test_curator_status_returns_empty_queue_without_last_run(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("YKM_EMBEDDING_PROVIDER", "fake")
+    monkeypatch.setenv("YKM_LOCAL_AUTH_SECRET", "secret")
+    monkeypatch.setenv("YKM_INTAKE_PATH", str(tmp_path / "intake"))
+
+    client = TestClient(create_app(tmp_path / "index", mode="local"))
+    response = client.get("/curator/status", headers={"X-YKM-Local-Secret": "secret"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "queue_depth": 0,
+        "oldest_pending_seconds": 0,
+        "last_run": None,
+    }
+
+
+def test_curator_status_counts_pending_uploads_and_reads_last_run(
+    tmp_path: Path, monkeypatch
+) -> None:
+    intake = tmp_path / "intake"
+    pending = intake / "uploads" / "pending"
+    old_upload = pending / "upl_old"
+    new_upload = pending / "upl_new"
+    claimed_upload = pending / "upl_claimed"
+    old_upload.mkdir(parents=True)
+    new_upload.mkdir()
+    claimed_upload.mkdir()
+    (claimed_upload / "curator.json").write_text("{}\n", encoding="utf-8")
+    (pending / "not-a-directory").write_text("ignored\n", encoding="utf-8")
+    os.utime(old_upload, (1_000, 1_000))
+    os.utime(new_upload, (7_500, 7_500))
+    os.utime(claimed_upload, (500, 500))
+    (intake / "curator-status.json").write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-06-13T18:00:00Z",
+                "status": "success",
+                "message": "opened PR #42",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(server_module.time, "time", lambda: 10_000.0)
+    monkeypatch.setenv("YKM_EMBEDDING_PROVIDER", "fake")
+    monkeypatch.setenv("YKM_LOCAL_AUTH_SECRET", "secret")
+    monkeypatch.setenv("YKM_INTAKE_PATH", str(intake))
+
+    client = TestClient(create_app(tmp_path / "index", mode="local"))
+    response = client.get("/curator/status", headers={"X-YKM-Local-Secret": "secret"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "queue_depth": 2,
+        "oldest_pending_seconds": 9_000,
+        "last_run": {
+            "timestamp": "2026-06-13T18:00:00Z",
+            "status": "success",
+            "message": "opened PR #42",
+        },
+    }
 
 
 def test_public_mcp_path_fails_closed_without_cloudflare_jwt(tmp_path: Path, monkeypatch) -> None:
