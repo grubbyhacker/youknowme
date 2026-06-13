@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -81,6 +82,31 @@ class IndexReadinessMiddleware(BaseHTTPMiddleware):
                 {"detail": request.app.state.index_error or INDEX_LOADING_MESSAGE}, 503
             )
         return await call_next(request)
+
+
+def curator_status_payload(intake_root: Path, now: float | None = None) -> dict[str, Any]:
+    pending_root = intake_root / "uploads" / "pending"
+    pending_dirs: list[Path] = []
+    if pending_root.exists():
+        for path in pending_root.iterdir():
+            if path.is_dir() and not (path / "curator.json").exists():
+                pending_dirs.append(path)
+
+    oldest_pending_seconds = 0
+    if pending_dirs:
+        oldest_mtime = min(path.stat().st_mtime for path in pending_dirs)
+        oldest_pending_seconds = int(max(0, (time.time() if now is None else now) - oldest_mtime))
+
+    status_path = intake_root / "curator-status.json"
+    last_run = None
+    if status_path.exists():
+        last_run = json.loads(status_path.read_text(encoding="utf-8"))
+
+    return {
+        "queue_depth": len(pending_dirs),
+        "oldest_pending_seconds": oldest_pending_seconds,
+        "last_run": last_run,
+    }
 
 
 def create_app(index_path: Path, mode: str = "local") -> Starlette:
@@ -315,6 +341,9 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
             )
         return JSONResponse({"status": "ready", "service": SERVICE_NAME})
 
+    async def curator_status(_request) -> JSONResponse:
+        return JSONResponse(curator_status_payload(intake.root))
+
     async def oauth_protected_resource_metadata(_request) -> JSONResponse:
         return JSONResponse(
             {
@@ -348,6 +377,7 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
             Route("/livez", livez, methods=["GET"]),
             Route("/readyz", readyz, methods=["GET"]),
             Route("/health", livez, methods=["GET"]),
+            Route("/curator/status", curator_status, methods=["GET"]),
             *[
                 Route(path, oauth_protected_resource_metadata, methods=["GET"])
                 for path in PROTECTED_RESOURCE_METADATA_PATHS
