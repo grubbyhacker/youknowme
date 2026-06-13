@@ -179,6 +179,15 @@ def test_public_auth_missing_token_is_401(private_key) -> None:
     assert decision.reason == "missing Cloudflare Access token"
 
 
+def test_public_auth_exempts_curator_status_without_token(private_key) -> None:
+    verifier = public_verifier(private_key)
+
+    decision = verifier.verify_request(FakeRequest("/curator/status", {}))
+
+    assert decision.ok is True
+    assert decision.reason == "liveness"
+
+
 def test_public_auth_malformed_token_is_401(private_key) -> None:
     verifier = public_verifier(private_key)
 

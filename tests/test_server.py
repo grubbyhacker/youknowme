@@ -160,7 +160,9 @@ def test_local_mcp_path_accepts_local_secret_before_transport_validation(
     assert response.text == "Invalid Content-Type header"
 
 
-def test_curator_status_requires_local_secret(tmp_path: Path, monkeypatch) -> None:
+def test_curator_status_allows_unauthenticated_local_request(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setenv("YKM_EMBEDDING_PROVIDER", "fake")
     monkeypatch.setenv("YKM_LOCAL_AUTH_SECRET", "secret")
     monkeypatch.setenv("YKM_INTAKE_PATH", str(tmp_path / "intake"))
@@ -168,7 +170,32 @@ def test_curator_status_requires_local_secret(tmp_path: Path, monkeypatch) -> No
     client = TestClient(create_app(tmp_path / "index", mode="local"))
     response = client.get("/curator/status")
 
-    assert response.status_code == 403
+    assert response.status_code == 200
+    assert response.json() == {
+        "queue_depth": 0,
+        "oldest_pending_seconds": 0,
+        "last_run": None,
+    }
+
+
+def test_curator_status_allows_unauthenticated_public_request(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("YKM_EMBEDDING_PROVIDER", "fake")
+    monkeypatch.setenv("YKM_OWNER_EMAIL", "owner@example.com")
+    monkeypatch.setenv("YKM_CLOUDFLARE_TEAM_DOMAIN", "https://team.cloudflareaccess.com")
+    monkeypatch.setenv("YKM_CLOUDFLARE_AUD", "aud")
+    monkeypatch.setenv("YKM_INTAKE_PATH", str(tmp_path / "intake"))
+
+    client = TestClient(create_app(tmp_path / "index", mode="public"))
+    response = client.get("/curator/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "queue_depth": 0,
+        "oldest_pending_seconds": 0,
+        "last_run": None,
+    }
 
 
 def test_curator_status_returns_empty_queue_without_last_run(
