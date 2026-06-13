@@ -138,8 +138,8 @@ Completed so far:
 - Current deployed build ID is `f1fa6a81d97e4650b5775f717ad8c5dd` with 339 chunks and source
   provenance `65607eb0e5d152506d76fb74205f7eed108655f2`.
 - Verified ChatGPT and Claude can retrieve new production data through the live remote MCP route.
-- Documented the rebuild, restart, smoke-test, logging, and rollback runbook in
-  `docs/ykm-vps-runbook.md`.
+- Production deployment now runs through the GitHub Actions workflow backed by the `vps-ops`
+  Ansible role.
 - Added a deliberate Hermes service-token path for the public Cloudflare Access route:
   YouKnowMe accepts verified owner email tokens as `cloudflare` and accepts verified service-token
   JWTs as `cloudflare-service` only when JWT `common_name` is listed in

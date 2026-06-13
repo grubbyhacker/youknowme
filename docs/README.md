@@ -10,7 +10,6 @@ Current planning artifacts:
 - `ykm-planning-answers.md` - resolved planning-agent questions and owner decisions.
 - `ykm-corpus-authoring.md` - frontmatter and markdown authoring guidance for the private corpus.
 - `ykm-cloudflare-cutover.md` - existing Cloudflare Tunnel / Access contract and cutover plan.
-- `ykm-vps-runbook.md` - Phase 1E VPS deployment, smoke checks, and rollback runbook.
 - `ykm-live-cli.md` - development-machine CLI for calling the live MCP route and staged intake
   tools.
 - `ykm-phased-plan.md` - current high-level implementation phases and status.

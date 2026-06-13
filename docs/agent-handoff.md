@@ -63,21 +63,8 @@ YKM_EMBEDDING_PROVIDER=openrouter mise run local-mcp-smoke
 YKM_EMBEDDING_PROVIDER=openrouter mise run container-smoke
 ```
 
-Build and deploy the production image from the development machine:
-
-```bash
-docker build --platform linux/amd64 -t youknowme:phase1e .
-docker save youknowme:phase1e | ssh hermes-vps 'docker load'
-```
-
-Restart production on the VPS:
-
-```bash
-ssh hermes-vps '
-cd /docker/youknowme
-docker compose up -d --force-recreate
-'
-```
+Production deploys run through the GitHub Actions production deployment workflow after CI passes on
+`main`. Do not push images or restart production directly from a development machine.
 
 ## Verification Completed
 
