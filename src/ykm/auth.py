@@ -64,6 +64,7 @@ class AuthVerifier:
             "/livez",
             "/readyz",
             "/health",
+            "/curator/status",
             "/.well-known/oauth-protected-resource",
             "/.well-known/oauth-protected-resource/mcp",
         }:
