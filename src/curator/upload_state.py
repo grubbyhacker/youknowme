@@ -13,6 +13,8 @@ from curator.models import (
 ALLOWED_UPLOAD_TRANSITIONS: frozenset[tuple[str, str]] = frozenset(
     {
         ("pending", "claimed"),
+        ("pending", "deferred"),
+        ("pending", "processed"),
         ("claimed", "pr_opened"),
         ("claimed", "deferred"),
         ("claimed", "rejected"),

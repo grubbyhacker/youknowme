@@ -4580,6 +4580,7 @@ def test_upload_agent_prompt_allows_policy_edits_and_requires_summary(tmp_path: 
     assert "summary_path" in prompt
     assert "content_summary" in prompt
     assert "Do not commit, push" in prompt
+    assert "Never create backup" in prompt
 
 
 def test_agentic_upload_review_creates_pr_after_validated_codex_diff(
@@ -4694,6 +4695,40 @@ def test_agentic_upload_review_rejects_forbidden_codex_changes(
     assert observations[0].status == "fail"
     assert "forbidden" in observations[0].message
     assert observations[0].changed_files == [".github/workflows/validate.yml"]
+
+
+def test_agentic_upload_review_rejects_backup_artifacts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    preview, bundle = _upload_agent_preview_and_bundle(tmp_path)
+    broker = FixtureBrokerAdapter(BrokerFixtureState(schema_version="1", reachable=True))
+    _fake_upload_agent_git(tmp_path, monkeypatch)
+    _fake_upload_agent_codex(tmp_path, monkeypatch, mode="backup")
+    _fake_mise(tmp_path, monkeypatch, exit_code=0, stdout="validation ok\n")
+    monkeypatch.setenv("BROKER_AGENT_ID", "ykm-curator")
+    monkeypatch.setenv("BROKER_AGENT_SECRET", "broker-secret")
+
+    results, observations = execute_agentic_upload_review_prs(
+        run_id="run-upload-agent",
+        mode="manual_live",
+        broker_remote_url="https://broker/git/grubbyhacker/ykmcorpus.git",
+        broker_adapter=broker,
+        previews=[preview],
+        bundles=[bundle],
+        model="ykm-codex-gpt-5-mini",
+        max_attempts=1,
+        validation_command=["mise", "run", "validate"],
+        output=tmp_path / "output",
+        codex_proxy_base_url="http://proxy:8092",
+        codex_proxy_token="proxy-token",
+    )
+
+    assert results == []
+    assert len(observations) == 1
+    assert observations[0].status == "fail"
+    assert "backup or temporary files" in observations[0].message
+    assert observations[0].changed_files == [".ykm/corpus-policy.yaml.bak"]
 
 
 def test_runner_agentic_upload_review_respects_upload_mutation_budget(
@@ -5282,6 +5317,58 @@ def test_reconciliation_summary_previews_feedback_decisions_from_terminal_prs() 
     assert "should not be overwritten" in previews["fb_conflict"].reason
 
 
+def test_reconciliation_summary_extracts_owner_review_guidance_candidates() -> None:
+    summary = build_reconciliation_summary(
+        feedback_records=[],
+        latest_decisions={},
+        feedback_plan=FeedbackPlan(
+            run_id="run-pr",
+            feedback_window=FeedbackWindow(start_offset=0, end_offset=0),
+            created_at=datetime.fromisoformat("2026-06-08T12:00:00+00:00"),
+        ),
+        upload_snapshot=UploadQueueSnapshot(counts={}),
+        pr_snapshots=[
+            CuratorPrSnapshot(
+                number=19,
+                state="closed",
+                body="YKM-Curator-Run: run-pr\nYKM-Curator-Upload: upl_1\n",
+                branch="curator/run-pr/upload-upl-1",
+                review_threads=[
+                    CuratorPrReviewThreadSnapshot(
+                        path=".ykm/corpus-policy.yaml.bak",
+                        line=1,
+                        comments=[
+                            CuratorPrReviewCommentSnapshot(
+                                database_id=123,
+                                author_login="grubbyhacker",
+                                body=(
+                                    "Never, ever create a backup file in git. "
+                                    "Not in this repo, not anywhere."
+                                ),
+                                path=".ykm/corpus-policy.yaml.bak",
+                                line=1,
+                            ),
+                            CuratorPrReviewCommentSnapshot(
+                                database_id=124,
+                                author_login="someone-else",
+                                body="This should not become owner guidance.",
+                            ),
+                        ],
+                    )
+                ],
+            )
+        ],
+    )
+
+    assert summary.review_guidance_candidate_count == 1
+    candidate = summary.review_guidance_candidates[0]
+    assert candidate.pr_number == 19
+    assert candidate.path == ".ykm/corpus-policy.yaml.bak"
+    assert candidate.line == 1
+    assert candidate.comment_id == "123"
+    assert "Never, ever create a backup file in git" in candidate.guidance
+
+
 def test_reconciliation_matches_markerless_branch_pr_to_local_state() -> None:
     metadata = UploadCuratorMetadata(
         upload_id="upl_branch_only",
@@ -5674,8 +5761,87 @@ def test_state_only_applies_closed_unmerged_upload_pr_as_deferred(
     assert updated_metadata["decision"] == "deferred"
     assert updated_metadata["run_id"] == "run-state-reconcile"
     assert updated_metadata["pr_number"] == 44
-    assert updated_metadata["blocking_reason"] == "Closed-unmerged Curator PR can defer linked upload."
+    assert (
+        updated_metadata["blocking_reason"]
+        == "Closed-unmerged Curator PR can defer linked upload without a reentry trigger."
+    )
     assert claimed.exists()
+
+
+def test_state_only_records_closed_unmerged_pr_for_pending_upload_without_metadata(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    intake = tmp_path / "intake"
+    feedback = intake / "feedback" / "feedback.jsonl"
+    feedback.parent.mkdir(parents=True)
+    feedback.write_text("", encoding="utf-8")
+    pending = intake / "uploads" / "pending" / "upl_duplicate"
+    pending.mkdir(parents=True)
+    (pending / "manifest.json").write_text(
+        json.dumps({"upload_id": "upl_duplicate"}) + "\n",
+        encoding="utf-8",
+    )
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "run_id": "run-state-reconcile",
+                "mode": "state_only",
+                "enabled_actions": ["reconcile"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    broker_fixture = tmp_path / "broker-fixture.json"
+    broker_fixture.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "reachable": True,
+                "pr_snapshots": [
+                    {
+                        "number": 19,
+                        "state": "closed",
+                        "body": "\n".join(
+                            [
+                                "YKM-Curator-Run: run-state-reconcile",
+                                "YKM-Curator-Upload: upl_duplicate",
+                            ]
+                        ),
+                        "branch": "curator/run-state-reconcile/upload-upl-duplicate",
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="ignored",
+            intake=intake,
+            output=tmp_path / "output",
+            task=task,
+            broker_fixture=broker_fixture,
+        )
+    )
+
+    metadata = json.loads((pending / "curator.json").read_text(encoding="utf-8"))
+    assert report.status == "pass"
+    assert report.upload_metadata_update_count == 1
+    assert report.reconciliation["upload_transition_previews"][0]["from_state"] == "pending"
+    assert metadata["upload_id"] == "upl_duplicate"
+    assert metadata["state"] == "deferred"
+    assert metadata["decision"] == "deferred"
+    assert metadata["pr_number"] == 19
+    assert metadata["branch"] == "curator/run-state-reconcile/upload-upl-duplicate"
+    assert metadata["reentry_trigger"] is None
+    assert pending.exists()
 
 
 def test_state_only_does_not_apply_reconciliation_when_disabled(
@@ -6070,12 +6236,27 @@ def test_run_report_markdown_renders_pr_reconciliation(tmp_path: Path) -> None:
                 {
                     "upload_id": "upl_1",
                     "pr_number": 44,
+                    "branch": "curator/run-report-pr/upload-upl-1",
                     "from_state": "pr_opened",
                     "to_state": "deferred",
                     "validation": "accepted",
                     "reason": "Closed-unmerged Curator PR can defer linked upload.",
                 }
-            ]
+            ],
+            "review_guidance_candidates": [
+                {
+                    "candidate_id": "pr-44-review-thread-123",
+                    "pr_number": 44,
+                    "author_login": "grubbyhacker",
+                    "body": "Never create backup files in git.",
+                    "guidance": "Never create backup files in git.",
+                    "path": ".ykm/corpus-policy.yaml.bak",
+                    "line": 1,
+                    "comment_id": "123",
+                    "source": "review_thread",
+                    "reason": "Owner inline review comment on a Curator PR can become guidance.",
+                }
+            ],
         },
         probes=[CuratorProbe(name="test", status="pass", message="ok")],
     )
@@ -6088,6 +6269,8 @@ def test_run_report_markdown_renders_pr_reconciliation(tmp_path: Path) -> None:
     assert "PR `#44`: `closed_unmerged`" in markdown
     assert "## Upload Transition Previews" in markdown
     assert "`upl_1` from PR `#44`: `pr_opened` -> `deferred`" in markdown
+    assert "## Review Guidance Candidates" in markdown
+    assert "`pr-44-review-thread-123` from PR `#44` on `.ykm/corpus-policy.yaml.bak`:1" in markdown
 
 
 def test_upload_snapshot_reads_curator_metadata(tmp_path: Path, monkeypatch) -> None:
@@ -6511,6 +6694,7 @@ def test_upload_review_model_prompt_requires_policy_patch_for_new_metadata(
         model="anthropic/claude-sonnet-4.6",
         model_call_budget=ModelCallBudget(max_calls_per_run=1, max_tokens_per_run=1000),
         bundle=bundle,
+        curator_guidance="Never create backup files in git.",
     )
 
     user_message = request.input["messages"][1]
@@ -6532,6 +6716,8 @@ def test_upload_review_model_prompt_requires_policy_patch_for_new_metadata(
         "Do not invent related IDs. Only include related when the upload itself names an exact "
         "existing corpus id; otherwise mention the relationship in prose instead."
     ) in constraints
+    assert "Never create backup, temporary, swap, `.bak`, `.orig`, `.rej`, or `~` files in git." in constraints
+    assert prompt_input["curator_guidance"] == "Never create backup files in git."
 
 
 def test_runner_observes_model_upload_review_draft_validation(
@@ -7894,6 +8080,11 @@ def _fake_upload_agent_codex(tmp_path: Path, monkeypatch, *, mode: str) -> Path:
             "    path.parent.mkdir(parents=True, exist_ok=True)\n"
             "    path.write_text('name: validate\\n')\n"
             "    summary.write_text(json.dumps({'content_summary': 'A workflow edit.', 'draft_paths': []}))\n"
+            "elif mode == 'backup':\n"
+            "    path = cwd / '.ykm' / 'corpus-policy.yaml.bak'\n"
+            "    path.parent.mkdir(parents=True, exist_ok=True)\n"
+            "    path.write_text('backup copy\\n')\n"
+            "    summary.write_text(json.dumps({'content_summary': 'A backup artifact.', 'draft_paths': []}))\n"
             "else:\n"
             "    path = cwd / 'homemaint' / 'tooling.md'\n"
             "    path.parent.mkdir(parents=True, exist_ok=True)\n"
@@ -7933,6 +8124,8 @@ def _fake_upload_agent_git(tmp_path: Path, monkeypatch) -> Path:
             "        paths.append('?? homemaint/tooling.md')\n"
             "    if (cwd / '.github' / 'workflows' / 'validate.yml').exists():\n"
             "        paths.append('?? .github/workflows/validate.yml')\n"
+            "    if (cwd / '.ykm' / 'corpus-policy.yaml.bak').exists():\n"
+            "        paths.append('?? .ykm/corpus-policy.yaml.bak')\n"
             "    sys.stdout.write('\\n'.join(paths) + ('\\n' if paths else ''))\n"
             "    raise SystemExit(0)\n"
             "if args[:3] == ['ls-files', '--others', '--exclude-standard']:\n"
@@ -7942,6 +8135,8 @@ def _fake_upload_agent_git(tmp_path: Path, monkeypatch) -> Path:
             "        paths.append('homemaint/tooling.md')\n"
             "    if (cwd / '.github' / 'workflows' / 'validate.yml').exists():\n"
             "        paths.append('.github/workflows/validate.yml')\n"
+            "    if (cwd / '.ykm' / 'corpus-policy.yaml.bak').exists():\n"
+            "        paths.append('.ykm/corpus-policy.yaml.bak')\n"
             "    sys.stdout.write('\\n'.join(paths) + ('\\n' if paths else ''))\n"
             "    raise SystemExit(0)\n"
             "if args[:2] == ['diff', '--stat']:\n"

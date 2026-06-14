@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from curator.body import draft_action_body
+from curator.file_policy import forbidden_backup_or_temp_paths
 from curator.models import (
     DEFAULT_PRODUCT_REPO,
     ActionEvidence,
@@ -141,6 +142,13 @@ def _execute_corpus_pr(
                 changed_files = _changed_files(checkout, git_env)
                 if not changed_files:
                     continue
+                backup_or_temp_paths = forbidden_backup_or_temp_paths(changed_files)
+                if backup_or_temp_paths:
+                    return _failed_result(
+                        intent,
+                        "feedback agent created backup or temporary files: "
+                        + ", ".join(backup_or_temp_paths[:5]),
+                    )
                 validation = _run_validation(checkout, validation_command)
                 if validation.returncode == 0:
                     break

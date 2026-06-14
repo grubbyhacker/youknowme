@@ -491,6 +491,7 @@ class UploadTransitionPreview(BaseModel):
     upload_id: str
     pr_number: int | None = None
     issue_number: int | None = None
+    branch: str | None = None
     from_state: UploadLogicalState
     to_state: UploadLogicalState
     validation: CuratorActionValidation
@@ -506,6 +507,21 @@ class FeedbackDecisionPreview(BaseModel):
     from_decision: FeedbackDecisionValue | None = None
     to_decision: FeedbackDecisionValue
     validation: CuratorActionValidation
+    reason: str
+
+
+class ReviewGuidanceCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: str
+    pr_number: int
+    author_login: str
+    body: str
+    guidance: str
+    path: str | None = None
+    line: int | None = None
+    comment_id: str | None = None
+    source: Literal["review", "review_thread"] = "review_thread"
     reason: str
 
 
@@ -530,6 +546,8 @@ class ReconciliationSummary(BaseModel):
     feedback_decision_previews: list[FeedbackDecisionPreview] = Field(default_factory=list)
     feedback_reentry_preview_count: int = 0
     feedback_reentry_previews: list[FeedbackDecisionPreview] = Field(default_factory=list)
+    review_guidance_candidate_count: int = 0
+    review_guidance_candidates: list[ReviewGuidanceCandidate] = Field(default_factory=list)
 
 
 class CuratorExecutionPolicy(BaseModel):

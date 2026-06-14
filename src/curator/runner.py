@@ -94,6 +94,7 @@ DEFAULT_PRODUCT_REPO = "grubbyhacker/youknowme"
 MAX_UPLOAD_REVIEW_FILES = 5
 MAX_UPLOAD_REVIEW_FILE_CHARS = 20000
 MAX_UPLOAD_REVIEW_MANIFEST_CHARS = 20000
+CURATOR_GUIDANCE_PATH = Path("skills/curator-guidance.md")
 
 
 CuratorDryRunConfig = CuratorRunConfig
@@ -1821,6 +1822,7 @@ def _apply_model_upload_review(
                 model=model,
                 model_call_budget=model_call_budget,
                 bundle=bundle,
+                curator_guidance=_read_curator_guidance(config.corpus_checkout),
             )
             call_count += 1
             response = _model_adapter(config).call(request)
@@ -2401,12 +2403,25 @@ def _task_broker_remote_url(task_payload: dict[str, Any] | None) -> str | None:
     return None
 
 
+def _read_curator_guidance(corpus_checkout: Path | None) -> str:
+    if corpus_checkout is None:
+        return ""
+    path = corpus_checkout / CURATOR_GUIDANCE_PATH
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")[:8000]
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
 def _upload_review_model_request(
     *,
     run_id: str,
     model: str,
     model_call_budget: ModelCallBudget,
     bundle: Any,
+    curator_guidance: str = "",
 ) -> ModelCallRequest:
     manifest = _read_upload_manifest_for_model(Path(bundle.path))
     files = _read_upload_files_for_model(Path(bundle.path))
@@ -2444,11 +2459,15 @@ def _upload_review_model_request(
             "A review PR is the owner permission request for bounded corpus policy additions; prefer an integrated draft with a minimal policy_patch over needs_owner_action when the change can be reviewed as code.",
             "Use decision needs_owner_action only when the upload lacks enough context, has unresolved safety concerns, or cannot be turned into a small reviewable corpus-policy and markdown diff.",
             "Do not weaken validation limits, remove existing policy values, or include secrets.",
+            "Never create backup, temporary, swap, `.bak`, `.orig`, `.rej`, or `~` files in git.",
+            "Follow approved curator_guidance when present; it is owner-reviewed source policy.",
             "Use decision integrated only when files contain normalized corpus markdown for review.",
             "Set content_summary to one short sentence that identifies the uploaded document for a PR reviewer without copying intake excerpts.",
             "Keep rationale short and state why any policy additions are needed.",
         ],
     }
+    if curator_guidance:
+        prompt_input["curator_guidance"] = curator_guidance[:8000]
     return ModelCallRequest(
         task_name="upload_review",
         run_id=run_id,
@@ -2632,20 +2651,23 @@ def _apply_upload_transition_previews(
         if preview.validation != "accepted":
             continue
         bundle = bundles_by_upload.get(preview.upload_id)
-        if bundle is None or bundle.curator_metadata is None:
+        if bundle is None:
             continue
-        metadata = bundle.curator_metadata
+        metadata = bundle.curator_metadata or UploadCuratorMetadata(
+            upload_id=preview.upload_id,
+            state=preview.from_state,
+            run_id=run_id,
+        )
         if metadata.state != preview.from_state:
             continue
         metadata_path = Path(bundle.path) / "curator.json"
-        if not metadata_path.exists():
-            continue
         try:
             transitioned = transition_upload_metadata(
                 metadata,
                 desired_state=preview.to_state,
                 run_id=run_id,
                 decision=_decision_for_upload_transition(preview),
+                branch=preview.branch,
                 pr_number=preview.pr_number,
                 blocking_issue_number=preview.issue_number,
                 blocking_reason=preview.reason if preview.to_state == "deferred" else None,
@@ -3113,6 +3135,19 @@ def _report_markdown(report: CuratorDryRunReport) -> str:
                 f"- `{preview['feedback_id']}` from {source}: "
                 f"`{preview.get('from_decision') or 'none'}` ready "
                 f"(`{preview['validation']}`) - {preview['reason']}"
+            )
+    review_guidance_candidates = report.reconciliation.get("review_guidance_candidates", [])
+    if review_guidance_candidates:
+        lines.extend(["", "## Review Guidance Candidates", ""])
+        for candidate in review_guidance_candidates[:20]:
+            location = ""
+            if candidate.get("path"):
+                location = f" on `{candidate['path']}`"
+                if candidate.get("line"):
+                    location += f":{candidate['line']}"
+            lines.append(
+                f"- `{candidate['candidate_id']}` from PR `#{candidate['pr_number']}`"
+                f"{location}: {str(candidate['guidance'])[:200]}"
             )
     referenced_evidence = _referenced_evidence(report)
     if any(referenced_evidence.values()):
