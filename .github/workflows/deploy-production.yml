@@ -94,11 +94,17 @@ jobs:
             echo "SSH preflight succeeded for ${host} (${endpoint}:${ssh_port})"
           done
 
-      - name: Deploy youknowme
+      - name: Deploy YouKnowMe services
         working-directory: vps-ops
         run: |
+          ykm_image="ghcr.io/grubbyhacker/youknowme:sha-${{ github.event.workflow_run.head_sha }}"
+
           ansible-playbook -i inventory/production.yml playbooks/deploy-youknowme.yml \
-            -e "ykm_image=ghcr.io/grubbyhacker/youknowme:sha-${{ github.event.workflow_run.head_sha }}" \
+            -e "ykm_image=${ykm_image}" \
+            -e "ansible_ssh_private_key_file=/tmp/hermes-deploy"
+
+          ansible-playbook -i inventory/production.yml playbooks/deploy-gh-agent-broker.yml \
+            -e "ykm_curator_image=${ykm_image}" \
             -e "ansible_ssh_private_key_file=/tmp/hermes-deploy"
 
       - name: Clean up secrets
