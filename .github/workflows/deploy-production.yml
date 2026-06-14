@@ -31,6 +31,12 @@ jobs:
           token: ${{ secrets.VPS_OPS_READ_TOKEN }}
           path: vps-ops
 
+      - name: Checkout youknowme (scripts synced by the Ansible role)
+        uses: actions/checkout@v4
+        with:
+          path: youknowme
+          ref: ${{ github.event.workflow_run.head_sha }}
+
       - name: Install Ansible
         run: |
           python3 -m pip install --user "ansible==10.*"
