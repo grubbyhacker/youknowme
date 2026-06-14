@@ -4,6 +4,7 @@ from collections import Counter
 
 from pydantic import ValidationError
 
+from curator.markers import parse_curator_markers
 from curator.models import (
     BranchCollision,
     BranchPreview,
@@ -13,6 +14,7 @@ from curator.models import (
     FeedbackDecisionValue,
     FeedbackInputRecord,
     FeedbackPlan,
+    ReviewGuidanceCandidate,
     CuratorPrSnapshot,
     CuratorPrReconciliation,
     ReconciliationSummary,
@@ -23,6 +25,10 @@ from curator.models import (
 from curator.planning import REENTER_DECISIONS, deterministic_branch_name
 from curator.pr_reconcile import reconcile_pr_snapshots
 from curator.upload_state import UploadStateTransitionError, validate_upload_transition
+
+
+OWNER_REVIEW_LOGINS = frozenset({"grubbyhacker"})
+MAX_GUIDANCE_BODY_CHARS = 1000
 
 
 def build_reconciliation_summary(
@@ -106,6 +112,7 @@ def build_reconciliation_summary(
         latest_decisions=latest_decisions,
         issue_snapshots=issue_snapshots or [],
     )
+    review_guidance_candidates = _review_guidance_candidates(pr_snapshots or [])
     return ReconciliationSummary(
         feedback_window_record_count=len(valid_feedback_ids),
         decided_feedback_count=decided,
@@ -131,6 +138,8 @@ def build_reconciliation_summary(
         feedback_decision_previews=feedback_decision_previews[:20],
         feedback_reentry_preview_count=len(feedback_reentry_previews),
         feedback_reentry_previews=feedback_reentry_previews[:20],
+        review_guidance_candidate_count=len(review_guidance_candidates),
+        review_guidance_candidates=review_guidance_candidates[:20],
     )
 
 
@@ -139,6 +148,7 @@ def _upload_transition_previews(
     upload_snapshot: UploadQueueSnapshot,
     pr_reconciliations: list[CuratorPrReconciliation],
 ) -> list[UploadTransitionPreview]:
+    bundles_by_upload = {bundle.upload_id: bundle for bundle in upload_snapshot.bundles}
     metadata_by_upload = {
         bundle.upload_id: bundle.curator_metadata
         for bundle in upload_snapshot.bundles
@@ -166,16 +176,19 @@ def _upload_transition_previews(
             candidate_upload_ids.add(metadata_by_branch[reconciliation.branch].upload_id)
         for upload_id in sorted(candidate_upload_ids):
             metadata = metadata_by_upload.get(upload_id)
-            if metadata is None:
+            bundle = bundles_by_upload.get(upload_id)
+            if metadata is None and bundle is None:
                 continue
+            current_state = metadata.state if metadata is not None else _state_from_upload_queue(bundle.queue)
             try:
-                validate_upload_transition(metadata.state, desired)
+                validate_upload_transition(current_state, desired)
             except UploadStateTransitionError as exc:
                 previews.append(
                     UploadTransitionPreview(
                         upload_id=upload_id,
                         pr_number=reconciliation.pr_number,
-                        from_state=metadata.state,
+                        branch=reconciliation.branch,
+                        from_state=current_state,
                         to_state=desired,
                         validation="rejected",
                         reason=str(exc),
@@ -186,17 +199,24 @@ def _upload_transition_previews(
                 UploadTransitionPreview(
                     upload_id=upload_id,
                     pr_number=reconciliation.pr_number,
-                    from_state=metadata.state,
+                    branch=reconciliation.branch,
+                    from_state=current_state,
                     to_state=desired,
                     validation="accepted",
                     reason=(
                         "Merged Curator PR can mark linked upload processed."
                         if desired == "processed"
-                        else "Closed-unmerged Curator PR can defer linked upload."
+                        else "Closed-unmerged Curator PR can defer linked upload without a reentry trigger."
                     ),
                 )
             )
     return previews
+
+
+def _state_from_upload_queue(queue: str) -> str:
+    if queue == "archive":
+        return "archived"
+    return queue
 
 
 def _issue_upload_transition_previews(
@@ -334,3 +354,90 @@ def _feedback_preview_reason(
     if desired == "pr_opened":
         return "Merged Curator PR confirms feedback was handled by a corpus PR."
     return f"Curator PR #{reconciliation.pr_number} closed without merge; feedback can be deferred."
+
+
+def _review_guidance_candidates(
+    pr_snapshots: list[CuratorPrSnapshot],
+) -> list[ReviewGuidanceCandidate]:
+    candidates: list[ReviewGuidanceCandidate] = []
+    for snapshot in pr_snapshots:
+        markers = parse_curator_markers(snapshot.body)
+        if not markers.run_id and not (snapshot.branch and snapshot.branch.startswith("curator/")):
+            continue
+        for review in snapshot.reviews:
+            if not _is_owner_review_author(review.author_login) or not review.body.strip():
+                continue
+            comment_id = review.id or (str(review.database_id) if review.database_id is not None else None)
+            candidates.append(
+                ReviewGuidanceCandidate(
+                    candidate_id=_guidance_candidate_id(
+                        snapshot.number,
+                        "review",
+                        comment_id,
+                        None,
+                        None,
+                    ),
+                    pr_number=snapshot.number,
+                    author_login=review.author_login or "",
+                    body=_trim_guidance_body(review.body),
+                    guidance=_trim_guidance_body(review.body),
+                    comment_id=comment_id,
+                    source="review",
+                    reason="Owner review body on a Curator PR can become approved Curator guidance.",
+                )
+            )
+        for thread in snapshot.review_threads:
+            for comment in thread.comments:
+                if not _is_owner_review_author(comment.author_login) or not comment.body.strip():
+                    continue
+                path = comment.path or thread.path
+                line = comment.line or thread.line
+                comment_id = comment.id or (
+                    str(comment.database_id) if comment.database_id is not None else None
+                )
+                candidates.append(
+                    ReviewGuidanceCandidate(
+                        candidate_id=_guidance_candidate_id(
+                            snapshot.number,
+                            "review-thread",
+                            comment_id,
+                            path,
+                            line,
+                        ),
+                        pr_number=snapshot.number,
+                        author_login=comment.author_login or "",
+                        body=_trim_guidance_body(comment.body),
+                        guidance=_trim_guidance_body(comment.body),
+                        path=path,
+                        line=line,
+                        comment_id=comment_id,
+                        source="review_thread",
+                        reason=(
+                            "Owner inline review comment on a Curator PR can become approved "
+                            "Curator guidance."
+                        ),
+                    )
+                )
+    return candidates
+
+
+def _is_owner_review_author(author_login: str | None) -> bool:
+    return (author_login or "").strip().lower() in OWNER_REVIEW_LOGINS
+
+
+def _trim_guidance_body(value: str) -> str:
+    return " ".join(value.split())[:MAX_GUIDANCE_BODY_CHARS]
+
+
+def _guidance_candidate_id(
+    pr_number: int,
+    source: str,
+    comment_id: str | None,
+    path: str | None,
+    line: int | None,
+) -> str:
+    if comment_id:
+        return f"pr-{pr_number}-{source}-{comment_id}"
+    path_part = (path or "general").replace("/", "-")
+    line_part = str(line) if line is not None else "na"
+    return f"pr-{pr_number}-{source}-{path_part}-{line_part}"

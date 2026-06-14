@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from curator.file_policy import is_backup_or_temp_path
 from curator.models import (
     CuratorPrReconciliation,
     CuratorPrSnapshot,
@@ -482,7 +483,10 @@ def _changed_files(checkout: Path, env: dict[str, str]) -> list[str]:
 
 
 def _has_forbidden_changed_file(paths: list[str]) -> bool:
-    return any(path == ".env" or path.startswith(".env.") for path in paths)
+    return any(
+        path == ".env" or path.startswith(".env.") or is_backup_or_temp_path(path)
+        for path in paths
+    )
 
 
 def _has_workflow_changed_file(paths: list[str]) -> bool:

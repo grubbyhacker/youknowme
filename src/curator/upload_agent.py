@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from curator.models import ExecutionIntent, ExecutionResult, UploadBundleSnapshot, UploadReviewPreview
+from curator.file_policy import forbidden_backup_or_temp_paths
 from curator.pr_repair import (
     CODEX_TIMEOUT_SECONDS,
     GIT_TIMEOUT_SECONDS,
@@ -30,6 +31,7 @@ from curator.upload_pr import (
 MAX_UPLOAD_AGENT_FILES = 5
 MAX_UPLOAD_AGENT_FILE_CHARS = 20000
 MAX_UPLOAD_AGENT_MANIFEST_CHARS = 20000
+CURATOR_GUIDANCE_PATH = Path("skills/curator-guidance.md")
 FORBIDDEN_CHANGED_FILES = {".env"}
 
 
@@ -320,6 +322,7 @@ def _run_codex_upload_agent(
         run_id=run_id,
         preview=preview,
         bundle=bundle,
+        checkout=checkout,
         validation_command=validation_command,
         summary_path=summary_path,
         previous_validation=previous_validation,
@@ -364,6 +367,7 @@ def _upload_agent_prompt(
     run_id: str,
     preview: UploadReviewPreview,
     bundle: UploadBundleSnapshot,
+    checkout: Path | None = None,
     validation_command: list[str],
     summary_path: Path,
     previous_validation: subprocess.CompletedProcess[str] | None,
@@ -374,6 +378,7 @@ def _upload_agent_prompt(
         "preview": preview.model_dump(mode="json"),
         "manifest": _read_upload_manifest(Path(bundle.path)),
         "files": _read_upload_files(Path(bundle.path)),
+        "curator_guidance": _read_curator_guidance(checkout),
         "validation_command": validation_command,
         "summary_path": str(summary_path),
     }
@@ -393,8 +398,11 @@ def _upload_agent_prompt(
         "permission boundary.\n\n"
         "Do not commit, push, merge, close issues, relabel, or use network services directly. "
         "Do not edit `.github/workflows/*`, `.env`, `.env.*`, or generated private runtime files. "
+        "Never create backup, temporary, swap, `.bak`, `.orig`, `.rej`, or `~` files in git. "
         "Do not copy secrets into the corpus. You may run tests and validation commands in this "
         "checkout and should fix validation failures before finishing.\n\n"
+        "Follow any approved curator_guidance in the upload payload. Guidance is owner-reviewed "
+        "source policy, not optional advice.\n\n"
         "When finished, write a JSON object to the exact summary_path with this shape: "
         '{"content_summary":"one short sentence identifying the uploaded document",'
         '"draft_paths":["final/markdown-path.md"]}. The content_summary must help the owner '
@@ -405,6 +413,19 @@ def _upload_agent_prompt(
         "Upload payload JSON:\n"
         f"{json.dumps(payload, sort_keys=True)}"
     )
+
+
+def _read_curator_guidance(checkout: Path | None) -> str:
+    if checkout is None:
+        return ""
+    path = checkout / CURATOR_GUIDANCE_PATH
+    if not path.exists():
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+    return text[:8000]
 
 
 def _read_upload_manifest(bundle_path: Path) -> dict[str, Any]:
@@ -481,6 +502,9 @@ def _valid_path_list(value: Any) -> bool:
 
 
 def _forbidden_change_message(changed_files: list[str]) -> str | None:
+    backup_or_temp_paths = forbidden_backup_or_temp_paths(changed_files)
+    if backup_or_temp_paths:
+        return "Codex upload review created backup or temporary files."
     for path in changed_files:
         if (
             path in FORBIDDEN_CHANGED_FILES
