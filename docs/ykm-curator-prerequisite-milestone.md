@@ -333,7 +333,7 @@ Expected production shape:
 
 ```text
 hermes-vps
-  youknowme-phase1e
+  youknowme-mcp
     - serves query/retrieve/upload/feedback
     - writes logs and intake
     - no GitHub or model-provider credentials
@@ -395,7 +395,7 @@ Live service names:
 - `gh-agent-broker-issue-reporter-1`
 - `gh-agent-broker-gh-agent-proxy-1`
 - `gh-agent-broker-litellm-1`
-- `youknowme-phase1e`
+- `youknowme-mcp`
 
 Manual smoke commands should launch through sandbox-broker MCP, not direct Docker. Direct Docker is
 acceptable only as a local image/entrypoint sanity check.

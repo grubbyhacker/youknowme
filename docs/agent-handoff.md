@@ -7,7 +7,7 @@ YouKnowMe is live in production on `hermes-vps` behind the existing Cloudflare T
 ```text
 https://mcp.fleiglabs.cc/mcp
 -> roger-knowledge-cloudflared-phase0
--> youknowme-phase1e
+-> youknowme-mcp
 ```
 
 The tunnel container and origin container are managed by the `/docker/youknowme` Compose project.
@@ -15,7 +15,7 @@ Do not start another `cloudflared` with the existing tunnel token.
 
 Production container state:
 
-- `youknowme-phase1e` is the live origin container.
+- `youknowme-mcp` is the live origin container.
 - Production management surface: `/docker/youknowme/docker-compose.yml`.
 - The production Compose file is generated from the `vps-ops` Ansible role; this repository no
   longer carries a manual production Compose artifact.
@@ -242,8 +242,8 @@ Rollback restores the existing tunnel origin alias to the POC container:
 
 ```bash
 ssh hermes-vps '
-docker stop youknowme-phase1e >/dev/null 2>&1 || true
-docker network disconnect roger-knowledge-private youknowme-phase1e >/dev/null 2>&1 || true
+docker stop youknowme-mcp >/dev/null 2>&1 || true
+docker network disconnect roger-knowledge-private youknowme-mcp >/dev/null 2>&1 || true
 docker network connect --alias roger-knowledge-mcp roger-knowledge-private roger-knowledge-mcp-phase0 >/dev/null 2>&1 || true
 docker start roger-knowledge-mcp-phase0
 '

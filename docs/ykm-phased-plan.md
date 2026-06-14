@@ -121,6 +121,7 @@ Completed so far:
 - Deployed `.ykm/real-index` to the production index mount read-only.
 - Wrote root-only runtime env on the VPS using the existing POC Cloudflare Access app values.
 - Started production `youknowme-phase1e` on the existing `roger-knowledge-private` network.
+- The production container was later renamed to `youknowme-mcp`.
 - Cut over the existing tunnel origin alias `roger-knowledge-mcp` from the stopped POC container to
   production YouKnowMe without restarting or duplicating `cloudflared`.
 - Verified private `/livez` succeeds and private `/mcp` fails closed without
