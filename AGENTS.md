@@ -100,6 +100,10 @@ Do not push directly to `main`.
 
 Delete old feature branches after they are merged or no longer needed.
 
+When a YouKnowMe task requires changes in another repository, create an isolated worktree for that
+repository from a clean head before editing. Do not reuse a dirty checkout or a branch where another
+agent or human may be working.
+
 ## Secrets
 
 Do not commit `.env`, `.env.*`, tunnel tokens, Access credentials, VPS credentials, or generated private runtime files.
