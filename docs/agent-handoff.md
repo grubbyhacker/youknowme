@@ -26,6 +26,12 @@ Production container state:
 - Protected log mount: `/docker/youknowme/data/logs:/data/logs`.
 - Protected intake mount: `/docker/youknowme/data/intake:/data/intake`.
 
+Corpus index releases are installed by `scripts/install-corpus-index.sh` after CI pushes the
+artifact tarball and checksum to the VPS. The script verifies the checksum, extracts the index into
+`/docker/youknowme/data/index-builds/<source_commit>-<build_id>`, atomically repoints
+`/docker/youknowme/data/index-current`, recreates the `youknowme` Compose service, waits for the
+`youknowme-mcp` container to become healthy, and prunes older index builds beyond the newest three.
+
 Current deployed index:
 
 - Build ID: `f1fa6a81d97e4650b5775f717ad8c5dd`.
