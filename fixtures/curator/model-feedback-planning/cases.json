@@ -98,8 +98,8 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_type": "corpus_pr",
-            "classification": "corpus_candidate",
+            "action_type": "corpus_issue",
+            "classification": "corpus_issue",
             "evidence": {
               "feedback_ids": [
                 "fb_upload"
@@ -342,7 +342,7 @@
     },
     {
       "name": "corpus_pr_without_target_evidence",
-      "match": "corpus_pr action must cite",
+      "match": "corpus_pr action must cite source or section",
       "feedback_records": [
         {
           "event": "feedback",
@@ -360,6 +360,49 @@
             "evidence": {
               "feedback_ids": [
                 "fb_speculative"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "mixed_upload_owner_question_and_source_edit_grouped_as_pr",
+      "match": "groups feedback outside its topical source or section",
+      "feedback_records": [
+        {
+          "event": "feedback",
+          "feedback_id": "fb_scotch_inventory",
+          "category": "missing_content",
+          "comment": "More information needed: ask Roger to supply a bottle inventory.",
+          "upload_id": "upl_shared"
+        },
+        {
+          "event": "feedback",
+          "feedback_id": "fb_upload_guidance",
+          "category": "missing_content",
+          "comment": "Add explicit pre-upload user confirmation guidance.",
+          "source_id": "ykm-upload-authoring-guidance",
+          "upload_id": "upl_shared"
+        }
+      ],
+      "model_output": {
+        "schema_version": "1",
+        "proposed_actions": [
+          {
+            "action_type": "corpus_pr",
+            "classification": "corpus_candidate",
+            "target_repo": "grubbyhacker/ykmcorpus",
+            "evidence": {
+              "feedback_ids": [
+                "fb_scotch_inventory",
+                "fb_upload_guidance"
+              ],
+              "source_ids": [
+                "ykm-upload-authoring-guidance"
+              ],
+              "upload_ids": [
+                "upl_shared"
               ]
             }
           }

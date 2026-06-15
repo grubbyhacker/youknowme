@@ -790,7 +790,7 @@ def test_feedback_plan_groups_same_source_feedback_into_one_action(
     assert grouped["evidence"]["feedback_ids"] == ["fb_1", "fb_2"]
 
 
-def test_feedback_plan_groups_upload_linked_feedback_into_one_action(
+def test_feedback_plan_keeps_upload_only_feedback_as_separate_issues(
     tmp_path: Path, monkeypatch
 ) -> None:
     intake = tmp_path / "intake"
@@ -818,11 +818,64 @@ def test_feedback_plan_groups_upload_linked_feedback_into_one_action(
     )
 
     assert report.status == "pass"
-    assert report.proposed_action_count == 1
-    action = report.proposed_actions[0]
-    assert action["action_type"] == "corpus_pr"
-    assert action["evidence"]["feedback_ids"] == ["fb_upload_1", "fb_upload_2"]
-    assert action["evidence"]["upload_ids"] == ["upl_shared"]
+    assert report.proposed_action_count == 2
+    assert [action["action_type"] for action in report.proposed_actions] == [
+        "corpus_issue",
+        "corpus_issue",
+    ]
+    assert [action["evidence"]["feedback_ids"] for action in report.proposed_actions] == [
+        ["fb_upload_1"],
+        ["fb_upload_2"],
+    ]
+    assert [action["evidence"]["upload_ids"] for action in report.proposed_actions] == [
+        ["upl_shared"],
+        ["upl_shared"],
+    ]
+
+
+def test_feedback_plan_does_not_group_upload_only_owner_question_with_source_edit(
+    tmp_path: Path, monkeypatch
+) -> None:
+    intake = tmp_path / "intake"
+    feedback = intake / "feedback" / "feedback.jsonl"
+    feedback.parent.mkdir(parents=True)
+    records = [
+        {
+            "event": "feedback",
+            "feedback_id": "fb_scotch_inventory",
+            "category": "missing_content",
+            "comment": "More information needed: ask Roger to supply a bottle inventory.",
+            "upload_id": "upl_shared",
+        },
+        {
+            "event": "feedback",
+            "feedback_id": "fb_upload_guidance",
+            "category": "missing_content",
+            "comment": "Add explicit pre-upload user confirmation guidance.",
+            "source_id": "ykm-upload-authoring-guidance",
+            "upload_id": "upl_shared",
+        },
+    ]
+    feedback.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(run_id="run-mixed-upload", intake=intake, output=tmp_path / "output")
+    )
+
+    assert report.status == "pass"
+    assert report.proposed_action_count == 2
+    assert [action["action_type"] for action in report.proposed_actions] == [
+        "corpus_issue",
+        "corpus_pr",
+    ]
+    assert report.proposed_actions[0]["evidence"]["feedback_ids"] == ["fb_scotch_inventory"]
+    assert report.proposed_actions[0]["evidence"]["upload_ids"] == ["upl_shared"]
+    assert report.proposed_actions[1]["evidence"]["feedback_ids"] == ["fb_upload_guidance"]
+    assert report.proposed_actions[1]["evidence"]["source_ids"] == [
+        "ykm-upload-authoring-guidance"
+    ]
+    assert report.proposed_actions[1]["evidence"]["upload_ids"] == ["upl_shared"]
 
 
 def test_feedback_prompt_injection_text_cannot_change_action_or_repo(
@@ -859,7 +912,7 @@ def test_feedback_prompt_injection_text_cannot_change_action_or_repo(
     assert "attacker/public-repo" not in json.dumps(action)
 
 
-def test_corpus_pr_requires_source_section_or_upload_target(
+def test_feedback_corpus_pr_requires_source_or_section_target(
     tmp_path: Path, monkeypatch
 ) -> None:
     intake = tmp_path / "intake"

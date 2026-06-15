@@ -364,13 +364,16 @@ When the soft action threshold is exceeded, the plan records the threshold and t
 were capacity-deferred so the operator can review the cap outcome without interpreting action text.
 
 The deterministic planner may group multiple feedback records into one proposed action only when
-they share a durable target, such as the same `source_id` for corpus placeholders or the same
-`upload_id` for upload-linked feedback. Grouped actions must preserve every contributing
-`feedback_id` in action evidence and regenerate the idempotency key from the combined evidence.
+they share a concrete topical corpus target, such as the same `source_id` or `section_id`, and the
+result is one coherent review decision. Shared `upload_id` evidence is not sufficient by itself,
+because one upload can produce unrelated owner-action and policy/content feedback. Grouped actions
+must preserve every contributing `feedback_id` in action evidence and regenerate the idempotency key
+from the combined evidence.
 
-Feedback-driven `corpus_pr` placeholders require a durable corpus target: `source_id`, `section_id`,
-or upload linkage. Untargeted missing/wrong/stale/unclear feedback must be downgraded to a private
-issue placeholder or another non-PR disposition rather than becoming a speculative corpus PR.
+Feedback-driven `corpus_pr` placeholders require a durable corpus target: `source_id` or
+`section_id`. Upload-only and otherwise untargeted missing/wrong/stale/unclear feedback must be
+downgraded to a private issue placeholder or another non-PR disposition rather than becoming a
+speculative corpus PR.
 
 In `state_only`, the deterministic skeleton may append decisions only for actions that require no
 external mutation: `no_action_*` dispositions, `linked_to_upload`, and `capacity_deferred`.

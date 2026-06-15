@@ -1696,11 +1696,12 @@ def _feedback_planning_model_request(
             "Cover every included feedback_id in at least one proposed action.",
             "A feedback_id is durable evidence for issue actions.",
             "Use corpus_issue with classification corpus_issue for untargeted missing_content, wrong_content, stale_content, and unclear_content feedback.",
-            "Use corpus_pr with classification corpus_candidate for missing_content, wrong_content, stale_content, and unclear_content feedback when source_id, section_id, or upload_id evidence identifies the corpus target.",
-            "Use corpus_pr only with source_id, section_id, or upload_id evidence.",
+            "Use corpus_pr with classification corpus_candidate for missing_content, wrong_content, stale_content, and unclear_content feedback when source_id or section_id evidence identifies the corpus target.",
+            "Use corpus_pr only with source_id or section_id evidence; upload_id alone is not a concrete PR target.",
             f"Use target_repo {DEFAULT_CORPUS_REPO} for corpus_pr and corpus_issue actions.",
             f"Use product_issue with target_repo {DEFAULT_PRODUCT_REPO} for functionality feedback, non-actionable feedback, praise, duplicates, ambiguity, or anything you cannot confidently classify.",
-            "Prefer one grouped action over many identical actions when action_type, classification, target_repo, and evidence kind match.",
+            "Group feedback only when every record is same-topic and reviewable as one coherent owner decision.",
+            "Do not combine owner-input-blocked feedback with independently mergeable corpus-policy or content edits.",
         ],
     }
     messages = [

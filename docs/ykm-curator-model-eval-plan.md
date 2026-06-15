@@ -275,4 +275,4 @@ For a real manual launch, inspect `/output/run-report.json` and `/output/run-rep
 - `model_token_count` is reasonable for the feedback window;
 - proposed actions cite only included feedback and referenced evidence;
 - positive/non-actionable records are not turned into GitHub-object actions;
-- `corpus_pr` actions cite source, section, or upload evidence.
+- feedback-driven `corpus_pr` actions cite source or section evidence.

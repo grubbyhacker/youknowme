@@ -130,13 +130,13 @@ def _merge_groupable_actions(actions: list[ProposedAction]) -> list[ProposedActi
 
 
 def _action_group_key(action: ProposedAction) -> tuple[object, ...] | None:
-    if action.evidence.upload_ids:
+    if action.evidence.section_ids:
         return (
             action.action_type,
             action.classification,
             action.target_repo,
-            "upload",
-            tuple(sorted(action.evidence.upload_ids)),
+            "section",
+            tuple(sorted(action.evidence.section_ids)),
         )
     if action.evidence.source_ids:
         return (
@@ -145,14 +145,6 @@ def _action_group_key(action: ProposedAction) -> tuple[object, ...] | None:
             action.target_repo,
             "source",
             tuple(sorted(action.evidence.source_ids)),
-        )
-    if action.evidence.section_ids:
-        return (
-            action.action_type,
-            action.classification,
-            action.target_repo,
-            "section",
-            tuple(sorted(action.evidence.section_ids)),
         )
     return None
 
@@ -275,7 +267,7 @@ def _action_for_record(
     )
     action_type, classification = _classify(
         record.category,
-        has_corpus_target=bool(record.source_id or record.section_id or record.upload_id),
+        has_corpus_target=bool(record.source_id or record.section_id),
     )
     target_repo = _target_repo_for_action(action_type)
     return ProposedAction(

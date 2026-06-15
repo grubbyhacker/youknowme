@@ -132,6 +132,7 @@ def build_feedback_planning_proposed_actions(
     seen_idempotency_keys: set[str] = set()
     covered_feedback_ids: set[str] = set()
     proposed_actions: list[ProposedAction] = []
+    base_corpus_pr_keys = _base_corpus_pr_keys_by_feedback_id(base_plan)
 
     for index, action in enumerate(output.proposed_actions, start=1):
         _validate_evidence_subset(
@@ -147,11 +148,11 @@ def build_feedback_planning_proposed_actions(
             raise ValueError(f"model action duplicates idempotency_key: {idempotency_key}")
         seen_idempotency_keys.add(idempotency_key)
         if action.action_type == "corpus_pr" and not (
-            action.evidence.source_ids
-            or action.evidence.section_ids
-            or action.evidence.upload_ids
+            action.evidence.source_ids or action.evidence.section_ids
         ):
-            raise ValueError("model corpus_pr action must cite source, section, or upload evidence")
+            raise ValueError("model corpus_pr action must cite source or section evidence")
+        if action.action_type == "corpus_pr":
+            _validate_corpus_pr_topical_group(action, base_corpus_pr_keys)
         target_repo = action.target_repo or _default_target_repo(action.action_type)
         if action.action_type == "corpus_pr" and target_repo != DEFAULT_TARGET_REPO:
             raise ValueError(f"model corpus_pr action must target {DEFAULT_TARGET_REPO}")
@@ -187,6 +188,49 @@ def _default_target_repo(action_type: str) -> str:
     if action_type == "product_issue":
         return DEFAULT_PRODUCT_REPO
     raise ValueError(f"unsupported feedback action type: {action_type}")
+
+
+def _base_corpus_pr_keys_by_feedback_id(base_plan: FeedbackPlan) -> dict[str, tuple[object, ...]]:
+    keys: dict[str, tuple[object, ...]] = {}
+    for action in base_plan.proposed_actions:
+        if action.action_type != "corpus_pr":
+            continue
+        key = _corpus_pr_topical_key(action.evidence)
+        if key is None:
+            continue
+        for feedback_id in action.evidence.feedback_ids:
+            keys[feedback_id] = key
+    return keys
+
+
+def _validate_corpus_pr_topical_group(
+    action: FeedbackPlanningModelAction,
+    base_corpus_pr_keys: dict[str, tuple[object, ...]],
+) -> None:
+    key = _corpus_pr_topical_key(action.evidence)
+    if key is None:
+        raise ValueError("model corpus_pr action must cite source or section evidence")
+    if len(action.evidence.feedback_ids) <= 1:
+        return
+    mismatched_feedback_ids = sorted(
+        feedback_id
+        for feedback_id in action.evidence.feedback_ids
+        if base_corpus_pr_keys.get(feedback_id) != key
+    )
+    if mismatched_feedback_ids:
+        raise ValueError(
+            "model corpus_pr action groups feedback outside its topical source or section: "
+            f"{mismatched_feedback_ids}"
+        )
+
+
+def _corpus_pr_topical_key(evidence: ActionEvidence) -> tuple[object, ...] | None:
+    if evidence.section_ids:
+        return ("section", tuple(sorted(evidence.section_ids)))
+    if evidence.source_ids:
+        return ("source", tuple(sorted(evidence.source_ids)))
+    return None
+
 
 def _require_all_object_properties(schema: Any) -> None:
     if isinstance(schema, dict):
