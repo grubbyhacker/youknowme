@@ -404,13 +404,12 @@ def _repair_prompt(
         "Review and comment evidence:\n"
         f"{comments or '(no review comment text was available)'}\n\n"
         "Success criteria: the corpus validation command must pass after your edits.\n\n"
-        "If this PR is the known skipped-validation shape involving "
-        "`preferences/dev-environment.md`, repair it directly: add `preferences` to "
-        "`.ykm/corpus-policy.yaml` `corpus_roots`, resolve the disallowed `tools` tag by "
-        "using an existing allowed tag when possible, and resolve "
-        "`related: [ykm-mcp-server]` by adding an appropriate `external_related_ids` entry "
-        "or otherwise making the reference valid. The long-term workflow path-filter fix "
-        "must be handled separately because this repair worker cannot push workflow files."
+        "Treat top-level corpus directories as semantic categories. If owner review asks for a "
+        "new top-level root such as `dev/`, create or use that root directly and add it to "
+        "`.ykm/corpus-policy.yaml` `corpus_roots` when needed; do not nest it under an existing "
+        "root such as `preferences/dev/`. Use `dev/` for development environment, personal "
+        "production infrastructure, software operations, and service runbooks. Use `preferences/` "
+        "only for stable preferences, defaults, tastes, and communication style."
     )
 
 
