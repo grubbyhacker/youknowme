@@ -45,11 +45,11 @@
       }
     },
     {
-      "name": "dev_environment_preference_policy_addition",
+      "name": "dev_environment_policy_addition",
       "upload_id": "upl_eval_dev_environment",
       "manifest": {
         "upload_id": "upl_eval_dev_environment",
-        "purpose": "Document Roger's current development environment and tool preferences.",
+        "purpose": "Document Roger's current development environment and toolchain.",
         "suggested_type": "project",
         "suggested_tags": [
           "dev-environment",
@@ -79,8 +79,8 @@
       ],
       "expected": {
         "decision": "integrated",
-        "path": "preferences/dev-environment.md",
-        "type": "preference",
+        "path": "dev/dev-environment.md",
+        "type": "manual",
         "required_tags": [
           "python",
           "uv",
@@ -88,11 +88,9 @@
           "macos"
         ],
         "policy_roots_add": [
-          "preferences"
+          "dev"
         ],
-        "policy_types_add": [
-          "preference"
-        ],
+        "policy_types_add": [],
         "policy_tags_add": [
           "dev-environment",
           "macos",

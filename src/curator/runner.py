@@ -2455,6 +2455,8 @@ def _upload_review_model_request(
             "Every frontmatter type must already be in corpus_policy.allowed_types or be listed in policy_patch.allowed_types_add.",
             "Every frontmatter tag must already be in corpus_policy.allowed_tags or be listed in policy_patch.allowed_tags_add.",
             "Every output path must start with an existing corpus_policy.corpus_roots value or one listed in policy_patch.corpus_roots_add.",
+            "Choose corpus roots semantically. Use `dev/` for development environment, personal production infrastructure, software operations, and service runbooks; do not place that material under `preferences/` merely because it describes Roger.",
+            "Use `preferences/` only for stable preferences, defaults, tastes, and communication style.",
             "Do not invent related IDs. Only include related when the upload itself names an exact existing corpus id; otherwise mention the relationship in prose instead.",
             "A review PR is the owner permission request for bounded corpus policy additions; prefer an integrated draft with a minimal policy_patch over needs_owner_action when the change can be reviewed as code.",
             "Use decision needs_owner_action only when the upload lacks enough context, has unresolved safety concerns, or cannot be turned into a small reviewable corpus-policy and markdown diff.",

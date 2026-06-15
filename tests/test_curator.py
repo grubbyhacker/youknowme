@@ -4789,6 +4789,9 @@ def test_pr_repair_prompt_includes_review_bodies_and_inline_threads() -> None:
     assert "Move this somewhere other than skills." in prompt
     assert "Inline review on skills/example.md:4 by owner" in prompt
     assert "This is not a reusable skill." in prompt
+    assert "create or use that root directly" in prompt
+    assert "do not nest it under an existing root such as `preferences/dev/`" in prompt
+    assert "Use `dev/` for development environment" in prompt
 
 
 def test_upload_agent_prompt_allows_policy_edits_and_requires_summary(tmp_path: Path) -> None:
@@ -6939,6 +6942,12 @@ def test_upload_review_model_prompt_requires_policy_patch_for_new_metadata(
         "Every output path must start with an existing corpus_policy.corpus_roots value or one "
         "listed in policy_patch.corpus_roots_add."
     ) in constraints
+    assert (
+        "Choose corpus roots semantically. Use `dev/` for development environment, personal "
+        "production infrastructure, software operations, and service runbooks; do not place that "
+        "material under `preferences/` merely because it describes Roger."
+    ) in constraints
+    assert "Use `preferences/` only for stable preferences, defaults, tastes, and communication style." in constraints
     assert (
         "Do not invent related IDs. Only include related when the upload itself names an exact "
         "existing corpus id; otherwise mention the relationship in prose instead."

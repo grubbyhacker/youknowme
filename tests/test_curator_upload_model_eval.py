@@ -38,7 +38,7 @@ def test_upload_review_scenario_expected_outputs_score(case) -> None:
             "allowed_types_add": case.expected.policy_types_add,
             "allowed_tags_add": case.expected.policy_tags_add,
         },
-        content_summary="Development environment preferences for Python tooling on Roger's Mac.",
+        content_summary="Development environment and tooling context for Roger's Mac.",
         rationale="Fixture output preserves the upload purpose and proposes minimal policy additions.",
         reason="ready for draft corpus PR",
     )
@@ -51,7 +51,7 @@ def test_upload_review_scenario_expected_outputs_score(case) -> None:
 def test_upload_review_prompt_carries_policy_agency_advice() -> None:
     case = load_upload_review_scenario_cases(
         DEFAULT_UPLOAD_SCENARIO_FIXTURE,
-        names={"dev_environment_preference_policy_addition"},
+        names={"dev_environment_policy_addition"},
     )[0]
 
     request = build_upload_review_scenario_request(
@@ -68,8 +68,9 @@ def test_upload_review_prompt_carries_policy_agency_advice() -> None:
     assert any("propose a small policy_patch" in item for item in prompt_input["constraints"])
     assert any("PR is the owner permission request" in item for item in prompt_input["constraints"])
     assert any("corpus_roots_add" in item for item in prompt_input["constraints"])
-    assert any("type preference under the preferences root" in item for item in prompt_input["constraints"])
-    assert any("uv and mise" in item for item in prompt_input["constraints"])
+    assert any("Use `dev/` for development environment" in item for item in prompt_input["constraints"])
+    assert any("Use `preferences/` only for stable preferences" in item for item in prompt_input["constraints"])
+    assert any("uv and mise in a Python tooling document" in item for item in prompt_input["constraints"])
     assert any("Do not drop a central concrete tag" in item for item in prompt_input["constraints"])
     assert any("delimiter lines are exactly three hyphens" in item for item in prompt_input["constraints"])
     assert any("only id, type, tags, aliases, and related" in item for item in prompt_input["constraints"])
