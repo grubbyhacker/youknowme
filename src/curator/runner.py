@@ -402,11 +402,13 @@ def _run_with_lock(
         pr_snapshots = _load_broker_fixture_pr_snapshots(config, probes)
         issue_snapshots = _load_broker_fixture_issue_snapshots(config, probes)
         if config.enable_broker_reads and config.broker_fixture is None:
+            issue_references = _known_issue_references(latest_decisions, queue_snapshot)
             pr_snapshots = _load_http_broker_pr_snapshots(config, probes)
             issue_snapshots = _load_http_broker_issue_snapshots(
                 config,
                 probes,
-                issue_numbers=_known_issue_numbers(latest_decisions, queue_snapshot),
+                issue_numbers=sorted(issue_references),
+                issue_references=issue_references,
             )
     reconciliation = build_reconciliation_summary(
         feedback_records=feedback_records,
@@ -2750,19 +2752,43 @@ def _known_issue_numbers(
     latest_decisions: dict[str, Any],
     upload_snapshot: Any,
 ) -> list[int]:
-    issue_numbers: set[int] = set()
+    return sorted(_known_issue_references(latest_decisions, upload_snapshot))
+
+
+def _known_issue_references(
+    latest_decisions: dict[str, Any],
+    upload_snapshot: Any,
+) -> dict[int, list[dict[str, Any]]]:
+    references: dict[int, list[dict[str, Any]]] = {}
     for decision in latest_decisions.values():
         issue_number = getattr(decision, "issue_number", None)
         if isinstance(issue_number, int):
-            issue_numbers.add(issue_number)
+            references.setdefault(issue_number, []).append(
+                {
+                    "source": "feedback_decision",
+                    "field": "issue_number",
+                    "feedback_id": getattr(decision, "feedback_id", None),
+                    "run_id": getattr(decision, "run_id", None),
+                }
+            )
     for bundle in getattr(upload_snapshot, "bundles", []):
         metadata = getattr(bundle, "curator_metadata", None)
         if metadata is None:
             continue
-        for issue_number in (metadata.issue_number, metadata.blocking_issue_number):
+        for field in ("issue_number", "blocking_issue_number"):
+            issue_number = getattr(metadata, field, None)
             if isinstance(issue_number, int):
-                issue_numbers.add(issue_number)
-    return sorted(issue_numbers)
+                references.setdefault(issue_number, []).append(
+                    {
+                        "source": "upload_curator_metadata",
+                        "field": field,
+                        "upload_id": getattr(metadata, "upload_id", None)
+                        or getattr(bundle, "upload_id", None),
+                        "run_id": getattr(metadata, "run_id", None),
+                        "path": getattr(bundle, "path", None),
+                    }
+                )
+    return references
 
 
 def _load_broker_fixture_pr_snapshots(
@@ -2848,6 +2874,7 @@ def _load_http_broker_issue_snapshots(
     probes: list[CuratorProbe],
     *,
     issue_numbers: list[int],
+    issue_references: dict[int, list[dict[str, Any]]] | None = None,
 ) -> list[CuratorIssueSnapshot]:
     if config.broker_url is None:
         if issue_numbers:
@@ -2864,8 +2891,25 @@ def _load_http_broker_issue_snapshots(
         issue_numbers=issue_numbers,
     )
     if probe is not None:
+        if issue_references:
+            _add_issue_skip_references(probe, issue_references)
         probes.append(probe)
     return snapshots
+
+
+def _add_issue_skip_references(
+    probe: CuratorProbe,
+    issue_references: dict[int, list[dict[str, Any]]],
+) -> None:
+    skipped = probe.details.get("skipped")
+    if not isinstance(skipped, list):
+        return
+    for skip in skipped:
+        if not isinstance(skip, dict):
+            continue
+        number = skip.get("number")
+        if isinstance(number, int) and issue_references.get(number):
+            skip["references"] = issue_references[number]
 
 
 def _probe_broker(

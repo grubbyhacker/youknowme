@@ -3613,6 +3613,85 @@ def test_http_broker_adapter_reads_pr_and_issue_snapshots_with_agent_auth() -> N
     assert len([request for request in requests if request.url.path.endswith("/pulls")]) == 2
 
 
+def test_http_broker_adapter_skips_not_found_issue_reads_and_continues() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/issues/77"):
+            return httpx.Response(
+                200,
+                json={
+                    "number": 77,
+                    "state": "closed",
+                    "title": "Owner input",
+                    "body": "resolved",
+                },
+            )
+        if request.url.path.endswith("/issues/78"):
+            return httpx.Response(404, json={"error": {"code": "github_not_found"}})
+        if request.url.path.endswith("/issues/79"):
+            return httpx.Response(502, text="GitHub request failed with HTTP 404: Not Found")
+        raise AssertionError(f"unexpected broker request: {request.method} {request.url}")
+
+    adapter = HttpBrokerAdapter(
+        "http://broker:8080",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        agent_id="agent",
+        agent_secret="broker-secret",
+    )
+
+    issue_snapshots, issue_probe = adapter.read_issue_snapshots(
+        target_repo="grubbyhacker/ykmcorpus",
+        issue_numbers=[79, 78, 77, 78],
+    )
+
+    assert [snapshot.number for snapshot in issue_snapshots] == [77]
+    assert issue_probe is not None
+    assert issue_probe.status == "pass"
+    assert issue_probe.details["count"] == 1
+    assert issue_probe.details["skipped_count"] == 2
+    assert issue_probe.details["skipped"] == [
+        {
+            "number": 78,
+            "reason": "not_found",
+            "status_code": 404,
+            "error_code": "github_not_found",
+        },
+        {
+            "number": 79,
+            "reason": "not_found",
+            "status_code": 502,
+            "error_code": None,
+        },
+    ]
+    assert [request.url.path.rsplit("/", 1)[-1] for request in requests] == ["77", "78", "79"]
+
+
+def test_http_broker_adapter_fatal_issue_read_errors_still_fail() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/issues/77"):
+            return httpx.Response(502, text="upstream timeout")
+        raise AssertionError(f"unexpected broker request: {request.method} {request.url}")
+
+    adapter = HttpBrokerAdapter(
+        "http://broker:8080",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        agent_id="agent",
+        agent_secret="broker-secret",
+    )
+
+    issue_snapshots, issue_probe = adapter.read_issue_snapshots(
+        target_repo="grubbyhacker/ykmcorpus",
+        issue_numbers=[77],
+    )
+
+    assert issue_snapshots == []
+    assert issue_probe is not None
+    assert issue_probe.status == "fail"
+    assert issue_probe.message == "broker issue read failed: broker read failed with HTTP 502"
+
+
 def test_runner_can_use_opt_in_http_broker_reads_for_reconciliation(
     tmp_path: Path,
     monkeypatch,
@@ -3706,6 +3785,119 @@ def test_runner_can_use_opt_in_http_broker_reads_for_reconciliation(
     assert report.reconciliation["pr_state_counts"] == {"checks_failed": 1}
     assert report.reconciliation["feedback_reentry_preview_count"] == 1
     assert report.reconciliation["feedback_reentry_previews"][0]["feedback_id"] == "fb_blocked"
+
+
+def test_runner_skips_missing_issue_snapshot_and_continues_reconciliation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    intake = tmp_path / "intake"
+    feedback = intake / "feedback" / "feedback.jsonl"
+    feedback.parent.mkdir(parents=True)
+    feedback.write_text("", encoding="utf-8")
+    decisions = intake / "feedback" / "curator-decisions.jsonl"
+    decisions.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "feedback_id": "fb_stale_issue",
+                "run_id": "old-run",
+                "plan_action_id": "act_old",
+                "decision": "deferred",
+                "issue_number": 77,
+                "reentry_trigger": "owner_input_resolved",
+                "reason": "waiting on issue",
+                "timestamp": "2026-06-08T12:00:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    deferred = intake / "uploads" / "deferred" / "upl_blocked"
+    deferred.mkdir(parents=True)
+    (deferred / "manifest.json").write_text('{"upload_id":"upl_blocked"}\n', encoding="utf-8")
+    (deferred / "curator.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "upload_id": "upl_blocked",
+                "state": "deferred",
+                "run_id": "old-run",
+                "blocking_issue_number": 78,
+                "reentry_trigger": "owner_input_resolved",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "run_id": "run-issue-notfound",
+                "mode": "dry_run",
+                "enabled_actions": ["reconcile"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def fake_get(url: str, **kwargs: object) -> httpx.Response:
+        assert url == "http://broker:8080/healthz"
+        return httpx.Response(200)
+
+    def fake_request(method: str, url: str, **kwargs: object) -> httpx.Response:
+        assert method == "GET"
+        assert kwargs["auth"] == ("agent", "broker-secret")
+        if url == "http://broker:8080/v1/repos/grubbyhacker/ykmcorpus/pulls":
+            return httpx.Response(200, json=[])
+        if url.endswith("/issues/77"):
+            return httpx.Response(404, json={"error": {"code": "github_not_found"}})
+        if url.endswith("/issues/78"):
+            return httpx.Response(
+                200,
+                json={"number": 78, "state": "closed", "title": "done", "body": ""},
+            )
+        raise AssertionError(f"unexpected broker request: {method} {url}")
+
+    monkeypatch.setattr("curator.adapters.httpx.get", fake_get)
+    monkeypatch.setattr("curator.adapters.httpx.request", fake_request)
+    monkeypatch.setenv("BROKER_AGENT_ID", "agent")
+    monkeypatch.setenv("BROKER_AGENT_SECRET", "broker-secret")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="ignored",
+            intake=intake,
+            output=tmp_path / "output",
+            task=task,
+            broker_url="http://broker:8080",
+            enable_broker_reads=True,
+        )
+    )
+
+    assert report.status == "pass"
+    issue_probe = next(probe for probe in report.probes if probe.name == "broker-issue-read")
+    assert issue_probe.status == "pass"
+    assert issue_probe.details["count"] == 1
+    assert issue_probe.details["skipped_count"] == 1
+    assert issue_probe.details["skipped"][0]["number"] == 77
+    assert issue_probe.details["skipped"][0]["error_code"] == "github_not_found"
+    assert issue_probe.details["skipped"][0]["references"] == [
+        {
+            "source": "feedback_decision",
+            "field": "issue_number",
+            "feedback_id": "fb_stale_issue",
+            "run_id": "old-run",
+        }
+    ]
+    assert report.partial_failures == []
+    assert report.reconciliation["feedback_reentry_preview_count"] == 0
+    assert report.reconciliation["upload_transition_preview_count"] == 1
+    assert report.reconciliation["upload_transition_previews"][0]["upload_id"] == "upl_blocked"
 
 
 def test_state_only_broker_read_failure_blocks_state_commits(
