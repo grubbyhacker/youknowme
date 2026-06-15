@@ -49,6 +49,7 @@ PrRepairStatus = Literal[
     "push_failed",
     "pushed",
     "rejected",
+    "skipped",
 ]
 BrokerReadOperation = Literal[
     "pull.list",
