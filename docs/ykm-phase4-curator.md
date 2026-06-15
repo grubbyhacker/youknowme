@@ -878,7 +878,7 @@ Offline tests:
 - Feedback batch start/end offsets freeze records appended during a run for the next run.
 - Overlapping runs are rejected by the single-flight lock.
 - Cluster-spanning action idempotency keys prevent duplicate PRs/issues after retry.
-- `corpus_pr` without a resolvable target or staged upload is rejected or downgraded.
+- Feedback-driven `corpus_pr` without a resolvable source or section target is rejected or downgraded.
 - PR markers can reconstruct state after local metadata is missing.
 - Agent outputs are rejected when they fail schema validation.
 - Malformed input records are quarantined or reported without crashing the run.

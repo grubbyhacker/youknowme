@@ -28,7 +28,7 @@ source of truth remains `docs/ykm-phase4-curator.md` and `docs/ykm-curator-contr
 - Deterministic feedback planning without model calls.
 - Skipping terminal feedback decisions from `curator-decisions.jsonl`.
 - Re-entry for ready `deferred` and `capacity_deferred` feedback.
-- Feedback grouping by durable source, section, and upload evidence.
+- Feedback grouping by durable source and section evidence.
 - Feedback soft-cap reporting through `capacity_deferred_feedback_ids`.
 - State-only decision appends for no-op, upload-linked, and capacity-deferred feedback only.
 - Upload queue discovery across `pending`, `claimed`, `processed`, `rejected`, `archive`, and
