@@ -227,7 +227,9 @@ fi
 echo "Pruning old index builds..."
 python3 - "$builds_dir" "$build_dir" <<'PY'
 from pathlib import Path
+import os
 import shutil
+import stat
 import sys
 
 builds_dir = Path(sys.argv[1]).resolve()
@@ -241,7 +243,23 @@ for path in builds[3:]:
     resolved = path.resolve()
     if resolved == current:
         continue
-    shutil.rmtree(path)
+
+    errors = []
+
+    def make_writable_and_retry(function, item, exc_info):
+        try:
+            os.chmod(item, stat.S_IWUSR | stat.S_IRUSR | stat.S_IXUSR)
+            function(item)
+        except OSError as err:
+            errors.append(err)
+
+    try:
+        shutil.rmtree(path, onerror=make_writable_and_retry)
+    except OSError as err:
+        errors.append(err)
+    if errors or path.exists():
+        err = errors[0] if errors else "path still exists after prune attempt"
+        print(f"warning: could not fully prune {path}: {err}", file=sys.stderr)
 PY
 
 echo "Installed corpus index $install_id"

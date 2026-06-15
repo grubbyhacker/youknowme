@@ -17,11 +17,84 @@ SCRIPT = Path("scripts/install-corpus-index.sh")
 
 
 def test_install_corpus_index_script_installs_packaged_index(tmp_path: Path) -> None:
+    packaged, index_path = _package_fixture_index(tmp_path)
+    deploy_root, compose_dir, env, docker_log = _install_harness(tmp_path)
+
+    result = _run_install(packaged, deploy_root, compose_dir, env)
+
+    assert result.returncode == 0
+    manifest = json.loads((index_path / "manifest.json").read_text(encoding="utf-8"))
+    expected_id = f"{_safe(manifest['source_commit'])}-{_safe(manifest['build_id'])}"
+    current = deploy_root / "index-current"
+    builds_dir = deploy_root / "index-builds"
+    assert current.is_symlink()
+    assert current.resolve() == builds_dir / expected_id
+    assert (current / "manifest.json").exists()
+    assert (current / "chunks.jsonl").exists()
+    assert (current / "lancedb").is_dir()
+    assert len([path for path in builds_dir.iterdir() if path.is_dir()]) <= 3
+
+    docker_output = docker_log.read_text(encoding="utf-8")
+    assert "compose -f" in docker_output
+    assert "up -d --force-recreate youknowme" in docker_output
+    assert "inspect -f {{.State.Health.Status}} youknowme-mcp" in docker_output
+
+
+def test_install_corpus_index_prune_failure_warns_without_failing(tmp_path: Path) -> None:
+    packaged, _index_path = _package_fixture_index(tmp_path)
+    deploy_root, compose_dir, env, _docker_log = _install_harness(tmp_path)
+    fake_lib = tmp_path / "fake-python"
+    fake_lib.mkdir()
+    (fake_lib / "shutil.py").write_text(
+        """from __future__ import annotations
+
+import os
+from pathlib import Path
+
+
+def rmtree(path, ignore_errors=False, onerror=None, *args, **kwargs):
+    path = Path(path)
+    if path.name == "stale-fails":
+        raise PermissionError(13, "Permission denied", "latest_version_hint.json")
+    for child in sorted(path.rglob("*"), reverse=True):
+        if child.is_dir():
+            os.rmdir(child)
+        else:
+            child.unlink()
+    os.rmdir(path)
+""",
+        encoding="utf-8",
+    )
+    env["PYTHONPATH"] = str(fake_lib)
+    builds_dir = deploy_root / "index-builds"
+    failing = builds_dir / "stale-fails"
+    failing.mkdir()
+    (failing / "latest_version_hint.json").write_text("old\n", encoding="utf-8")
+    old_time = time.time() - 2000
+    os.utime(failing, (old_time, old_time))
+
+    result = _run_install(packaged, deploy_root, compose_dir, env)
+
+    assert result.returncode == 0
+    assert "warning: could not fully prune" in result.stderr
+    assert "stale-fails" in result.stderr
+    assert "latest_version_hint.json" in result.stderr
+    assert "Installed corpus index" in result.stdout
+
+
+def test_install_corpus_index_script_has_valid_bash_syntax() -> None:
+    subprocess.run(["bash", "-n", str(SCRIPT)], check=True)
+
+
+def _package_fixture_index(tmp_path: Path) -> tuple[dict[str, str], Path]:
     index_path = tmp_path / "index"
     artifacts = tmp_path / "artifacts"
     build_index(Path("fixtures/corpus"), index_path, FakeEmbeddingProvider())
     packaged = package_index(index_path, artifacts)
+    return packaged, index_path
 
+
+def _install_harness(tmp_path: Path) -> tuple[Path, Path, dict[str, str], Path]:
     deploy_root = tmp_path / "deploy"
     builds_dir = deploy_root / "index-builds"
     builds_dir.mkdir(parents=True)
@@ -43,8 +116,16 @@ def test_install_corpus_index_script_installs_packaged_index(tmp_path: Path) -> 
 
     env = os.environ.copy()
     env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    return deploy_root, compose_dir, env, tmp_path / "docker.log"
 
-    subprocess.run(
+
+def _run_install(
+    packaged: dict[str, str],
+    deploy_root: Path,
+    compose_dir: Path,
+    env: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         [
             str(SCRIPT),
             "--artifact",
@@ -65,25 +146,6 @@ def test_install_corpus_index_script_installs_packaged_index(tmp_path: Path) -> 
         text=True,
         capture_output=True,
     )
-
-    manifest = json.loads((index_path / "manifest.json").read_text(encoding="utf-8"))
-    expected_id = f"{_safe(manifest['source_commit'])}-{_safe(manifest['build_id'])}"
-    current = deploy_root / "index-current"
-    assert current.is_symlink()
-    assert current.resolve() == builds_dir / expected_id
-    assert (current / "manifest.json").exists()
-    assert (current / "chunks.jsonl").exists()
-    assert (current / "lancedb").is_dir()
-    assert len([path for path in builds_dir.iterdir() if path.is_dir()]) <= 3
-
-    docker_log = (tmp_path / "docker.log").read_text(encoding="utf-8")
-    assert "compose -f" in docker_log
-    assert "up -d --force-recreate youknowme" in docker_log
-    assert "inspect -f {{.State.Health.Status}} youknowme-mcp" in docker_log
-
-
-def test_install_corpus_index_script_has_valid_bash_syntax() -> None:
-    subprocess.run(["bash", "-n", str(SCRIPT)], check=True)
 
 
 def _write_fake_sha256sum(path: Path) -> None:
