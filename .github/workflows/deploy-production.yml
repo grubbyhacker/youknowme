@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   deploy:
@@ -61,45 +62,6 @@ jobs:
           install -m 0600 /dev/null ~/.config/vps-ops/vault-password
           printf '%s' "$ANSIBLE_VAULT_PASSWORD" > ~/.config/vps-ops/vault-password
 
-      - name: Check VPS SSH
-        working-directory: vps-ops
-        run: |
-          set -euo pipefail
-
-          mapfile -t hosts < <(
-            ansible-playbook -i inventory/production.yml playbooks/deploy-youknowme.yml --list-hosts |
-              awk '/^[[:space:]]+[A-Za-z0-9_.-]+$/ { print $1 }'
-          )
-
-          if [[ "${#hosts[@]}" -eq 0 ]]; then
-            echo "::error::No deploy hosts resolved from vps-ops inventory"
-            exit 1
-          fi
-
-          for host in "${hosts[@]}"; do
-            inventory_json="$(ansible-inventory -i inventory/production.yml --host "$host")"
-            ssh_host="$(jq -r --arg host "$host" '.ansible_host // .ansible_ssh_host // $host' <<<"$inventory_json")"
-            ssh_user="$(jq -r '.ansible_user // .ansible_ssh_user // "github-deployer"' <<<"$inventory_json")"
-            ssh_port="$(jq -r '.ansible_port // .ansible_ssh_port // 22' <<<"$inventory_json")"
-            endpoint="${ssh_user}@${ssh_host}"
-
-            if ! ssh \
-              -o BatchMode=yes \
-              -o ConnectTimeout=10 \
-              -o ConnectionAttempts=1 \
-              -o StrictHostKeyChecking=accept-new \
-              -o AddressFamily=inet \
-              -p "$ssh_port" \
-              -i /tmp/hermes-deploy \
-              "$endpoint" \
-              'echo "SSH OK"'; then
-              echo "::error::SSH preflight failed for ${host} (${endpoint}:${ssh_port}); re-run the workflow to try a fresh GitHub runner"
-              exit 1
-            fi
-
-            echo "SSH preflight succeeded for ${host} (${endpoint}:${ssh_port})"
-          done
-
       - name: Deploy YouKnowMe services
         working-directory: vps-ops
         run: |
@@ -112,6 +74,26 @@ jobs:
           ansible-playbook -i inventory/production.yml playbooks/deploy-gh-agent-broker.yml \
             -e "ykm_curator_image=${ykm_image}" \
             -e "ansible_ssh_private_key_file=/tmp/hermes-deploy"
+
+      - name: Log successful deploy telemetry
+        if: success()
+        uses: ./vps-ops/.github/actions/deploy-telemetry
+        with:
+          outcome: success
+          service_label: youknowme
+          github_token: ${{ github.token }}
+
+      - name: Capture SSH failure diagnostics
+        if: failure()
+        uses: ./vps-ops/.github/actions/deploy-telemetry
+        with:
+          outcome: failure
+          ssh_host: srv1656293.hstgr.cloud
+          ssh_user: github-deployer
+          ssh_port: "22"
+          ssh_key_path: /tmp/hermes-deploy
+          service_label: youknowme
+          github_token: ${{ github.token }}
 
       - name: Clean up secrets
         if: always()
