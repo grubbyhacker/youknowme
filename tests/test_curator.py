@@ -64,8 +64,11 @@ from curator.execution import (
 from curator.planning import deterministic_branch_name
 from curator.policy import evaluate_feedback_action_policy, policy_from_budget
 from curator.pr_repair import (
+    RepairDelta,
     _codex_config,
+    _has_blast_radius_override,
     _has_workflow_changed_file,
+    _repair_guardrail_message,
     _repair_prompt,
     _review_request_comment,
     execute_pr_repairs,
@@ -5297,7 +5300,7 @@ def test_pr_repair_discards_workflow_changes_and_pushes_allowed_changes(
     verify = tmp_path / "verify"
     _git_for_test(["init", "--bare", str(remote)])
     _git_for_test(["clone", str(remote), str(seed)])
-    _git_for_test(["checkout", "-b", branch], cwd=seed)
+    _git_for_test(["checkout", "-b", "main"], cwd=seed)
     (seed / ".github" / "workflows").mkdir(parents=True)
     (seed / "homemaint").mkdir()
     (seed / ".github" / "workflows" / "corpus-validation.yml").write_text(
@@ -5318,6 +5321,8 @@ def test_pr_repair_discards_workflow_changes_and_pushes_allowed_changes(
         ],
         cwd=seed,
     )
+    _git_for_test(["push", "origin", "main"], cwd=seed)
+    _git_for_test(["checkout", "-b", branch], cwd=seed)
     _git_for_test(["push", "origin", branch], cwd=seed)
 
     def fake_run_codex(**kwargs) -> Path:
@@ -5382,6 +5387,314 @@ def test_pr_repair_discards_workflow_changes_and_pushes_allowed_changes(
     assert (
         verify / ".github" / "workflows" / "corpus-validation.yml"
     ).read_text(encoding="utf-8") == "name: original validation\n"
+
+
+def test_pr_repair_rejects_mass_deletion_attempt(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    branch = "curator/run-pr-repair/upload-upl-20260606"
+    remote = tmp_path / "remote.git"
+    seed = tmp_path / "seed"
+    verify = tmp_path / "verify"
+    _git_for_test(["init", "--bare", str(remote)])
+    _git_for_test(["clone", str(remote), str(seed)])
+    _git_for_test(["checkout", "-b", "main"], cwd=seed)
+    for path, content in {
+        "AGENTS.md": "agent instructions\n",
+        "README.md": "readme\n",
+        ".gitignore": ".env\n",
+        "mise.toml": "[tasks.validate]\nrun = \"true\"\n",
+        "pyproject.toml": "[project]\nname = \"ykmcorpus\"\n",
+        "uv.lock": "version = 1\n",
+        "scripts/validate.sh": "#!/bin/sh\nexit 0\n",
+        "tests/test_policy.py": "def test_policy():\n    assert True\n",
+        "homemaint/manual.md": "needs repair\n",
+    }.items():
+        target = seed / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    _git_for_test(["add", "--all"], cwd=seed)
+    _git_for_test(
+        [
+            "-c",
+            "user.name=Test Curator",
+            "-c",
+            "user.email=curator@example.test",
+            "commit",
+            "-m",
+            "Seed corpus",
+        ],
+        cwd=seed,
+    )
+    _git_for_test(["push", "origin", "main"], cwd=seed)
+    _git_for_test(["checkout", "-b", branch], cwd=seed)
+    _git_for_test(["push", "origin", branch], cwd=seed)
+
+    def fake_run_codex(**kwargs) -> Path:
+        checkout = kwargs["checkout"]
+        for path in (
+            "AGENTS.md",
+            "README.md",
+            ".gitignore",
+            "mise.toml",
+            "pyproject.toml",
+            "uv.lock",
+            "scripts/validate.sh",
+            "tests/test_policy.py",
+            "homemaint/manual.md",
+        ):
+            (checkout / path).unlink()
+        transcript = kwargs["output"] / "transcript.txt"
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text("codex deleted most tracked files\n", encoding="utf-8")
+        return transcript
+
+    monkeypatch.setattr("curator.pr_repair._run_codex", fake_run_codex)
+    monkeypatch.setenv("BROKER_AGENT_ID", "ykm-curator")
+    monkeypatch.setenv("BROKER_AGENT_SECRET", "broker-secret")
+
+    results = execute_pr_repairs(
+        run_id="run-pr-repair",
+        mode="manual_live",
+        reconciliations=[
+            CuratorPrReconciliation(
+                pr_number=5,
+                pr_state="changes_requested",
+                branch=branch,
+                run_id="run-pr-repair",
+                reason="owner requested repair",
+            )
+        ],
+        snapshots=[],
+        executor="codex_proxy",
+        model="ykm-codex-gpt-5-mini",
+        validation_command=[sys.executable, "-c", "raise SystemExit(0)"],
+        max_repairs=1,
+        output=tmp_path / "output",
+        broker_remote_url=str(remote),
+        codex_proxy_base_url="http://proxy:8092/v1",
+        codex_proxy_token="proxy-token",
+    )
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.status == "rejected"
+    assert not result.pushed
+    assert "blast-radius guardrail" in result.message
+    assert "changed files exceeds limit 5" in result.message
+    assert len(result.changed_files) == 9
+
+    _git_for_test(["clone", "--branch", branch, str(remote), str(verify)])
+    assert (verify / "README.md").read_text(encoding="utf-8") == "readme\n"
+    assert (verify / "homemaint" / "manual.md").read_text(encoding="utf-8") == "needs repair\n"
+
+
+def test_pr_repair_validates_committed_tree_before_push(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    branch = "curator/run-pr-repair/upload-upl-20260606"
+    remote = tmp_path / "remote.git"
+    seed = tmp_path / "seed"
+    verify = tmp_path / "verify"
+    _git_for_test(["init", "--bare", str(remote)])
+    _git_for_test(["clone", str(remote), str(seed)])
+    _git_for_test(["checkout", "-b", "main"], cwd=seed)
+    (seed / "homemaint").mkdir()
+    (seed / "homemaint" / "manual.md").write_text("needs repair\n", encoding="utf-8")
+    _git_for_test(["add", "--all"], cwd=seed)
+    _git_for_test(
+        [
+            "-c",
+            "user.name=Test Curator",
+            "-c",
+            "user.email=curator@example.test",
+            "commit",
+            "-m",
+            "Seed corpus",
+        ],
+        cwd=seed,
+    )
+    _git_for_test(["push", "origin", "main"], cwd=seed)
+    _git_for_test(["checkout", "-b", branch], cwd=seed)
+    _git_for_test(["push", "origin", branch], cwd=seed)
+
+    def fake_run_codex(**kwargs) -> Path:
+        checkout = kwargs["checkout"]
+        (checkout / "homemaint" / "manual.md").unlink()
+        (checkout / "homemaint").mkdir(exist_ok=True)
+        transcript = kwargs["output"] / "transcript.txt"
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text("codex left only an empty directory\n", encoding="utf-8")
+        return transcript
+
+    monkeypatch.setattr("curator.pr_repair._run_codex", fake_run_codex)
+    monkeypatch.setenv("BROKER_AGENT_ID", "ykm-curator")
+    monkeypatch.setenv("BROKER_AGENT_SECRET", "broker-secret")
+
+    results = execute_pr_repairs(
+        run_id="run-pr-repair",
+        mode="manual_live",
+        reconciliations=[
+            CuratorPrReconciliation(
+                pr_number=5,
+                pr_state="changes_requested",
+                branch=branch,
+                run_id="run-pr-repair",
+                reason="owner requested repair",
+            )
+        ],
+        snapshots=[],
+        executor="codex_proxy",
+        model="ykm-codex-gpt-5-mini",
+        validation_command=[
+            sys.executable,
+            "-c",
+            "from pathlib import Path; raise SystemExit(0 if Path('homemaint').is_dir() else 1)",
+        ],
+        max_repairs=1,
+        output=tmp_path / "output",
+        broker_remote_url=str(remote),
+        codex_proxy_base_url="http://proxy:8092/v1",
+        codex_proxy_token="proxy-token",
+    )
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.status == "validation_failed"
+    assert not result.pushed
+    assert result.changed_files == ["homemaint/manual.md"]
+    assert "validation failed after commit" in result.message
+
+    _git_for_test(["clone", "--branch", branch, str(remote), str(verify)])
+    assert (verify / "homemaint" / "manual.md").read_text(encoding="utf-8") == "needs repair\n"
+
+
+def test_pr_repair_blast_radius_override_label_bypasses_size_guard() -> None:
+    reconciliation = CuratorPrReconciliation(
+        pr_number=5,
+        pr_state="changes_requested",
+        branch="curator/run-pr-repair/upload-upl-20260606",
+        labels=["curator-blast-radius-override"],
+        reason="owner approved broad repair",
+    )
+    snapshot = CuratorPrSnapshot(
+        number=5,
+        state="open",
+        branch="curator/run-pr-repair/upload-upl-20260606",
+    )
+    delta = RepairDelta(
+        changed_files=[f"homemaint/doc-{index}.md" for index in range(6)],
+        deleted_files=[],
+    )
+
+    assert _has_blast_radius_override(reconciliation, snapshot)
+    assert _repair_guardrail_message(
+        delta,
+        review_evidence=[],
+        allow_override=_has_blast_radius_override(reconciliation, snapshot),
+    ) is None
+
+
+def test_pr_repair_allows_named_protected_policy_change(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    branch = "curator/run-pr-repair/upload-upl-20260606"
+    remote = tmp_path / "remote.git"
+    seed = tmp_path / "seed"
+    verify = tmp_path / "verify"
+    _git_for_test(["init", "--bare", str(remote)])
+    _git_for_test(["clone", str(remote), str(seed)])
+    _git_for_test(["checkout", "-b", "main"], cwd=seed)
+    (seed / ".ykm").mkdir()
+    (seed / "homemaint").mkdir()
+    (seed / ".ykm" / "corpus-policy.yaml").write_text(
+        "corpus_roots:\n  - homemaint\n",
+        encoding="utf-8",
+    )
+    (seed / "homemaint" / "manual.md").write_text("ok\n", encoding="utf-8")
+    _git_for_test(["add", "--all"], cwd=seed)
+    _git_for_test(
+        [
+            "-c",
+            "user.name=Test Curator",
+            "-c",
+            "user.email=curator@example.test",
+            "commit",
+            "-m",
+            "Seed corpus",
+        ],
+        cwd=seed,
+    )
+    _git_for_test(["push", "origin", "main"], cwd=seed)
+    _git_for_test(["checkout", "-b", branch], cwd=seed)
+    _git_for_test(["push", "origin", branch], cwd=seed)
+
+    def fake_run_codex(**kwargs) -> Path:
+        checkout = kwargs["checkout"]
+        (checkout / ".ykm" / "corpus-policy.yaml").write_text(
+            "corpus_roots:\n  - homemaint\n  - dev\n",
+            encoding="utf-8",
+        )
+        transcript = kwargs["output"] / "transcript.txt"
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text("codex updated named policy file\n", encoding="utf-8")
+        return transcript
+
+    monkeypatch.setattr("curator.pr_repair._run_codex", fake_run_codex)
+    monkeypatch.setenv("BROKER_AGENT_ID", "ykm-curator")
+    monkeypatch.setenv("BROKER_AGENT_SECRET", "broker-secret")
+
+    results = execute_pr_repairs(
+        run_id="run-pr-repair",
+        mode="manual_live",
+        reconciliations=[
+            CuratorPrReconciliation(
+                pr_number=5,
+                pr_state="changes_requested",
+                branch=branch,
+                run_id="run-pr-repair",
+                reason="owner requested repair",
+            )
+        ],
+        snapshots=[
+            CuratorPrSnapshot(
+                number=5,
+                state="open",
+                branch=branch,
+                review_comments=["Please update `.ykm/corpus-policy.yaml` to add dev."],
+            )
+        ],
+        executor="codex_proxy",
+        model="ykm-codex-gpt-5-mini",
+        validation_command=[
+            sys.executable,
+            "-c",
+            (
+                "from pathlib import Path; "
+                "assert '  - dev\\n' in Path('.ykm/corpus-policy.yaml').read_text()"
+            ),
+        ],
+        max_repairs=1,
+        output=tmp_path / "output",
+        broker_remote_url=str(remote),
+        codex_proxy_base_url="http://proxy:8092/v1",
+        codex_proxy_token="proxy-token",
+    )
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.status == "pushed"
+    assert result.pushed
+    assert result.changed_files == [".ykm/corpus-policy.yaml"]
+    assert result.validation_returncode == 0
+
+    _git_for_test(["clone", "--branch", branch, str(remote), str(verify)])
+    assert (
+        verify / ".ykm" / "corpus-policy.yaml"
+    ).read_text(encoding="utf-8") == "corpus_roots:\n  - homemaint\n  - dev\n"
 
 
 def test_runner_treats_pr_repair_workflow_guardrail_skip_as_handled(
