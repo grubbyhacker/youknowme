@@ -22,6 +22,28 @@ from ykm.server import (
 )
 
 
+def empty_curator_status() -> dict[str, Any]:
+    return {
+        "uploads": {
+            "pending": 0,
+            "claimed": 0,
+            "processed": 0,
+            "rejected": 0,
+            "archive": 0,
+            "deferred": 0,
+        },
+        "uploads_oldest_pending_seconds": 0,
+        "feedback": {
+            "total": 0,
+            "decided": 0,
+            "undecided": 0,
+        },
+        "last_run": None,
+        "queue_depth": 0,
+        "oldest_pending_seconds": 0,
+    }
+
+
 def wait_until_ready(client: TestClient) -> None:
     for _ in range(100):
         response = client.get("/readyz")
@@ -171,11 +193,7 @@ def test_curator_status_allows_unauthenticated_local_request(
     response = client.get("/curator/status")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "queue_depth": 0,
-        "oldest_pending_seconds": 0,
-        "last_run": None,
-    }
+    assert response.json() == empty_curator_status()
 
 
 def test_curator_status_allows_unauthenticated_public_request(
@@ -191,11 +209,7 @@ def test_curator_status_allows_unauthenticated_public_request(
     response = client.get("/curator/status")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "queue_depth": 0,
-        "oldest_pending_seconds": 0,
-        "last_run": None,
-    }
+    assert response.json() == empty_curator_status()
 
 
 def test_curator_status_returns_empty_queue_without_last_run(
@@ -209,14 +223,10 @@ def test_curator_status_returns_empty_queue_without_last_run(
     response = client.get("/curator/status", headers={"X-YKM-Local-Secret": "secret"})
 
     assert response.status_code == 200
-    assert response.json() == {
-        "queue_depth": 0,
-        "oldest_pending_seconds": 0,
-        "last_run": None,
-    }
+    assert response.json() == empty_curator_status()
 
 
-def test_curator_status_counts_pending_uploads_and_reads_last_run(
+def test_curator_status_returns_queue_metrics_feedback_metrics_and_last_run(
     tmp_path: Path, monkeypatch
 ) -> None:
     intake = tmp_path / "intake"
@@ -229,9 +239,70 @@ def test_curator_status_counts_pending_uploads_and_reads_last_run(
     claimed_upload.mkdir()
     (claimed_upload / "curator.json").write_text("{}\n", encoding="utf-8")
     (pending / "not-a-directory").write_text("ignored\n", encoding="utf-8")
+    (intake / "uploads" / "claimed" / "upl_claimed_1").mkdir(parents=True)
+    (intake / "uploads" / "claimed" / "upl_claimed_2").mkdir()
+    (intake / "uploads" / "processed" / "upl_processed").mkdir(parents=True)
+    (intake / "uploads" / "archive" / "upl_archive").mkdir(parents=True)
+    (intake / "uploads" / "deferred" / "upl_deferred").mkdir(parents=True)
+    (intake / "uploads" / "runs" / "run_1").mkdir(parents=True)
     os.utime(old_upload, (1_000, 1_000))
     os.utime(new_upload, (7_500, 7_500))
     os.utime(claimed_upload, (500, 500))
+    feedback = intake / "feedback" / "feedback.jsonl"
+    feedback.parent.mkdir()
+    feedback.write_text(
+        "\n".join(
+            [
+                '{"event":"feedback","feedback_id":"fb_1"}',
+                '{"event":"feedback","feedback_id":"fb_2"}',
+                '{"event":"feedback","feedback_id":"fb_3"}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (feedback.parent / "curator-decisions.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "schema_version": "1",
+                        "feedback_id": "fb_1",
+                        "run_id": "run-1",
+                        "plan_action_id": "act-1",
+                        "decision": "no_action_positive",
+                        "reason": "resolved",
+                        "timestamp": "2026-06-13T18:00:00Z",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "schema_version": "1",
+                        "feedback_id": "fb_3",
+                        "run_id": "run-1",
+                        "plan_action_id": "act-3",
+                        "decision": "issue_opened",
+                        "issue_number": 42,
+                        "reason": "tracked",
+                        "timestamp": "2026-06-13T18:05:00Z",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "schema_version": "1",
+                        "feedback_id": "fb_historical",
+                        "run_id": "run-1",
+                        "plan_action_id": "act-historical",
+                        "decision": "no_action_positive",
+                        "reason": "not in feedback file",
+                        "timestamp": "2026-06-13T18:10:00Z",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     (intake / "curator-status.json").write_text(
         json.dumps(
             {
@@ -254,13 +325,27 @@ def test_curator_status_counts_pending_uploads_and_reads_last_run(
 
     assert response.status_code == 200
     assert response.json() == {
-        "queue_depth": 2,
-        "oldest_pending_seconds": 9_000,
+        "uploads": {
+            "pending": 3,
+            "claimed": 2,
+            "processed": 1,
+            "rejected": 0,
+            "archive": 1,
+            "deferred": 1,
+        },
+        "uploads_oldest_pending_seconds": 9_500,
+        "feedback": {
+            "total": 3,
+            "decided": 2,
+            "undecided": 1,
+        },
         "last_run": {
             "timestamp": "2026-06-13T18:00:00Z",
             "status": "success",
             "message": "opened PR #42",
         },
+        "queue_depth": 3,
+        "oldest_pending_seconds": 9_500,
     }
 
 
