@@ -33,6 +33,14 @@ Before opening or updating a PR, run both `mise run lint` and the full `mise run
 there is a concrete blocker. Focused tests are useful while iterating, but they are not enough for
 presubmit.
 
+## Agent Delivery Standard
+
+Give Roger PRs ready to review. Do not just return once changes are written and put the ball in
+Roger's court. The goal is nearly always to produce a PR that is well tested, including staging
+validation when applicable, before sending it for review.
+
+Never, ever send Roger a PR in Draft mode. It makes no sense for this repository's agent workflow.
+
 ## Deployment
 
 Production deploys happen automatically through GitHub Actions. The workflow is
