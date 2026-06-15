@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 from curator.file_policy import is_backup_or_temp_path
@@ -19,12 +20,35 @@ from curator.upload_pr import GIT_AUTHOR_EMAIL, GIT_AUTHOR_NAME
 GIT_TIMEOUT_SECONDS = 120
 CODEX_TIMEOUT_SECONDS = 900
 VALIDATION_TIMEOUT_SECONDS = 240
+MAX_REPAIR_CHANGED_FILES = 5
+MAX_REPAIR_DELETED_FILES = 2
+REPAIR_BLAST_RADIUS_OVERRIDE_LABEL = "curator-blast-radius-override"
 REPAIRABLE_PR_STATES = {
     "changes_requested",
     "commented_needs_triage",
     "checks_failed",
     "checks_missing",
 }
+PROTECTED_REPAIR_PATHS = {
+    ".gitignore",
+    "AGENTS.md",
+    "README.md",
+    "mise.toml",
+    "pyproject.toml",
+    "uv.lock",
+}
+PROTECTED_REPAIR_PREFIXES = (
+    ".github/workflows/",
+    ".ykm/",
+    "scripts/",
+    "tests/",
+)
+
+
+@dataclass(frozen=True)
+class RepairDelta:
+    changed_files: list[str]
+    deleted_files: list[str]
 
 
 class CodexRepairError(RuntimeError):
@@ -126,7 +150,12 @@ def _execute_one_repair(
             checkout = root / "ykmcorpus"
             askpass = _write_askpass(root)
             git_env = _git_env(askpass)
-            _run_git(["clone", "--branch", branch, "--depth=1", broker_remote_url, str(checkout)], cwd=None, env=git_env)
+            _clone_repair_checkout(
+                branch=branch,
+                broker_remote_url=broker_remote_url,
+                checkout=checkout,
+                env=git_env,
+            )
             transcript_path = _run_codex(
                 run_id=run_id,
                 reconciliation=reconciliation,
@@ -137,8 +166,8 @@ def _execute_one_repair(
                 proxy_base_url=_codex_base_url(codex_proxy_base_url),
                 proxy_token=codex_proxy_token,
             )
-            changed_files = _changed_files(checkout, git_env)
-            if not changed_files:
+            delta = _repair_delta(checkout, git_env)
+            if not delta.changed_files:
                 return _repair_result(
                     reconciliation,
                     executor=executor,
@@ -148,22 +177,22 @@ def _execute_one_repair(
                     validation_command=validation_command,
                     transcript_path=str(transcript_path),
                 )
-            if _has_forbidden_changed_file(changed_files):
+            if _has_forbidden_changed_file(delta.changed_files):
                 return _repair_result(
                     reconciliation,
                     executor=executor,
                     model=model,
                     status="rejected",
                     message="Codex PR repair changed forbidden private runtime files.",
-                    changed_files=changed_files,
+                    changed_files=delta.changed_files,
                     validation_command=validation_command,
                     transcript_path=str(transcript_path),
                 )
-            if _has_workflow_changed_file(changed_files):
-                discarded_workflow_files = _workflow_changed_files(changed_files)
+            if _has_workflow_changed_file(delta.changed_files):
+                discarded_workflow_files = _workflow_changed_files(delta.changed_files)
                 _discard_workflow_changes(checkout, git_env)
-                changed_files = _changed_files(checkout, git_env)
-                if not changed_files:
+                delta = _repair_delta(checkout, git_env)
+                if not delta.changed_files:
                     return _repair_result(
                         reconciliation,
                         executor=executor,
@@ -185,8 +214,26 @@ def _execute_one_repair(
                 )
             else:
                 workflow_note = ""
+            guardrail_message = _repair_guardrail_message(
+                delta,
+                review_evidence=_review_evidence(snapshot),
+                allow_override=_has_blast_radius_override(reconciliation, snapshot),
+            )
+            if guardrail_message:
+                return _repair_result(
+                    reconciliation,
+                    executor=executor,
+                    model=model,
+                    status="rejected",
+                    message=guardrail_message,
+                    changed_files=delta.changed_files,
+                    diff_stat=_git_output(["diff", "--stat", "HEAD"], cwd=checkout, env=git_env),
+                    validation_command=validation_command,
+                    transcript_path=str(transcript_path),
+                )
+            changed_files = delta.changed_files
             validation = _run_validation(checkout, validation_command)
-            diff_stat = _git_output(["diff", "--stat"], cwd=checkout, env=git_env)
+            diff_stat = _git_output(["diff", "--stat", "HEAD"], cwd=checkout, env=git_env)
             if validation.returncode != 0:
                 return _repair_result(
                     reconciliation,
@@ -258,6 +305,57 @@ def _execute_one_repair(
                 cwd=checkout,
                 env=git_env,
             )
+            uncommitted_after_commit = _changed_files(checkout, git_env)
+            if uncommitted_after_commit:
+                return _repair_result(
+                    reconciliation,
+                    executor=executor,
+                    model=model,
+                    status="validation_failed",
+                    message="PR repair left uncommitted checkout changes after commit.",
+                    changed_files=uncommitted_after_commit,
+                    validation_command=validation_command,
+                    transcript_path=str(transcript_path),
+                )
+            committed_delta = _committed_repair_delta(checkout, git_env)
+            commit_guardrail_message = _repair_guardrail_message(
+                committed_delta,
+                review_evidence=_review_evidence(snapshot),
+                allow_override=_has_blast_radius_override(reconciliation, snapshot),
+            )
+            if commit_guardrail_message:
+                return _repair_result(
+                    reconciliation,
+                    executor=executor,
+                    model=model,
+                    status="rejected",
+                    message=commit_guardrail_message,
+                    changed_files=committed_delta.changed_files,
+                    diff_stat=_git_output(["diff", "--stat", "HEAD~1..HEAD"], cwd=checkout, env=git_env),
+                    validation_command=validation_command,
+                    transcript_path=str(transcript_path),
+                )
+            committed_diff_stat = _git_output(["diff", "--stat", "HEAD~1..HEAD"], cwd=checkout, env=git_env)
+            post_commit_validation = _run_validation_on_committed_tree(
+                checkout,
+                validation_command,
+                env=git_env,
+            )
+            if post_commit_validation.returncode != 0:
+                return _repair_result(
+                    reconciliation,
+                    executor=executor,
+                    model=model,
+                    status="validation_failed",
+                    message="PR repair validation failed after commit.",
+                    changed_files=committed_delta.changed_files,
+                    diff_stat=committed_diff_stat,
+                    validation_command=validation_command,
+                    validation_returncode=post_commit_validation.returncode,
+                    validation_stdout_tail=_tail(post_commit_validation.stdout),
+                    validation_stderr_tail=_tail(post_commit_validation.stderr),
+                    transcript_path=str(transcript_path),
+                )
             repair_head_sha = _git_output(["rev-parse", "HEAD"], cwd=checkout, env=git_env).strip()
             _run_git(["push", "origin", f"HEAD:refs/heads/{branch}"], cwd=checkout, env=git_env)
             return _repair_result(
@@ -271,11 +369,11 @@ def _execute_one_repair(
                 ),
                 changed_files=changed_files,
                 repair_head_sha=repair_head_sha,
-                diff_stat=diff_stat,
+                diff_stat=committed_diff_stat,
                 validation_command=validation_command,
-                validation_returncode=validation.returncode,
-                validation_stdout_tail=_tail(validation.stdout),
-                validation_stderr_tail=_tail(validation.stderr),
+                validation_returncode=post_commit_validation.returncode,
+                validation_stdout_tail=_tail(post_commit_validation.stdout),
+                validation_stderr_tail=_tail(post_commit_validation.stderr),
                 transcript_path=str(transcript_path),
                 review_request_comment=_review_request_comment(
                     reconciliation,
@@ -485,6 +583,44 @@ def _run_validation(checkout: Path, validation_command: list[str]) -> subprocess
     )
 
 
+def _run_validation_on_committed_tree(
+    checkout: Path,
+    validation_command: list[str],
+    *,
+    env: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    with tempfile.TemporaryDirectory(prefix="ykm-pr-repair-validate-") as temp_root:
+        validation_checkout = Path(temp_root) / "committed-tree"
+        _run_git(
+            ["worktree", "add", "--detach", str(validation_checkout), "HEAD"],
+            cwd=checkout,
+            env=env,
+        )
+        try:
+            return _run_validation(validation_checkout, validation_command)
+        finally:
+            _run_git(
+                ["worktree", "remove", "--force", str(validation_checkout)],
+                cwd=checkout,
+                env=env,
+            )
+
+
+def _clone_repair_checkout(
+    *,
+    branch: str,
+    broker_remote_url: str,
+    checkout: Path,
+    env: dict[str, str],
+) -> None:
+    _run_git(["clone", "--branch", branch, broker_remote_url, str(checkout)], cwd=None, env=env)
+    _run_git(
+        ["fetch", "origin", "main:refs/remotes/origin/main"],
+        cwd=checkout,
+        env=env,
+    )
+
+
 def _changed_files(checkout: Path, env: dict[str, str]) -> list[str]:
     output = _git_output(["status", "--porcelain"], cwd=checkout, env=env)
     files: list[str] = []
@@ -496,6 +632,87 @@ def _changed_files(checkout: Path, env: dict[str, str]) -> list[str]:
             path = path.split(" -> ", maxsplit=1)[-1]
         files.append(path)
     return sorted(set(files))
+
+
+def _repair_delta(checkout: Path, env: dict[str, str]) -> RepairDelta:
+    changed_files = _changed_files(checkout, env)
+    deleted_files = _deleted_files(checkout, env, "HEAD")
+    return RepairDelta(changed_files=changed_files, deleted_files=deleted_files)
+
+
+def _committed_repair_delta(checkout: Path, env: dict[str, str]) -> RepairDelta:
+    return RepairDelta(
+        changed_files=_diff_changed_files(checkout, env, "HEAD~1..HEAD"),
+        deleted_files=_deleted_files(checkout, env, "HEAD~1..HEAD"),
+    )
+
+
+def _diff_changed_files(checkout: Path, env: dict[str, str], revision: str) -> list[str]:
+    output = _git_output(["diff", "--name-only", revision, "--"], cwd=checkout, env=env)
+    return sorted(path for path in output.splitlines() if path)
+
+
+def _deleted_files(checkout: Path, env: dict[str, str], revision: str) -> list[str]:
+    output = _git_output(["diff", "--name-status", revision, "--"], cwd=checkout, env=env)
+    deleted: list[str] = []
+    for line in output.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[0] == "D":
+            deleted.append(parts[1])
+    return sorted(set(deleted))
+
+
+def _repair_guardrail_message(
+    delta: RepairDelta,
+    *,
+    review_evidence: list[str],
+    allow_override: bool = False,
+) -> str | None:
+    if allow_override:
+        return None
+    if len(delta.changed_files) > MAX_REPAIR_CHANGED_FILES:
+        return (
+            "Codex PR repair rejected by blast-radius guardrail: "
+            f"{len(delta.changed_files)} changed files exceeds limit "
+            f"{MAX_REPAIR_CHANGED_FILES}."
+        )
+    if len(delta.deleted_files) > MAX_REPAIR_DELETED_FILES:
+        return (
+            "Codex PR repair rejected by blast-radius guardrail: "
+            f"{len(delta.deleted_files)} deleted files exceeds limit "
+            f"{MAX_REPAIR_DELETED_FILES}."
+        )
+    protected_without_evidence = [
+        path
+        for path in delta.changed_files
+        if _is_protected_repair_path(path)
+        and not _review_evidence_names_path(path, review_evidence)
+    ]
+    if protected_without_evidence:
+        return (
+            "Codex PR repair rejected by protected-path guardrail: review evidence "
+            "does not name protected path(s) "
+            f"{', '.join(protected_without_evidence)}."
+        )
+    return None
+
+
+def _has_blast_radius_override(
+    reconciliation: CuratorPrReconciliation,
+    snapshot: CuratorPrSnapshot | None,
+) -> bool:
+    labels = [*reconciliation.labels]
+    if snapshot is not None:
+        labels.extend(snapshot.labels)
+    return any(label.strip().lower() == REPAIR_BLAST_RADIUS_OVERRIDE_LABEL for label in labels)
+
+
+def _is_protected_repair_path(path: str) -> bool:
+    return path in PROTECTED_REPAIR_PATHS or path.startswith(PROTECTED_REPAIR_PREFIXES)
+
+
+def _review_evidence_names_path(path: str, review_evidence: list[str]) -> bool:
+    return any(path in evidence for evidence in review_evidence)
 
 
 def _has_forbidden_changed_file(paths: list[str]) -> bool:
