@@ -79,7 +79,11 @@ from curator.upload_state import (
     transition_upload_metadata,
     validate_upload_transition,
 )
-from curator.upload_observe import apply_upload_review_draft_to_checkout, observe_upload_review_draft
+from curator.upload_observe import (
+    UploadReviewObservation,
+    apply_upload_review_draft_to_checkout,
+    observe_upload_review_draft,
+)
 from curator.upload_pr import upload_review_pull_intent
 from ykm.curator import CuratorDryRunConfig, run_curator_dry_run
 from curator.runner import (
@@ -2088,6 +2092,229 @@ def test_manual_live_feedback_issue_fixture_advances_checkpoint(
     assert decisions[0]["decision"] == "issue_opened"
     assert decisions[0]["feedback_id"] == "fb_1"
     assert state["feedback_checkpoint"]["byte_offset"] == len(line)
+
+
+def test_manual_live_combined_profile_processes_all_enabled_actions(
+    tmp_path: Path, monkeypatch
+) -> None:
+    intake = tmp_path / "intake"
+    feedback = intake / "feedback" / "feedback.jsonl"
+    feedback.parent.mkdir(parents=True)
+    feedback_line = (
+        '{"event":"feedback","feedback_id":"fb_live_1",'
+        '"comment":"This answer should become a durable follow-up issue."}\n'
+    )
+    feedback.write_text(feedback_line, encoding="utf-8")
+    pending = intake / "uploads" / "pending" / "upl_live_1"
+    pending.mkdir(parents=True)
+    (pending / "manifest.json").write_text(
+        json.dumps({"upload_id": "upl_live_1"}) + "\n",
+        encoding="utf-8",
+    )
+    broker_fixture = tmp_path / "broker-fixture.json"
+    broker_fixture.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "reachable": True,
+                "allowed_operations": [
+                    "issue.create",
+                    "issue.comment",
+                    "issue.label.add",
+                    "issue.label.remove",
+                    "pull.create",
+                    "pull.review.dismiss",
+                    "pull.review_thread.resolve",
+                ],
+                "pr_snapshots": [
+                    {
+                        "number": 18,
+                        "state": "open",
+                        "body": (
+                            "YKM-Curator-Run: prior-live-run\n"
+                            "YKM-Curator-Upload: upl_prior\n"
+                        ),
+                        "branch": "curator/prior-live-run/upload-upl-prior",
+                        "labels": ["ym-curator: needs work"],
+                        "review_decision": "changes_requested",
+                        "checks_conclusion": "failure",
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    model_proxy_fixture = tmp_path / "model-proxy-fixture.json"
+    model_proxy_fixture.write_text(
+        json.dumps({"schema_version": "1", "reachable": True}) + "\n",
+        encoding="utf-8",
+    )
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "run_id": "run-live-combined",
+                "mode": "manual_live",
+                "enabled_actions": [
+                    "reconcile",
+                    "plan_feedback",
+                    "plan_uploads",
+                    "repair_prs",
+                ],
+                "github_mutation_budget": {
+                    "max_new_objects_per_run": 3,
+                    "upload": 1,
+                    "feedback": 2,
+                },
+                "feedback_executor": "codex_proxy",
+                "upload_review_executor": "codex_proxy",
+                "pr_repair_executor": "codex_proxy",
+                "feedback_agent_model": "ykm-codex-gpt-5-mini",
+                "upload_review_agent_model": "ykm-codex-gpt-5-mini",
+                "pr_repair_model": "ykm-codex-gpt-5-mini",
+                "feedback_agent_max_attempts": 2,
+                "upload_review_max_attempts": 2,
+                "pr_repair_max_per_run": 1,
+                "feedback_agent_validation_command": ["mise", "run", "validate"],
+                "upload_review_validation_command": ["mise", "run", "validate"],
+                "pr_repair_validation_command": ["mise", "run", "validate"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_feedback_actions(**kwargs):
+        captured["feedback_executor"] = kwargs
+        [intent] = kwargs["intents"]
+        return [
+            ExecutionResult(
+                action_id=intent.action_id,
+                operation="issue.create",
+                idempotency_key=intent.idempotency_key,
+                status="executed",
+                target_repo=intent.target_repo,
+                issue_number=41,
+                message="feedback issue opened",
+            )
+        ]
+
+    def fake_upload_prs(**kwargs):
+        captured["upload_executor"] = kwargs
+        [preview] = kwargs["upload_plan"].review_previews
+        return (
+            [
+                ExecutionResult(
+                    action_id=preview.action_id,
+                    operation="pull.create",
+                    idempotency_key=preview.idempotency_key,
+                    status="executed",
+                    target_repo="grubbyhacker/ykmcorpus",
+                    branch=preview.branch,
+                    pr_number=42,
+                    message="upload PR opened",
+                )
+            ],
+            [
+                UploadReviewObservation(
+                    upload_id=preview.upload_id,
+                    action_id=preview.action_id,
+                    status="pass",
+                    decision="integrated",
+                    message="upload review passed",
+                    executor="codex_proxy",
+                    model=kwargs["model"],
+                    attempts=1,
+                )
+            ],
+        )
+
+    def fake_pr_repairs(**kwargs):
+        captured["pr_repair_executor"] = kwargs
+        repairable = [
+            reconciliation
+            for reconciliation in kwargs["reconciliations"]
+            if reconciliation.pr_state == "changes_requested"
+        ]
+        assert [reconciliation.pr_number for reconciliation in repairable] == [18]
+        return [
+            PrRepairResult(
+                pr_number=18,
+                branch="curator/prior-live-run/upload-upl-prior",
+                pr_state="changes_requested",
+                executor="codex_proxy",
+                model=kwargs["model"],
+                status="pushed",
+                message="repair pushed",
+                changed_files=["homemaint/manual.md"],
+                repair_head_sha="repair-sha",
+                validation_command=kwargs["validation_command"],
+                validation_returncode=0,
+                review_request_comment="Curator repair completed; ready for review again.",
+                review_request_comment_status="pending",
+                pushed=True,
+            )
+        ]
+
+    monkeypatch.setattr("curator.runner.execute_agentic_feedback_actions", fake_feedback_actions)
+    monkeypatch.setattr("curator.runner._execute_agentic_upload_review_prs", fake_upload_prs)
+    monkeypatch.setattr("curator.runner.execute_pr_repairs", fake_pr_repairs)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="ignored",
+            intake=intake,
+            output=tmp_path / "output",
+            task=task,
+            broker_fixture=broker_fixture,
+            model_proxy_fixture=model_proxy_fixture,
+            codex_proxy_base_url="http://proxy:8092/v1",
+            codex_proxy_token="proxy-token",
+        )
+    )
+
+    decisions = [
+        json.loads(line)
+        for line in (intake / "feedback" / "curator-decisions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    metadata = json.loads(
+        (intake / "uploads" / "claimed" / "upl_live_1" / "curator.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert report.status == "pass"
+    assert report.enabled_actions == ["plan_feedback", "plan_uploads", "reconcile", "repair_prs"]
+    assert report.reconciliation["pr_reconciliation_count"] == 1
+    assert report.reconciliation["pr_state_counts"] == {"changes_requested": 1}
+    assert report.feedback_decisions_appended == 1
+    assert decisions[0]["decision"] == "issue_opened"
+    assert decisions[0]["feedback_id"] == "fb_live_1"
+    assert report.upload_review_preview_count == 1
+    assert report.upload_review_observation_count == 1
+    assert report.upload_metadata_update_count == 1
+    assert metadata["state"] == "pr_opened"
+    assert metadata["pr_number"] == 42
+    assert report.pr_repair_result_count == 1
+    assert report.pr_repair_results[0]["pr_number"] == 18
+    assert report.pr_repair_results[0]["status"] == "pushed"
+    assert report.github_mutation_count == 3
+    assert report.validation_failure_count == 0
+    assert any(probe.name == "model-proxy" and probe.status == "pass" for probe in report.probes)
+    assert captured["feedback_executor"]["model"] == "ykm-codex-gpt-5-mini"
+    assert captured["feedback_executor"]["max_attempts"] == 2
+    assert captured["upload_executor"]["model"] == "ykm-codex-gpt-5-mini"
+    assert captured["upload_executor"]["max_attempts"] == 2
+    assert captured["upload_executor"]["max_upload_prs"] == 1
+    assert captured["pr_repair_executor"]["executor"] == "codex_proxy"
+    assert captured["pr_repair_executor"]["max_repairs"] == 1
+    assert captured["pr_repair_executor"]["validation_command"] == ["mise", "run", "validate"]
 
 
 def test_manual_live_model_fixture_budget_fails_closed(

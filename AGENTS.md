@@ -43,8 +43,13 @@ The production deploy runs Ansible from the `grubbyhacker/vps-ops` repository ov
 `hermes-vps` (`srv1656293.hstgr.cloud`). The deploy user is `github-deployer`.
 
 Agents must never SSH directly to `hermes-vps` to make operational changes. All production changes
-must go through the GitHub Actions deployment pipeline. Diagnostic read-only checks such as
-`docker inspect` or logs are acceptable only when explicitly authorized.
+must go through the GitHub Actions deployment pipeline.
+
+Agents have standing authorization to perform read-only diagnostics on `hermes-vps` when needed to
+understand production state. Acceptable read-only checks include commands such as `docker ps`,
+`docker inspect`, `docker logs`, file listing, and targeted reads of logs, run reports, and intake
+metadata. Do not edit files, restart services, change containers, or run deploy/maintenance commands
+on `hermes-vps` unless explicitly authorized for that specific operation.
 
 The GitHub production environment gate requires approval before the deploy proceeds.
 
