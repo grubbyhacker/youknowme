@@ -13,7 +13,8 @@ This runbook maintains the live Curator launcher on `hermes-vps`.
 - timer env: `/home/sandbox-curator-timer/.config/gh-agent-broker/operator.env`
 - systemd service: `ykm-curator-launch.service`
 - systemd timer: `ykm-curator-launch.timer`
-- timer sandbox profile: `ykm-curator-dry-run`
+- timer sandbox profile: `ykm-curator-live` after the single-live-profile deployment
+- production-safe diagnostic sandbox profiles: `ykm-curator-dry-run`, `ykm-curator-state-only`
 - manual state-only sandbox profile: `ykm-curator-state-only`
 - manual model sandbox profile: `ykm-curator-dry-run-model`
 
@@ -96,7 +97,7 @@ PY
 '
 ```
 
-Expected dry-run safety values:
+Expected safety values for diagnostic `ykm-curator-dry-run` launches:
 
 - `status=pass`
 - `mode=dry_run`
@@ -105,6 +106,72 @@ Expected dry-run safety values:
 - `upload_metadata_update_count=0`
 - `github_mutation_count=0`
 - `model_call_count=0`
+
+## Production Live Launch
+
+The production timer should launch the single live profile:
+
+```text
+/v1/launch-profiles/ykm-curator-live/launch
+```
+
+That profile is the production trigger surface for scheduled runs and future immediate
+upload/feedback triggers. Immediate triggers should launch `ykm-curator-live` too; they should not
+create a separate worker path or scheduler in this milestone. Concurrency is handled by the Curator
+run lock, so callers only need to request a launch and inspect the resulting report.
+
+The embedded Curator task should be fixed to:
+
+```json
+{
+  "mode": "manual_live",
+  "enabled_actions": ["reconcile", "plan_feedback", "plan_uploads", "repair_prs"],
+  "github_mutation_budget": {
+    "max_new_objects_per_run": 3,
+    "upload": 1,
+    "feedback": 2
+  },
+  "feedback_executor": "codex_proxy",
+  "upload_review_executor": "codex_proxy",
+  "pr_repair_executor": "codex_proxy",
+  "feedback_agent_model": "ykm-codex-gpt-5-mini",
+  "upload_review_agent_model": "ykm-codex-gpt-5-mini",
+  "pr_repair_model": "ykm-codex-gpt-5-mini",
+  "feedback_agent_max_attempts": 2,
+  "upload_review_max_attempts": 2,
+  "pr_repair_max_per_run": 1,
+  "feedback_agent_validation_command": ["mise", "run", "validate"],
+  "upload_review_validation_command": ["mise", "run", "validate"],
+  "pr_repair_validation_command": ["mise", "run", "validate"]
+}
+```
+
+The timer principal should be scoped to `ykm-curator-live`, `ykm-curator-dry-run`, and
+`ykm-curator-state-only`. Keep `ykm-curator-upload-pr-live`, `ykm-curator-feedback-live`, and
+`ykm-curator-repair-live` available for manual rollback or operator diagnostics during this
+milestone, but do not point the timer at those one-area profiles.
+
+Before enabling the timer change, manually launch the live profile with the operator token:
+
+```bash
+ssh hermes-vps '
+cd /docker/gh-agent-broker
+set -a; . ./.env; set +a
+curl -fsS -X POST \
+  -H "Authorization: Bearer ${YKM_CURATOR_SANDBOX_ADMIN_TOKEN}" \
+  http://127.0.0.1:8091/v1/launch-profiles/ykm-curator-live/launch
+'
+```
+
+Inspect `/srv/hermes-sandbox-broker/runs/<RUN_ID>/output/run-report.json` and confirm:
+
+- `mode=manual_live`
+- `enabled_actions` contains `plan_feedback`, `plan_uploads`, `reconcile`, and `repair_prs`
+- `reconciliation.pr_reconciliation_count` is nonzero when Curator PRs exist
+- `pr_repair_result_count` is at most `1`
+- `upload_review_observation_count` and `upload_metadata_update_count` are at most `1`
+- `feedback_decisions_appended` is at most `2`
+- `github_mutation_count` is at most `3`
 
 ## Manual State-Only Launch
 

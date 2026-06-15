@@ -1,7 +1,7 @@
 # YouKnowMe Curator Implementation Status
 
-Status: initial production-safe manual workflow implemented; live mutation/model execution remains
-contract-blocked.
+Status: single live Curator runner path implemented and covered locally; production profile wiring
+is owned by the deployment repository.
 
 Use this file to restart Curator implementation work without relying on chat history. The contract
 source of truth remains `docs/ykm-phase4-curator.md` and `docs/ykm-curator-contracts.md`.
@@ -58,9 +58,14 @@ source of truth remains `docs/ykm-phase4-curator.md` and `docs/ykm-curator-contr
 - Broker-backed upload review PR creation for `manual_live` runs after validation passes. The worker
   clones through the broker Git remote, reapplies the draft, re-runs corpus validation, pushes a
   deterministic Curator branch, and opens a broker `pull.create` PR with Curator metadata.
+- Agentic feedback processing for `manual_live` runs with `feedback_executor: "codex_proxy"`,
+  including broker issue creation for issue outcomes and Codex-backed corpus PR creation for PR
+  outcomes.
 - Opt-in PR repair action for open Curator PRs. `repair_prs` can use a fixture executor in tests or
   `codex_proxy` to run `codex exec` in a broker-cloned checkout, validate the diff, and in
   `manual_live` push back to the existing Curator branch.
+- Combined `manual_live` runs can reconcile PR state, process feedback, process one upload, and
+  repair one Curator PR in a single report using the production `codex_proxy` executor fields.
 - Run reports in JSON and Markdown with plans, summaries, failures, preflights, policy results,
   reconciliation, referenced evidence, capacity deferrals, and model budget fields.
 
@@ -83,10 +88,10 @@ Observed result at the latest Curator handoff:
 ## Contract-Blocked Or Future Work
 
 - Broker-backed GitHub reads for PR and issue reconciliation are implemented behind explicit
-  `--enable-broker-reads` opt-in. They remain read-only and do not create branches, PRs, issues, or
-  comments.
+  `--enable-broker-reads` opt-in. They remain read-only and separate from mutation execution.
 - Broker-backed upload review PR creation is enabled only for validated `manual_live` upload-review
-  observations. Feedback issue/PR creation, PR comments, and branch maintenance remain disabled.
+  observations. Feedback issue/PR creation and PR repair handoff mutations are enabled only through
+  task-explicit `codex_proxy` executor settings plus broker/proxy preflight.
 - Model-backed feedback planning and upload-review observe remain explicit opt-ins. Offline and
   live-proxy eval harnesses exist; production live model calls require a future planning execution
   contract.
@@ -94,12 +99,12 @@ Observed result at the latest Curator handoff:
   Reconciliation can still discover the PR later from Curator markers and branch naming.
 - Add real upload claim/process/reject/archive queue movement only after the queue mutation contract is
   explicitly enabled.
-- Add PR maintenance actions for owner comments, requested changes, failed checks, and stale/blocked
-  PRs after the edit/comment execution contract is enabled.
-- Add the production launcher outside the Curator worker: an owner-controlled `systemd` timer or
-  equivalent VPS operator wrapper that invokes sandbox-broker with the Curator template and task
-  contract. Curator is not an always-on daemon, YKM serving does not launch it, and broker services do
-  not decide when it should run.
+- Add broader PR maintenance actions for owner comments, failed checks, and stale/blocked PRs after
+  their edit/comment execution contracts are explicitly enabled.
+- Add or update the production launcher outside the Curator worker so the owner-controlled timer
+  invokes sandbox-broker profile `ykm-curator-live` with the combined live task contract. Curator is
+  not an always-on daemon, YKM serving does not launch it, and broker services do not decide when it
+  should run.
 
 ## Completion Audit
 
@@ -109,10 +114,10 @@ Observed result at the latest Curator handoff:
 - Deterministic controller: satisfied for the contracted initial manual workflow. It validates task
   contracts, locks runs, freezes feedback windows, plans feedback/uploads, reconciles fixture and
   opt-in broker-read snapshots, applies state-only safe decisions, and writes JSON/Markdown reports.
-- Broker boundary: satisfied for reads, preflight, and upload PR creation. Live reads are opt-in and
-  authenticated through broker agent credentials only. Upload PR mutations use broker Git and
-  broker `pull.create`; other mutations remain represented as policy-checked intents or fixture
-  simulations until their future execution contracts enable them.
+- Broker boundary: satisfied for reads, preflight, upload PR creation, feedback issue/PR execution,
+  and PR repair handoffs when the task explicitly enables the relevant executor. Live reads are
+  opt-in and authenticated through broker agent credentials only. Mutations use broker Git and broker
+  mutation surfaces, not direct GitHub tokens.
 - Model boundary: satisfied for health, budgets, and typed fixture validation. Live model planning is
   intentionally closed until a future model execution contract enables it.
 - Upload queue mutation: intentionally deferred by contract. Upload plans and reconciliation previews
@@ -120,10 +125,10 @@ Observed result at the latest Curator handoff:
 
 ## Next Implementation Targets
 
-1. Wire the VPS Curator launcher: sandbox-broker template plus an owner-controlled `systemd` timer or
-   manual wrapper that invokes sandbox-broker and collects `/output/run-report.json`.
-2. Define the future broker mutation execution contract for feedback PR/issue creation, comments,
-   branch edits, idempotency reuse, and budget-denial persistence.
+1. Wire the VPS Curator launcher to the single `ykm-curator-live` sandbox-broker profile and update
+   the timer principal to allow only that live profile plus dry/state diagnostics.
+2. Define any remaining broker mutation execution contracts for broader PR maintenance, branch
+   edits, idempotency reuse, and budget-denial persistence.
 3. Define the future model execution contract for feedback planning, upload review, PR comment
    classification, and PR body drafting.
 4. Define the future queue movement contract before any upload directory moves are enabled.
