@@ -64,7 +64,9 @@ from curator.state import (
     CuratorLiveLockError,
     CuratorRunLock,
     CuratorStaleLockError,
+    JsonlRecordCountError,
     advanced_state,
+    count_jsonl_records,
     freeze_feedback_window,
     load_latest_feedback_decisions,
     read_curator_state,
@@ -1492,17 +1494,14 @@ def _count_jsonl(path: Path, name: str, probes: list[CuratorProbe]) -> int:
     if not path.exists():
         probes.append(CuratorProbe(name=name, status="skip", message=f"JSONL file absent: {path}"))
         return 0
-    count = 0
     try:
-        with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                if not line.strip():
-                    continue
-                json.loads(line)
-                count += 1
-    except (OSError, json.JSONDecodeError) as exc:
+        count = count_jsonl_records(path)
+    except JsonlRecordCountError as exc:
         probes.append(CuratorProbe(name=name, status="fail", message=f"JSONL read failed: {exc}"))
-        return count
+        return exc.count
+    except OSError as exc:
+        probes.append(CuratorProbe(name=name, status="fail", message=f"JSONL read failed: {exc}"))
+        return 0
     probes.append(CuratorProbe(name=name, status="pass", message=f"{count} JSONL records readable"))
     return count
 

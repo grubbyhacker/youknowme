@@ -28,6 +28,12 @@ from curator.models import (
 )
 
 
+class JsonlRecordCountError(ValueError):
+    def __init__(self, count: int, cause: JSONDecodeError) -> None:
+        super().__init__(str(cause))
+        self.count = count
+
+
 class CuratorLockError(RuntimeError):
     pass
 
@@ -347,6 +353,22 @@ def load_latest_feedback_decisions(path: Path) -> dict[str, FeedbackDecision]:
             if current is None or (decision.timestamp, line_no) >= (current[0], current[1]):
                 latest[decision.feedback_id] = (decision.timestamp, line_no, decision)
     return {feedback_id: entry[2] for feedback_id, entry in latest.items()}
+
+
+def count_jsonl_records(path: Path) -> int:
+    if not path.exists():
+        return 0
+    count = 0
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                json.loads(line)
+            except JSONDecodeError as exc:
+                raise JsonlRecordCountError(count, exc) from exc
+            count += 1
+    return count
 
 
 def snapshot_upload_queue(intake_path: Path) -> UploadQueueSnapshot:

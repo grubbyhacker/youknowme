@@ -17,6 +17,13 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
+from curator.models import FeedbackInputRecord
+from curator.state import (
+    JsonlRecordCountError,
+    count_jsonl_records,
+    load_latest_feedback_decisions,
+    snapshot_upload_queue,
+)
 from ykm.auth import AuthConfig, AuthMiddleware, AuthVerifier
 from ykm.contracts import (
     FeedbackRequest,
@@ -85,17 +92,33 @@ class IndexReadinessMiddleware(BaseHTTPMiddleware):
 
 
 def curator_status_payload(intake_root: Path, now: float | None = None) -> dict[str, Any]:
+    queue_snapshot = snapshot_upload_queue(intake_root)
+    upload_counts = dict(queue_snapshot.counts)
+
     pending_root = intake_root / "uploads" / "pending"
     pending_dirs: list[Path] = []
     if pending_root.exists():
         for path in pending_root.iterdir():
-            if path.is_dir() and not (path / "curator.json").exists():
+            if path.is_dir():
                 pending_dirs.append(path)
 
-    oldest_pending_seconds = 0
+    uploads_oldest_pending_seconds = 0
     if pending_dirs:
         oldest_mtime = min(path.stat().st_mtime for path in pending_dirs)
-        oldest_pending_seconds = int(max(0, (time.time() if now is None else now) - oldest_mtime))
+        uploads_oldest_pending_seconds = int(
+            max(0, (time.time() if now is None else now) - oldest_mtime)
+        )
+
+    feedback_path = intake_root / "feedback" / "feedback.jsonl"
+    decisions_path = intake_root / "feedback" / "curator-decisions.jsonl"
+    try:
+        feedback_total = count_jsonl_records(feedback_path)
+    except JsonlRecordCountError as exc:
+        feedback_total = exc.count
+    latest_decisions = load_latest_feedback_decisions(decisions_path)
+    feedback_ids = _feedback_ids(feedback_path)
+    feedback_decided = sum(1 for feedback_id in feedback_ids if feedback_id in latest_decisions)
+    feedback_undecided = max(0, feedback_total - feedback_decided)
 
     status_path = intake_root / "curator-status.json"
     last_run = None
@@ -103,10 +126,33 @@ def curator_status_payload(intake_root: Path, now: float | None = None) -> dict[
         last_run = json.loads(status_path.read_text(encoding="utf-8"))
 
     return {
-        "queue_depth": len(pending_dirs),
-        "oldest_pending_seconds": oldest_pending_seconds,
+        "uploads": upload_counts,
+        "uploads_oldest_pending_seconds": uploads_oldest_pending_seconds,
+        "feedback": {
+            "total": feedback_total,
+            "decided": feedback_decided,
+            "undecided": feedback_undecided,
+        },
         "last_run": last_run,
+        "queue_depth": upload_counts["pending"],
+        "oldest_pending_seconds": uploads_oldest_pending_seconds,
     }
+
+
+def _feedback_ids(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    feedback_ids: list[str] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                record = FeedbackInputRecord.model_validate(json.loads(line))
+            except ValueError:
+                continue
+            feedback_ids.append(record.feedback_id)
+    return feedback_ids
 
 
 def create_app(index_path: Path, mode: str = "local") -> Starlette:
