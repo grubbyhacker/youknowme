@@ -160,21 +160,31 @@ def _execute_one_repair(
                     transcript_path=str(transcript_path),
                 )
             if _has_workflow_changed_file(changed_files):
-                diff_stat = _git_output(["diff", "--stat"], cwd=checkout, env=git_env)
-                return _repair_result(
-                    reconciliation,
-                    executor=executor,
-                    model=model,
-                    status="rejected",
-                    message=(
-                        "Codex PR repair changed GitHub workflow files, but the Curator "
-                        "GitHub App is not granted workflow write permission."
-                    ),
-                    changed_files=changed_files,
-                    diff_stat=diff_stat,
-                    validation_command=validation_command,
-                    transcript_path=str(transcript_path),
+                discarded_workflow_files = _workflow_changed_files(changed_files)
+                _discard_workflow_changes(checkout, git_env)
+                changed_files = _changed_files(checkout, git_env)
+                if not changed_files:
+                    return _repair_result(
+                        reconciliation,
+                        executor=executor,
+                        model=model,
+                        status="skipped",
+                        message=(
+                            "Codex PR repair only changed GitHub workflow files. The Curator "
+                            "discarded those edits because the GitHub App cannot push workflow "
+                            "changes."
+                        ),
+                        changed_files=[],
+                        diff_stat="",
+                        validation_command=validation_command,
+                        transcript_path=str(transcript_path),
+                    )
+                workflow_note = (
+                    " Discarded GitHub workflow edits that the Curator GitHub App cannot push: "
+                    f"{', '.join(discarded_workflow_files)}."
                 )
+            else:
+                workflow_note = ""
             validation = _run_validation(checkout, validation_command)
             diff_stat = _git_output(["diff", "--stat"], cwd=checkout, env=git_env)
             if validation.returncode != 0:
@@ -198,7 +208,10 @@ def _execute_one_repair(
                     executor=executor,
                     model=model,
                     status="validated",
-                    message="PR repair validated in observe mode; branch was not pushed.",
+                    message=(
+                        "PR repair validated in observe mode; branch was not pushed."
+                        f"{workflow_note}"
+                    ),
                     changed_files=changed_files,
                     diff_stat=diff_stat,
                     validation_command=validation_command,
@@ -252,7 +265,10 @@ def _execute_one_repair(
                 executor=executor,
                 model=model,
                 status="pushed",
-                message="PR repair validated and pushed to the existing Curator branch.",
+                message=(
+                    "PR repair validated and pushed to the existing Curator branch."
+                    f"{workflow_note}"
+                ),
                 changed_files=changed_files,
                 repair_head_sha=repair_head_sha,
                 diff_stat=diff_stat,
@@ -390,8 +406,9 @@ def _repair_prompt(
         "Make the minimum repo changes needed to satisfy the review and validation. "
         "Do not merge, close, relabel, or use network services directly. "
         "Do not commit; leave changes in the working tree for the Curator to validate. "
-        "Do not edit `.github/workflows/*`; the Curator GitHub App cannot push workflow "
-        "changes with its current permissions. "
+        "Do not edit `.github/workflows/**`; the Curator GitHub App cannot push workflow "
+        "changes with its current permissions. If the requested repair appears to require "
+        "workflow changes, leave those files untouched and explain what you skipped. "
         "Avoid broad exploration. If the review evidence names concrete files, fields, "
         "or path filters, edit those files directly before running validation.\n\n"
         f"PR: #{reconciliation.pr_number} {title}\n"
@@ -490,6 +507,21 @@ def _has_forbidden_changed_file(paths: list[str]) -> bool:
 
 def _has_workflow_changed_file(paths: list[str]) -> bool:
     return any(path.startswith(".github/workflows/") for path in paths)
+
+
+def _workflow_changed_files(paths: list[str]) -> list[str]:
+    return sorted(path for path in paths if path.startswith(".github/workflows/"))
+
+
+def _discard_workflow_changes(checkout: Path, env: dict[str, str]) -> None:
+    tracked_workflows = _git_output(["ls-files", "--", ".github/workflows"], cwd=checkout, env=env)
+    if tracked_workflows.strip():
+        _run_git(
+            ["restore", "--source=HEAD", "--staged", "--worktree", "--", ".github/workflows"],
+            cwd=checkout,
+            env=env,
+        )
+    _run_git(["clean", "-fd", "--", ".github/workflows"], cwd=checkout, env=env)
 
 
 def _run_git(args: list[str], *, cwd: Path | None, env: dict[str, str]) -> None:

@@ -68,6 +68,7 @@ from curator.pr_repair import (
     _has_workflow_changed_file,
     _repair_prompt,
     _review_request_comment,
+    execute_pr_repairs,
 )
 from curator.upload_agent import _upload_agent_prompt, execute_agentic_upload_review_prs
 from curator.pr_reconcile import reconcile_pr_snapshots
@@ -4845,6 +4846,8 @@ def test_pr_repair_prompt_includes_review_bodies_and_inline_threads() -> None:
     assert "create or use that root directly" in prompt
     assert "do not nest it under an existing root such as `preferences/dev/`" in prompt
     assert "Use `dev/` for development environment" in prompt
+    assert "Do not edit `.github/workflows/**`" in prompt
+    assert "explain what you skipped" in prompt
 
 
 def test_upload_agent_prompt_allows_policy_edits_and_requires_summary(tmp_path: Path) -> None:
@@ -5090,6 +5093,190 @@ def test_pr_repair_classifies_workflow_file_changes_as_permission_blocked() -> N
             "preferences/dev-environment.md",
         ]
     )
+
+
+def test_pr_repair_discards_workflow_changes_and_pushes_allowed_changes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    branch = "curator/run-pr-repair/upload-upl-20260606"
+    remote = tmp_path / "remote.git"
+    seed = tmp_path / "seed"
+    verify = tmp_path / "verify"
+    _git_for_test(["init", "--bare", str(remote)])
+    _git_for_test(["clone", str(remote), str(seed)])
+    _git_for_test(["checkout", "-b", branch], cwd=seed)
+    (seed / ".github" / "workflows").mkdir(parents=True)
+    (seed / "homemaint").mkdir()
+    (seed / ".github" / "workflows" / "corpus-validation.yml").write_text(
+        "name: original validation\n",
+        encoding="utf-8",
+    )
+    (seed / "homemaint" / "manual.md").write_text("needs repair\n", encoding="utf-8")
+    _git_for_test(["add", "--all"], cwd=seed)
+    _git_for_test(
+        [
+            "-c",
+            "user.name=Test Curator",
+            "-c",
+            "user.email=curator@example.test",
+            "commit",
+            "-m",
+            "Seed curator branch",
+        ],
+        cwd=seed,
+    )
+    _git_for_test(["push", "origin", branch], cwd=seed)
+
+    def fake_run_codex(**kwargs) -> Path:
+        checkout = kwargs["checkout"]
+        (checkout / ".github" / "workflows" / "corpus-validation.yml").write_text(
+            "name: forbidden validation edit\n",
+            encoding="utf-8",
+        )
+        (checkout / "homemaint" / "manual.md").write_text("fixed\n", encoding="utf-8")
+        transcript = kwargs["output"] / "transcript.txt"
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text("codex repaired allowed file and skipped workflow push\n", encoding="utf-8")
+        return transcript
+
+    monkeypatch.setattr("curator.pr_repair._run_codex", fake_run_codex)
+    monkeypatch.setenv("BROKER_AGENT_ID", "ykm-curator")
+    monkeypatch.setenv("BROKER_AGENT_SECRET", "broker-secret")
+
+    results = execute_pr_repairs(
+        run_id="run-pr-repair",
+        mode="manual_live",
+        reconciliations=[
+            CuratorPrReconciliation(
+                pr_number=5,
+                pr_state="changes_requested",
+                branch=branch,
+                run_id="run-pr-repair",
+                reason="owner requested repair",
+            )
+        ],
+        snapshots=[],
+        executor="codex_proxy",
+        model="ykm-codex-gpt-5-mini",
+        validation_command=[
+            sys.executable,
+            "-c",
+            (
+                "from pathlib import Path; "
+                "assert Path('homemaint/manual.md').read_text() == 'fixed\\n'; "
+                "assert Path('.github/workflows/corpus-validation.yml').read_text() "
+                "== 'name: original validation\\n'"
+            ),
+        ],
+        max_repairs=1,
+        output=tmp_path / "output",
+        broker_remote_url=str(remote),
+        codex_proxy_base_url="http://proxy:8092/v1",
+        codex_proxy_token="proxy-token",
+    )
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.status == "pushed"
+    assert result.pushed
+    assert result.changed_files == ["homemaint/manual.md"]
+    assert ".github/workflows/corpus-validation.yml" not in result.changed_files
+    assert "Discarded GitHub workflow edits" in result.message
+    assert result.validation_returncode == 0
+
+    _git_for_test(["clone", "--branch", branch, str(remote), str(verify)])
+    assert (verify / "homemaint" / "manual.md").read_text(encoding="utf-8") == "fixed\n"
+    assert (
+        verify / ".github" / "workflows" / "corpus-validation.yml"
+    ).read_text(encoding="utf-8") == "name: original validation\n"
+
+
+def test_runner_treats_pr_repair_workflow_guardrail_skip_as_handled(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    intake = tmp_path / "intake"
+    (intake / "feedback").mkdir(parents=True)
+    (intake / "feedback" / "feedback.jsonl").write_text("", encoding="utf-8")
+    task = tmp_path / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "run_id": "run-pr-repair",
+                "mode": "dry_run",
+                "enabled_actions": ["reconcile", "repair_prs"],
+                "pr_repair_executor": "codex_proxy",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    broker_fixture = tmp_path / "broker-fixture.json"
+    broker_fixture.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "reachable": True,
+                "pr_snapshots": [
+                    {
+                        "number": 5,
+                        "state": "open",
+                        "body": "YKM-Curator-Run: run-pr-repair\n",
+                        "branch": "curator/run-pr-repair/upload-upl-20260606",
+                        "labels": ["ym-curator: needs work"],
+                        "review_decision": "changes_requested",
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    model_proxy_fixture = tmp_path / "model-proxy-fixture.json"
+    model_proxy_fixture.write_text(
+        json.dumps({"schema_version": "1", "reachable": True}) + "\n",
+        encoding="utf-8",
+    )
+
+    def fake_pr_repairs(**kwargs):
+        return [
+            PrRepairResult(
+                pr_number=5,
+                branch="curator/run-pr-repair/upload-upl-20260606",
+                pr_state="changes_requested",
+                executor="codex_proxy",
+                model=kwargs["model"],
+                status="skipped",
+                message=(
+                    "Codex PR repair only changed GitHub workflow files. The Curator discarded "
+                    "those edits because the GitHub App cannot push workflow changes."
+                ),
+                changed_files=[],
+                validation_command=kwargs["validation_command"],
+            )
+        ]
+
+    monkeypatch.setattr("curator.runner.execute_pr_repairs", fake_pr_repairs)
+
+    report = run_curator_dry_run(
+        CuratorDryRunConfig(
+            run_id="ignored",
+            intake=intake,
+            output=tmp_path / "output",
+            task=task,
+            broker_fixture=broker_fixture,
+            model_proxy_fixture=model_proxy_fixture,
+            codex_proxy_base_url="http://proxy:8092/v1",
+            codex_proxy_token="proxy-token",
+        )
+    )
+
+    assert report.status == "pass", report.partial_failures
+    assert report.partial_failures == []
+    assert report.pr_repair_results[0]["status"] == "skipped"
+    assert any(probe.name == "pr-repair" and probe.status == "pass" for probe in report.probes)
 
 
 def test_runner_fixture_repairs_actionable_curator_pr(
@@ -8443,6 +8630,17 @@ def _fake_upload_agent_git(tmp_path: Path, monkeypatch) -> Path:
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     return script
+
+
+def _git_for_test(args: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+    )
 
 
 def _fake_mise(
