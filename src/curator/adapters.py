@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Protocol, TypeVar
+from typing import Any, Literal, Protocol, TypeVar
 from urllib.parse import quote
 
 import httpx
@@ -550,12 +550,27 @@ class HttpBrokerAdapter:
         if not unique_numbers:
             return [], None
         snapshots: list[CuratorIssueSnapshot] = []
+        skipped: list[dict[str, Any]] = []
         try:
             for issue_number in unique_numbers:
-                issue = self._get_json(
+                response = self._request(
+                    "GET",
                     f"/v1/repos/{target_repo}/issues/{issue_number}",
                     authenticated=True,
                 )
+                if _is_issue_not_found_response(response):
+                    skipped.append(
+                        {
+                            "number": issue_number,
+                            "reason": "not_found",
+                            "status_code": response.status_code,
+                            "error_code": _broker_error_code(response),
+                        }
+                    )
+                    continue
+                if response.status_code >= 400:
+                    raise ValueError(f"broker read failed with HTTP {response.status_code}")
+                issue = response.json()
                 if not isinstance(issue, dict):
                     raise ValueError(f"issue read returned non-object for #{issue_number}")
                 snapshots.append(_issue_snapshot_from_raw(issue))
@@ -565,11 +580,19 @@ class HttpBrokerAdapter:
                 status="fail",
                 message=f"broker issue read failed: {exc}",
             )
+        details: dict[str, Any] = {"count": len(snapshots)}
+        if skipped:
+            details["skipped_count"] = len(skipped)
+            details["skipped"] = skipped
+        status: Literal["pass", "skip"] = "skip" if skipped and not snapshots else "pass"
+        message = "broker issue snapshots loaded"
+        if skipped:
+            message = "broker issue snapshots loaded; skipped missing issues"
         return snapshots, CuratorProbe(
             name="broker-issue-read",
-            status="pass",
-            message="broker issue snapshots loaded",
-            details={"count": len(snapshots)},
+            status=status,
+            message=message,
+            details=details,
         )
 
     def preflight_intents(self, intents: list[ExecutionIntent]) -> list[CuratorProbe]:
@@ -1445,6 +1468,51 @@ def _run_id_from_branch(branch: str | None) -> str | None:
     if len(parts) < 3 or parts[0] != "curator":
         return None
     return parts[1] or None
+
+
+def _is_issue_not_found_response(response: httpx.Response) -> bool:
+    error_code = _broker_error_code(response)
+    if error_code == "github_not_found":
+        return True
+    if response.status_code == 404:
+        return True
+    if response.status_code != 502:
+        return False
+    text = _broker_error_text(response).lower()
+    return "github_not_found" in text or ("404" in text and "not found" in text)
+
+
+def _broker_error_code(response: httpx.Response) -> str | None:
+    try:
+        raw = response.json()
+    except ValueError:
+        return None
+    return _find_error_code(raw)
+
+
+def _find_error_code(value: Any) -> str | None:
+    if isinstance(value, dict):
+        for key in ("code", "error_code"):
+            raw_code = value.get(key)
+            if isinstance(raw_code, str):
+                return raw_code
+        for nested in value.values():
+            code = _find_error_code(nested)
+            if code is not None:
+                return code
+    elif isinstance(value, list):
+        for nested in value:
+            code = _find_error_code(nested)
+            if code is not None:
+                return code
+    return None
+
+
+def _broker_error_text(response: httpx.Response) -> str:
+    try:
+        return response.text[:1000]
+    except UnicodeDecodeError:
+        return ""
 
 
 def _issue_snapshot_from_raw(raw: dict[str, Any]) -> CuratorIssueSnapshot:
