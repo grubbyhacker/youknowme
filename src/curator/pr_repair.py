@@ -29,22 +29,6 @@ REPAIRABLE_PR_STATES = {
     "checks_failed",
     "checks_missing",
 }
-PROTECTED_REPAIR_PATHS = {
-    ".gitignore",
-    "AGENTS.md",
-    "README.md",
-    "mise.toml",
-    "pyproject.toml",
-    "uv.lock",
-}
-PROTECTED_REPAIR_PREFIXES = (
-    ".github/workflows/",
-    ".ykm/",
-    "scripts/",
-    "tests/",
-)
-
-
 @dataclass(frozen=True)
 class RepairDelta:
     changed_files: list[str]
@@ -216,7 +200,6 @@ def _execute_one_repair(
                 workflow_note = ""
             guardrail_message = _repair_guardrail_message(
                 delta,
-                review_evidence=_review_evidence(snapshot),
                 allow_override=_has_blast_radius_override(reconciliation, snapshot),
             )
             if guardrail_message:
@@ -320,7 +303,6 @@ def _execute_one_repair(
             committed_delta = _committed_repair_delta(checkout, git_env)
             commit_guardrail_message = _repair_guardrail_message(
                 committed_delta,
-                review_evidence=_review_evidence(snapshot),
                 allow_override=_has_blast_radius_override(reconciliation, snapshot),
             )
             if commit_guardrail_message:
@@ -665,7 +647,6 @@ def _deleted_files(checkout: Path, env: dict[str, str], revision: str) -> list[s
 def _repair_guardrail_message(
     delta: RepairDelta,
     *,
-    review_evidence: list[str],
     allow_override: bool = False,
 ) -> str | None:
     if allow_override:
@@ -682,18 +663,6 @@ def _repair_guardrail_message(
             f"{len(delta.deleted_files)} deleted files exceeds limit "
             f"{MAX_REPAIR_DELETED_FILES}."
         )
-    protected_without_evidence = [
-        path
-        for path in delta.changed_files
-        if _is_protected_repair_path(path)
-        and not _review_evidence_names_path(path, review_evidence)
-    ]
-    if protected_without_evidence:
-        return (
-            "Codex PR repair rejected by protected-path guardrail: review evidence "
-            "does not name protected path(s) "
-            f"{', '.join(protected_without_evidence)}."
-        )
     return None
 
 
@@ -705,14 +674,6 @@ def _has_blast_radius_override(
     if snapshot is not None:
         labels.extend(snapshot.labels)
     return any(label.strip().lower() == REPAIR_BLAST_RADIUS_OVERRIDE_LABEL for label in labels)
-
-
-def _is_protected_repair_path(path: str) -> bool:
-    return path in PROTECTED_REPAIR_PATHS or path.startswith(PROTECTED_REPAIR_PREFIXES)
-
-
-def _review_evidence_names_path(path: str, review_evidence: list[str]) -> bool:
-    return any(path in evidence for evidence in review_evidence)
 
 
 def _has_forbidden_changed_file(paths: list[str]) -> bool:

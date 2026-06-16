@@ -5592,12 +5592,11 @@ def test_pr_repair_blast_radius_override_label_bypasses_size_guard() -> None:
     assert _has_blast_radius_override(reconciliation, snapshot)
     assert _repair_guardrail_message(
         delta,
-        review_evidence=[],
         allow_override=_has_blast_radius_override(reconciliation, snapshot),
     ) is None
 
 
-def test_pr_repair_allows_named_protected_policy_change(
+def test_pr_repair_allows_policy_change_without_exact_path_authorization(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -5664,7 +5663,7 @@ def test_pr_repair_allows_named_protected_policy_change(
                 number=5,
                 state="open",
                 branch=branch,
-                review_comments=["Please update `.ykm/corpus-policy.yaml` to add dev."],
+                review_comments=["Please create a new top-level corpus root called `dev/`."],
             )
         ],
         executor="codex_proxy",
