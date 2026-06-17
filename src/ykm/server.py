@@ -32,7 +32,9 @@ from ykm.contracts import (
     RetrieveRequest,
     UploadFileInput,
     UploadRequest,
+    UploadResponse,
 )
+from ykm.curator_trigger import CuratorUploadTrigger, CuratorUploadTriggerConfig
 from ykm.embeddings import provider_from_env
 from ykm.index import YkmIndex
 from ykm.intake import IntakeStore
@@ -155,10 +157,23 @@ def _feedback_ids(path: Path) -> list[str]:
     return feedback_ids
 
 
+def stage_upload_for_mcp(
+    intake: IntakeStore,
+    request: UploadRequest,
+    *,
+    build_id: str | None,
+    trigger: CuratorUploadTrigger,
+) -> UploadResponse:
+    response = intake.stage_upload(request, build_id=build_id, auth_path="mcp")
+    trigger.record_upload(response.upload_id)
+    return response
+
+
 def create_app(index_path: Path, mode: str = "local") -> Starlette:
     auth_config = AuthConfig.from_env(mode)
     provider = provider_from_env()
     intake = IntakeStore(Path(os.getenv("YKM_INTAKE_PATH", "/data/intake")))
+    curator_upload_trigger = CuratorUploadTrigger(CuratorUploadTriggerConfig.from_env())
     query_logger = JsonlLogger(
         Path(os.getenv("YKM_LOG_PATH")) if os.getenv("YKM_LOG_PATH") else None,
         int(os.getenv("YKM_LOG_RETENTION_DAYS", "90")),
@@ -336,7 +351,8 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
         suggested_related: list[str] | None = None,
     ) -> dict[str, Any]:
         index = loaded_index()
-        response = intake.stage_upload(
+        response = stage_upload_for_mcp(
+            intake,
             UploadRequest(
                 files=[UploadFileInput(**file) for file in files],
                 purpose=purpose,
@@ -345,7 +361,7 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
                 suggested_related=suggested_related or [],
             ),
             build_id=index.manifest.build_id,
-            auth_path="mcp",
+            trigger=curator_upload_trigger,
         )
         return response.model_dump(mode="json")
 
@@ -410,7 +426,10 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
 
         load_task = asyncio.create_task(load_index())
         async with mcp.session_manager.run():
-            yield
+            try:
+                yield
+            finally:
+                curator_upload_trigger.stop()
         if not load_task.done():
             load_task.cancel()
             try:
