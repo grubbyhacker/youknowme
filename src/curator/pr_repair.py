@@ -217,7 +217,8 @@ def _execute_one_repair(
             changed_files = delta.changed_files
             validation = _run_validation(checkout, validation_command)
             diff_stat = _git_output(["diff", "--stat", "HEAD"], cwd=checkout, env=git_env)
-            if validation.returncode != 0:
+            validation_workflow_blocker = _is_workflow_path_filter_validation_failure(validation)
+            if validation.returncode != 0 and not validation_workflow_blocker:
                 return _repair_result(
                     reconciliation,
                     executor=executor,
@@ -233,15 +234,19 @@ def _execute_one_repair(
                     transcript_path=str(transcript_path),
                 )
             if mode != "manual_live":
+                status = "validation_failed" if validation_workflow_blocker else "validated"
+                message = (
+                    "PR repair hit a workflow path-filter validation blocker in observe mode; "
+                    "branch was not pushed."
+                    if validation_workflow_blocker
+                    else "PR repair validated in observe mode; branch was not pushed."
+                )
                 return _repair_result(
                     reconciliation,
                     executor=executor,
                     model=model,
-                    status="validated",
-                    message=(
-                        "PR repair validated in observe mode; branch was not pushed."
-                        f"{workflow_note}"
-                    ),
+                    status=status,
+                    message=f"{message}{workflow_note}",
                     changed_files=changed_files,
                     diff_stat=diff_stat,
                     validation_command=validation_command,
@@ -249,9 +254,17 @@ def _execute_one_repair(
                     validation_stdout_tail=_tail(validation.stdout),
                     validation_stderr_tail=_tail(validation.stderr),
                     transcript_path=str(transcript_path),
-                    review_request_comment=_review_request_comment(
-                        reconciliation,
-                        changed_files=changed_files,
+                    review_request_comment=(
+                        _workflow_blocker_comment(
+                            reconciliation,
+                            changed_files=changed_files,
+                            validation_stdout_tail=_tail(validation.stdout),
+                        )
+                        if validation_workflow_blocker
+                        else _review_request_comment(
+                            reconciliation,
+                            changed_files=changed_files,
+                        )
                     ),
                 )
             _run_git(["add", "--all"], cwd=checkout, env=git_env)
@@ -323,7 +336,10 @@ def _execute_one_repair(
                 validation_command,
                 env=git_env,
             )
-            if post_commit_validation.returncode != 0:
+            post_commit_workflow_blocker = _is_workflow_path_filter_validation_failure(
+                post_commit_validation
+            )
+            if post_commit_validation.returncode != 0 and not post_commit_workflow_blocker:
                 return _repair_result(
                     reconciliation,
                     executor=executor,
@@ -340,6 +356,32 @@ def _execute_one_repair(
                 )
             repair_head_sha = _git_output(["rev-parse", "HEAD"], cwd=checkout, env=git_env).strip()
             _run_git(["push", "origin", f"HEAD:refs/heads/{branch}"], cwd=checkout, env=git_env)
+            if post_commit_workflow_blocker:
+                return _repair_result(
+                    reconciliation,
+                    executor=executor,
+                    model=model,
+                    status="validation_failed",
+                    message=(
+                        "PR repair pushed semantic changes, but validation is blocked by a "
+                        "GitHub workflow path filter the Curator cannot edit."
+                    ),
+                    changed_files=committed_delta.changed_files,
+                    repair_head_sha=repair_head_sha,
+                    diff_stat=committed_diff_stat,
+                    validation_command=validation_command,
+                    validation_returncode=post_commit_validation.returncode,
+                    validation_stdout_tail=_tail(post_commit_validation.stdout),
+                    validation_stderr_tail=_tail(post_commit_validation.stderr),
+                    transcript_path=str(transcript_path),
+                    review_request_comment=_workflow_blocker_comment(
+                        reconciliation,
+                        changed_files=committed_delta.changed_files,
+                        validation_stdout_tail=_tail(post_commit_validation.stdout),
+                    ),
+                    review_request_comment_status="pending",
+                    pushed=True,
+                )
             return _repair_result(
                 reconciliation,
                 executor=executor,
@@ -691,6 +733,20 @@ def _workflow_changed_files(paths: list[str]) -> list[str]:
     return sorted(path for path in paths if path.startswith(".github/workflows/"))
 
 
+def _is_workflow_path_filter_validation_failure(
+    validation: subprocess.CompletedProcess[str],
+) -> bool:
+    if validation.returncode == 0:
+        return False
+    output = f"{validation.stdout}\n{validation.stderr}"
+    error_lines = [line.strip() for line in output.splitlines() if line.strip().startswith("- ")]
+    return (
+        len(error_lines) == 1
+        and "workflow path filters do not cover corpus root" in output
+        and ".github/workflows/" in output
+    )
+
+
 def _discard_workflow_changes(checkout: Path, env: dict[str, str]) -> None:
     tracked_workflows = _git_output(["ls-files", "--", ".github/workflows"], cwd=checkout, env=env)
     if tracked_workflows.strip():
@@ -791,6 +847,39 @@ def _review_request_comment(
         f"YKM-Curator-Run: {run_id}\n"
         "YKM-Curator-Action: repair\n"
         "YKM-Curator-Action-Type: pr_repair\n"
+        f"YKM-Curator-PR: {reconciliation.pr_number}\n"
+    )
+
+
+def _workflow_blocker_comment(
+    reconciliation: CuratorPrReconciliation,
+    *,
+    changed_files: list[str],
+    validation_stdout_tail: str,
+) -> str:
+    changed_list = "\n".join(f"- `{path}`" for path in changed_files) or "- No files listed."
+    run_id = reconciliation.run_id or "unknown"
+    validation_excerpt = validation_stdout_tail.strip() or "Validation failed before producing output."
+    return (
+        "Curator repair applied the semantic changes, but validation is blocked by a workflow "
+        "permission issue.\n\n"
+        "What I changed:\n"
+        f"{changed_list}\n\n"
+        "What is still blocked:\n"
+        "- Corpus validation now requires a GitHub workflow path-filter update. The Curator "
+        "GitHub App cannot push `.github/workflows/**` changes, so it left workflow files "
+        "untouched instead of working around the requested corpus paths.\n\n"
+        "Validation output:\n"
+        "```text\n"
+        f"{validation_excerpt}\n"
+        "```\n\n"
+        "Required owner/repo-maintainer action:\n"
+        "- Update the production index artifact workflow path filters to include the new corpus "
+        "root, then rerun validation.\n\n"
+        "## Curator Markers\n\n"
+        f"YKM-Curator-Run: {run_id}\n"
+        "YKM-Curator-Action: repair\n"
+        "YKM-Curator-Action-Type: pr_repair_workflow_blocked\n"
         f"YKM-Curator-PR: {reconciliation.pr_number}\n"
     )
 
