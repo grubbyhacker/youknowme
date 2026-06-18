@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
 import stat
 import subprocess
+import tarfile
 import time
 from pathlib import Path
 
@@ -82,6 +84,67 @@ def rmtree(path, ignore_errors=False, onerror=None, *args, **kwargs):
     assert "Installed corpus index" in result.stdout
 
 
+def test_install_corpus_index_script_emits_prometheus_metrics_on_success(
+    tmp_path: Path,
+) -> None:
+    packaged, index_path = _package_fixture_index(tmp_path)
+    deploy_root, compose_dir, env, _docker_log = _install_harness(tmp_path)
+    textfile_dir = tmp_path / "textfile-metrics"
+    textfile_dir.mkdir()
+    env["INDEX_DEPLOY_TEXTFILE_DIR"] = str(textfile_dir)
+
+    result = _run_install(packaged, deploy_root, compose_dir, env)
+
+    assert result.returncode == 0
+    manifest = json.loads((index_path / "manifest.json").read_text(encoding="utf-8"))
+    install_id = f"{_safe(manifest['source_commit'])}-{_safe(manifest['build_id'])}"
+    metrics_path = textfile_dir / "index_deploy.prom"
+    metrics = metrics_path.read_text(encoding="utf-8")
+    labels = f'install_id="{install_id}",source_commit="{manifest["source_commit"]}",build_id="{manifest["build_id"]}"'
+
+    assert _metric_value(metrics, "index_deploy_success", labels) == "1"
+    assert _metric_value(metrics, "index_deploy_container_healthy", labels) == "1"
+    assert int(_metric_value(metrics, "index_deploy_duration_seconds", labels)) >= 0
+    assert int(_metric_value(metrics, "index_deploy_timestamp_seconds", labels)) > 0
+    assert (
+        _metric_value(metrics, "index_deploy_artifact_bytes", labels)
+        == str(Path(packaged["tarball"]).stat().st_size)
+    )
+
+
+def test_install_corpus_index_script_emits_prometheus_metrics_on_early_failure(
+    tmp_path: Path,
+) -> None:
+    deploy_root, compose_dir, env, _docker_log = _install_harness(tmp_path)
+    bad_build = tmp_path / "bad-build"
+    bad_build.mkdir()
+    (bad_build / "README.md").write_text("missing manifest", encoding="utf-8")
+    bad_artifact = tmp_path / "bad-index.tar.gz"
+    with tarfile.open(bad_artifact, "w:gz") as tar:
+        tar.add(bad_build, arcname="bad-index")
+    bad_artifact_sha = tmp_path / "bad-index.sha256"
+    digest = hashlib.sha256(bad_artifact.read_bytes()).hexdigest()
+    bad_artifact_sha.write_text(f"{digest}  {bad_artifact.name}\n", encoding="utf-8")
+    bad_packaged = {"tarball": str(bad_artifact), "sha256": str(bad_artifact_sha)}
+    textfile_dir = tmp_path / "textfile-metrics-failure"
+    textfile_dir.mkdir()
+    env["INDEX_DEPLOY_TEXTFILE_DIR"] = str(textfile_dir)
+
+    result = _run_install(bad_packaged, deploy_root, compose_dir, env, check=False)
+
+    assert result.returncode != 0
+    metrics_path = textfile_dir / "index_deploy.prom"
+    metrics = metrics_path.read_text(encoding="utf-8")
+    unknown_labels = 'install_id="unknown",source_commit="unknown",build_id="unknown"'
+
+    assert _metric_value(metrics, "index_deploy_success", unknown_labels) == "0"
+    assert _metric_value(metrics, "index_deploy_container_healthy", unknown_labels) == "0"
+    assert (
+        _metric_value(metrics, "index_deploy_artifact_bytes", unknown_labels)
+        == str(bad_artifact.stat().st_size)
+    )
+
+
 def test_install_corpus_index_script_has_valid_bash_syntax() -> None:
     subprocess.run(["bash", "-n", str(SCRIPT)], check=True)
 
@@ -124,6 +187,8 @@ def _run_install(
     deploy_root: Path,
     compose_dir: Path,
     env: dict[str, str],
+    *,
+    check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -141,7 +206,7 @@ def _run_install(
             "--container-name",
             "youknowme-mcp",
         ],
-        check=True,
+        check=check,
         env=env,
         text=True,
         capture_output=True,
@@ -216,3 +281,11 @@ exec {real_mv} "$@"
 
 def _safe(value: str) -> str:
     return "".join(char if char.isalnum() or char in "._-" else "-" for char in value)[:120]
+
+
+def _metric_value(metrics: str, metric_name: str, labels: str) -> str:
+    prefix = f"{metric_name}{{{labels}}} "
+    for line in metrics.splitlines():
+        if line.startswith(prefix):
+            return line.rsplit(" ", 1)[1]
+    raise AssertionError(f"missing metric line: {prefix}")
