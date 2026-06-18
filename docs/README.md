@@ -34,5 +34,7 @@ Current planning artifacts:
   before Curator implementation.
 - `ykm-curator-dry-run-harness-milestone.md` - minimal Curator dry-run worker and sandbox report
   contract.
+- `ykm-curator-fallback-issue-triage-2026-06-18.md` - audit of stale Curator fallback GitHub issues
+  and the remaining owner-decision items.
 - `ykm-corpus-ci-artifact-prerequisite-milestone.md` - `ykmcorpus` CI validation and official
   LanceDB index artifact production prerequisite.
