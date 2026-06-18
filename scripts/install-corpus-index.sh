@@ -199,6 +199,7 @@ emit_index_deploy_metrics() {
       printf '# TYPE index_deploy_artifact_bytes gauge\n'
       printf 'index_deploy_artifact_bytes{%s} %s\n' "$labels" "$artifact_size_bytes"
     } >"$tmp_metrics" || { rm -f "$tmp_metrics"; return 0; }
+    chmod 0644 "$tmp_metrics" || true
     mv "$tmp_metrics" "$metrics_file"
   )
 }

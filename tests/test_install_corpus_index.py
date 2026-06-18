@@ -99,6 +99,7 @@ def test_install_corpus_index_script_emits_prometheus_metrics_on_success(
     manifest = json.loads((index_path / "manifest.json").read_text(encoding="utf-8"))
     install_id = f"{_safe(manifest['source_commit'])}-{_safe(manifest['build_id'])}"
     metrics_path = textfile_dir / "index_deploy.prom"
+    assert stat.S_IMODE(metrics_path.stat().st_mode) == 0o644
     metrics = metrics_path.read_text(encoding="utf-8")
     labels = f'install_id="{install_id}",source_commit="{manifest["source_commit"]}",build_id="{manifest["build_id"]}"'
 
@@ -134,6 +135,7 @@ def test_install_corpus_index_script_emits_prometheus_metrics_on_early_failure(
 
     assert result.returncode != 0
     metrics_path = textfile_dir / "index_deploy.prom"
+    assert stat.S_IMODE(metrics_path.stat().st_mode) == 0o644
     metrics = metrics_path.read_text(encoding="utf-8")
     unknown_labels = 'install_id="unknown",source_commit="unknown",build_id="unknown"'
 
