@@ -185,7 +185,9 @@ def test_live_upload_requires_confirmation(
     assert "rerun with --yes" in output.err
 
 
-def test_live_feedback_with_yes_calls_mcp(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+def test_live_corpus_change_with_yes_calls_mcp(
+    monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
@@ -197,7 +199,11 @@ def test_live_feedback_with_yes_calls_mcp(monkeypatch: pytest.MonkeyPatch, capsy
     def fake_call(_config, tool_name, arguments):
         captured["tool_name"] = tool_name
         captured["arguments"] = arguments
-        return {"accepted": True, "feedback_id": "fb_1", "path": "feedback/feedback.jsonl"}
+        return {
+            "accepted": True,
+            "corpus_change_id": "fb_1",
+            "path": "feedback/feedback.jsonl",
+        }
 
     monkeypatch.setattr(cli, "call_live_tool", fake_call)
     monkeypatch.setattr(
@@ -206,10 +212,10 @@ def test_live_feedback_with_yes_calls_mcp(monkeypatch: pytest.MonkeyPatch, capsy
         [
             "ykm",
             "live",
-            "feedback",
-            "--category",
-            "agent_note",
-            "--comment",
+            "corpus-change",
+            "--intent",
+            "add_to_existing",
+            "--instruction",
             "CLI smoke",
             "--source-id",
             "source",
@@ -226,10 +232,10 @@ def test_live_feedback_with_yes_calls_mcp(monkeypatch: pytest.MonkeyPatch, capsy
     cli.main()
 
     assert captured == {
-        "tool_name": "feedback",
+        "tool_name": "corpus_change",
         "arguments": {
-            "category": "agent_note",
-            "comment": "CLI smoke",
+            "intent": "add_to_existing",
+            "instruction": "CLI smoke",
             "result_ids": ["result-1"],
             "section_id": "section",
             "source_id": "source",
@@ -238,6 +244,6 @@ def test_live_feedback_with_yes_calls_mcp(monkeypatch: pytest.MonkeyPatch, capsy
     }
     assert json.loads(capsys.readouterr().out) == {
         "accepted": True,
-        "feedback_id": "fb_1",
+        "corpus_change_id": "fb_1",
         "path": "feedback/feedback.jsonl",
     }

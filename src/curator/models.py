@@ -17,15 +17,7 @@ UPLOAD_QUEUE_DIRS = ("pending", "claimed", "processed", "rejected", "archive", "
 
 CuratorMode = Literal["dry_run", "state_only", "manual_live"]
 CuratorEnabledAction = Literal["reconcile", "plan_feedback", "plan_uploads", "repair_prs"]
-CuratorActionType = Literal[
-    "corpus_pr",
-    "corpus_issue",
-    "product_issue",
-    "no_action",
-    "issue",
-    "link_to_upload",
-    "defer",
-]
+CuratorActionType = Literal["corpus_pr", "corpus_issue", "no_action", "issue", "link_to_upload", "defer"]
 CuratorActionExecution = Literal["not_executed", "executed", "skipped"]
 CuratorActionValidation = Literal["accepted", "rejected"]
 CuratorRunStatus = Literal["pass", "fail"]
@@ -216,7 +208,10 @@ class FeedbackInputRecord(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     feedback_id: str
+    intent: str | None = None
+    instruction: str | None = None
     category: str | None = None
+    comment: str | None = None
     source_id: str | None = None
     section_id: str | None = None
     result_ids: list[str] = Field(default_factory=list)

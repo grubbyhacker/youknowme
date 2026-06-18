@@ -197,31 +197,25 @@ class UploadResponse(BaseModel):
     staged_path: str
 
 
-class FeedbackRequest(BaseModel):
+CorpusChangeIntent = Literal["add_to_existing", "update_existing", "remove_from_existing"]
+
+
+class CorpusChangeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    comment: str = Field(min_length=1, max_length=2000)
-    category: Literal[
-        "missing_content",
-        "wrong_content",
-        "stale_content",
-        "unclear_content",
-        "agent_note",
-        "needs_owner_action",
-        "positive_content",
-        "non_actionable",
-    ] | None = None
+    intent: CorpusChangeIntent
+    instruction: str = Field(min_length=1, max_length=2000)
     source_id: str | None = Field(default=None, max_length=200)
     section_id: str | None = Field(default=None, max_length=200)
     result_ids: list[str] = Field(default_factory=list, max_length=10)
     upload_id: str | None = Field(default=None, max_length=80)
 
 
-class FeedbackResponse(BaseModel):
+class CorpusChangeResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     accepted: bool
-    feedback_id: str
+    corpus_change_id: str
     path: str
 
 
@@ -239,16 +233,16 @@ class QueryLogRecord(BaseModel):
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
-class FeedbackLogRecord(BaseModel):
+class CorpusChangeLogRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     timestamp: datetime
-    event: Literal["feedback"] = "feedback"
+    event: Literal["corpus_change"] = "corpus_change"
     feedback_id: str
     auth_path: str
     build_id: str | None
-    comment: str
-    category: str | None = None
+    intent: CorpusChangeIntent
+    instruction: str
     source_id: str | None = None
     section_id: str | None = None
     result_ids: list[str] = Field(default_factory=list)

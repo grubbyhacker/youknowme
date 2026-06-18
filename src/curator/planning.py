@@ -12,7 +12,6 @@ from curator.models import (
     FeedbackInputRecord,
     FeedbackPlan,
     FeedbackWindow,
-    DEFAULT_PRODUCT_REPO,
     DEFAULT_TARGET_REPO,
     ProposedAction,
     UploadBundleSnapshot,
@@ -265,10 +264,7 @@ def _action_for_record(
         section_ids=[record.section_id] if record.section_id else [],
         result_ids=record.result_ids,
     )
-    action_type, classification = _classify(
-        record.category,
-        has_corpus_target=bool(record.source_id or record.section_id),
-    )
+    action_type, classification = _classify(has_corpus_target=bool(record.source_id or record.section_id))
     target_repo = _target_repo_for_action(action_type)
     return ProposedAction(
         action_id=f"act_{action_index}",
@@ -282,21 +278,15 @@ def _action_for_record(
     )
 
 
-def _classify(
-    category: str | None, *, has_corpus_target: bool
-) -> tuple[str, str]:
-    if category in {"missing_content", "wrong_content", "stale_content", "unclear_content"}:
-        if not has_corpus_target:
-            return "corpus_issue", "corpus_issue"
+def _classify(*, has_corpus_target: bool) -> tuple[str, str]:
+    if has_corpus_target:
         return "corpus_pr", "corpus_candidate"
-    return "product_issue", "fallback"
+    return "corpus_issue", "corpus_issue"
 
 
 def _target_repo_for_action(action_type: str) -> str:
     if action_type in {"corpus_pr", "corpus_issue"}:
         return DEFAULT_TARGET_REPO
-    if action_type == "product_issue":
-        return DEFAULT_PRODUCT_REPO
     raise ValueError(f"feedback planner produced unsupported action type: {action_type}")
 
 

@@ -15,8 +15,8 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_type": "product_issue",
-            "classification": "fallback",
+            "action_type": "corpus_issue",
+            "classification": "corpus_issue",
             "evidence": {
               "feedback_ids": [
                 "fb_positive"
@@ -25,7 +25,7 @@
                 "src_home_spa"
               ]
             },
-            "target_repo": "grubbyhacker/youknowme"
+            "target_repo": "grubbyhacker/ykmcorpus"
           }
         ]
       }
@@ -178,8 +178,8 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_type": "product_issue",
-            "classification": "fallback",
+            "action_type": "corpus_issue",
+            "classification": "corpus_issue",
             "evidence": {
               "feedback_ids": [
                 "fb_agent_1",
@@ -188,7 +188,7 @@
                 "fb_agent_4"
               ]
             },
-            "target_repo": "grubbyhacker/youknowme"
+            "target_repo": "grubbyhacker/ykmcorpus"
           }
         ]
       }
@@ -240,14 +240,14 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_type": "product_issue",
-            "classification": "fallback",
+            "action_type": "corpus_issue",
+            "classification": "corpus_issue",
             "evidence": {
               "feedback_ids": [
                 "fb_one"
               ]
             },
-            "target_repo": "grubbyhacker/youknowme"
+            "target_repo": "grubbyhacker/ykmcorpus"
           }
         ]
       }
@@ -266,24 +266,24 @@
         "schema_version": "1",
         "proposed_actions": [
           {
-            "action_type": "product_issue",
-            "classification": "fallback",
+            "action_type": "corpus_issue",
+            "classification": "corpus_issue",
             "evidence": {
               "feedback_ids": [
                 "fb_duplicate"
               ]
             },
-            "target_repo": "grubbyhacker/youknowme"
+            "target_repo": "grubbyhacker/ykmcorpus"
           },
           {
-            "action_type": "product_issue",
-            "classification": "fallback",
+            "action_type": "corpus_issue",
+            "classification": "corpus_issue",
             "evidence": {
               "feedback_ids": [
                 "fb_duplicate"
               ]
             },
-            "target_repo": "grubbyhacker/youknowme"
+            "target_repo": "grubbyhacker/ykmcorpus"
           }
         ]
       }
@@ -330,7 +330,7 @@
         "proposed_actions": [
           {
             "action_type": "defer",
-            "classification": "fallback",
+            "classification": "corpus_issue",
             "evidence": {
               "feedback_ids": [
                 "fb_agent_note"

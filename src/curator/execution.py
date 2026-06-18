@@ -21,10 +21,8 @@ from curator.planning import deterministic_branch_name
 DEFAULT_OWNER_ASSIGNEE = "grubbyhacker"
 BASE_ISSUE_LABELS = ["ykm-curator"]
 ISSUE_LABELS_BY_CLASSIFICATION = {
-    "owner_action": ["feedback", "needs-owner-input"],
     "corpus_candidate": ["feedback", "corpus"],
     "corpus_issue": ["feedback", "corpus"],
-    "fallback": ["feedback", "needs-triage"],
 }
 STATE_ONLY_DECISIONS = {
     ("no_action", "positive"): "no_action_positive",
@@ -137,7 +135,7 @@ def build_execution_intents(
         decision = decisions_by_action.get(action.action_id)
         if decision is None or decision.status != "allowed":
             continue
-        if action.action_type in {"issue", "corpus_issue", "product_issue"}:
+        if action.action_type in {"issue", "corpus_issue"}:
             if action.target_repo is None:
                 continue
             intents.append(
@@ -183,8 +181,7 @@ def _issue_labels(action: ProposedAction) -> list[str]:
 
 
 def _issue_assignees(action: ProposedAction) -> list[str]:
-    if action.classification in {"owner_action", "fallback"}:
-        return [DEFAULT_OWNER_ASSIGNEE]
+    _ = action
     return []
 
 

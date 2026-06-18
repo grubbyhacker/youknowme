@@ -299,24 +299,24 @@
       ],
       "expected_feedback": {
         "fb_owner_ansible_puppet": {
-          "action_type": "product_issue",
-          "classification": "fallback",
-          "target_repo": "grubbyhacker/youknowme"
+          "action_type": "corpus_issue",
+          "classification": "corpus_issue",
+          "target_repo": "grubbyhacker/ykmcorpus"
         },
         "fb_owner_updated_resume": {
-          "action_type": "product_issue",
-          "classification": "fallback",
-          "target_repo": "grubbyhacker/youknowme"
+          "action_type": "corpus_issue",
+          "classification": "corpus_issue",
+          "target_repo": "grubbyhacker/ykmcorpus"
         },
         "fb_owner_new_job": {
-          "action_type": "product_issue",
-          "classification": "fallback",
-          "target_repo": "grubbyhacker/youknowme"
+          "action_type": "corpus_issue",
+          "classification": "corpus_issue",
+          "target_repo": "grubbyhacker/ykmcorpus"
         },
         "fb_owner_multiuser_support": {
-          "action_type": "product_issue",
-          "classification": "fallback",
-          "target_repo": "grubbyhacker/youknowme"
+          "action_type": "corpus_issue",
+          "classification": "corpus_issue",
+          "target_repo": "grubbyhacker/ykmcorpus"
         }
       }
     },
@@ -374,44 +374,44 @@
       ],
       "expected_feedback": {
         "fb_agent_already_present": {
-          "action_type": "product_issue",
-          "classification": "fallback",
-          "target_repo": "grubbyhacker/youknowme"
+          "action_type": "corpus_issue",
+          "classification": "corpus_issue",
+          "target_repo": "grubbyhacker/ykmcorpus"
         },
         "fb_agent_duplicate_resume": {
-          "action_type": "product_issue",
-          "classification": "fallback",
-          "target_repo": "grubbyhacker/youknowme"
+          "action_type": "corpus_issue",
+          "classification": "corpus_issue",
+          "target_repo": "grubbyhacker/ykmcorpus"
         },
         "fb_agent_query_rephrased": {
-          "action_type": "product_issue",
-          "classification": "fallback",
-          "target_repo": "grubbyhacker/youknowme"
+          "action_type": "corpus_issue",
+          "classification": "corpus_issue",
+          "target_repo": "grubbyhacker/ykmcorpus"
         },
         "fb_agent_debug_note": {
-          "action_type": "product_issue",
-          "classification": "fallback",
-          "target_repo": "grubbyhacker/youknowme"
+          "action_type": "corpus_issue",
+          "classification": "corpus_issue",
+          "target_repo": "grubbyhacker/ykmcorpus"
         },
         "fb_non_actionable_weird": {
-          "action_type": "product_issue",
-          "classification": "fallback",
-          "target_repo": "grubbyhacker/youknowme"
+          "action_type": "corpus_issue",
+          "classification": "corpus_issue",
+          "target_repo": "grubbyhacker/ykmcorpus"
         },
         "fb_non_actionable_later": {
-          "action_type": "product_issue",
-          "classification": "fallback",
-          "target_repo": "grubbyhacker/youknowme"
+          "action_type": "corpus_issue",
+          "classification": "corpus_issue",
+          "target_repo": "grubbyhacker/ykmcorpus"
         },
         "fb_non_actionable_no_query": {
-          "action_type": "product_issue",
-          "classification": "fallback",
-          "target_repo": "grubbyhacker/youknowme"
+          "action_type": "corpus_issue",
+          "classification": "corpus_issue",
+          "target_repo": "grubbyhacker/ykmcorpus"
         },
         "fb_non_actionable_scratch": {
-          "action_type": "product_issue",
-          "classification": "fallback",
-          "target_repo": "grubbyhacker/youknowme"
+          "action_type": "corpus_issue",
+          "classification": "corpus_issue",
+          "target_repo": "grubbyhacker/ykmcorpus"
         }
       }
     }

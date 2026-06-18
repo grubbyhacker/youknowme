@@ -69,17 +69,17 @@ uv run ykm live upload \
 ```
 
 ```bash
-uv run ykm live feedback \
-  --category agent_note \
-  --comment "Live CLI smoke: verify protected feedback intake." \
+uv run ykm live corpus-change \
+  --intent add_to_existing \
+  --instruction "Live CLI smoke: verify protected corpus change intake." \
   --dry-run \
   --pretty
 ```
 
 ```bash
-uv run ykm live feedback \
-  --category agent_note \
-  --comment "Live CLI smoke: verify protected feedback intake." \
+uv run ykm live corpus-change \
+  --intent add_to_existing \
+  --instruction "Live CLI smoke: verify protected corpus change intake." \
   --yes \
   --pretty
 ```

@@ -11,7 +11,7 @@ from pathlib import Path
 from curator.body import draft_action_body
 from curator.file_policy import forbidden_backup_or_temp_paths
 from curator.models import (
-    DEFAULT_PRODUCT_REPO,
+    DEFAULT_TARGET_REPO,
     ActionEvidence,
     ExecutionIntent,
     ExecutionResult,
@@ -286,14 +286,15 @@ def _feedback_agent_prompt(
             f"stderr tail:\n{previous_validation.stderr[-2000:]}\n"
         )
     return (
-        "You are the YouKnowMe corpus feedback agent.\n"
+        "You are the YouKnowMe corpus change agent.\n"
         "You are in a clean checkout of the private ykmcorpus repository.\n"
-        "Use the feedback records and durable evidence IDs to make the smallest correct corpus edit.\n"
+        "Use the corpus change records and durable evidence IDs to make the smallest correct corpus edit.\n"
+        "If no source or section is supplied, search the checkout for one clear bounded target before editing.\n"
         "Do not edit secrets, workflows, generated artifacts, or unrelated files.\n"
         "If the feedback cannot be safely resolved as a corpus change, make no changes.\n"
         f"After editing, the controller will run: {validation_command!r}.\n"
         f"{previous}\n"
-        "Feedback task JSON:\n"
+        "Corpus change task JSON:\n"
         f"{json.dumps(payload, indent=2, sort_keys=True)}\n"
     )
 
@@ -305,14 +306,14 @@ def _fallback_issue_intent(
     reason: str | None,
 ) -> ExecutionIntent:
     evidence = ActionEvidence.model_validate(source_intent.evidence.model_dump())
-    idempotency_key = deterministic_idempotency_key("product_issue", evidence)
+    idempotency_key = deterministic_idempotency_key("corpus_issue", evidence)
     action = ProposedAction(
         action_id=source_intent.action_id,
-        action_type="product_issue",
-        classification="fallback",
+        action_type="corpus_issue",
+        classification="corpus_issue",
         idempotency_key=idempotency_key,
         evidence=evidence,
-        target_repo=DEFAULT_PRODUCT_REPO,
+        target_repo=DEFAULT_TARGET_REPO,
     )
     body = draft_action_body(run_id, action)
     if reason:
@@ -321,12 +322,11 @@ def _fallback_issue_intent(
         action_id=action.action_id,
         operation="issue.create",
         idempotency_key=action.idempotency_key,
-        target_repo=DEFAULT_PRODUCT_REPO,
+        target_repo=DEFAULT_TARGET_REPO,
         evidence=evidence,
-        title=f"YouKnowMe Curator fallback: {', '.join(evidence.feedback_ids[:3])}",
+        title=f"YouKnowMe Curator corpus change issue: {', '.join(evidence.feedback_ids[:3])}",
         body=body,
-        labels=["ykm-curator", "feedback", "needs-triage"],
-        assignees=["grubbyhacker"],
+        labels=["ykm-curator", "feedback", "corpus"],
     )
 
 

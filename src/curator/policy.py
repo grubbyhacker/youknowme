@@ -28,11 +28,11 @@ def evaluate_feedback_action_policy(
     used_total = 0
     used_feedback = 0
     for action in actions:
-        if action.action_type not in {"issue", "corpus_issue", "product_issue", "corpus_pr"}:
+        if action.action_type not in {"issue", "corpus_issue", "corpus_pr"}:
             decisions.append(_allowed_without_mutation(action))
             continue
         target_repo = action.target_repo
-        if action.action_type in {"issue", "corpus_issue", "product_issue"} and (
+        if action.action_type in {"issue", "corpus_issue"} and (
             target_repo not in policy.allowed_issue_repos
         ):
             decisions.append(_denied(action, "target repository is not issue-allowlisted"))

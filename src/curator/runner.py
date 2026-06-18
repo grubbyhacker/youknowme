@@ -1537,7 +1537,7 @@ def _check_forbidden_env(probes: list[CuratorProbe]) -> None:
 
 def _requires_broker(feedback_plan: FeedbackPlan, upload_plan: UploadPlan) -> bool:
     return any(
-        action.action_type in {"issue", "corpus_issue", "product_issue", "corpus_pr"}
+        action.action_type in {"issue", "corpus_issue", "corpus_pr"}
         for action in feedback_plan.proposed_actions
     ) or bool(upload_plan.review_previews)
 
@@ -1671,12 +1671,13 @@ def _feedback_planning_model_request(
             continue
         if record.feedback_id not in included:
             continue
-        comment = raw_record.get("comment")
         records.append(
             {
                 "feedback_id": record.feedback_id,
-                "category": record.category,
-                "comment": str(comment)[:2000] if comment is not None else "",
+                "intent": record.intent,
+                "instruction": str(
+                    raw_record.get("instruction", raw_record.get("comment", ""))
+                )[:2000],
                 "source_id": record.source_id,
                 "section_id": record.section_id,
                 "result_ids": record.result_ids,
@@ -1691,19 +1692,18 @@ def _feedback_planning_model_request(
         "constraints": [
             "Return only valid JSON matching the response schema.",
             "Use only durable evidence identifiers present in feedback_records.",
-            "Every feedback record becomes exactly one actionable GitHub outcome.",
-            "Use action_type corpus_pr, corpus_issue, or product_issue.",
-            "Use classification corpus_candidate, corpus_issue, or fallback.",
+            "Every corpus change request becomes exactly one ykmcorpus outcome.",
+            "Use action_type corpus_pr or corpus_issue.",
+            "Use classification corpus_candidate or corpus_issue.",
             "Do not include action_id, idempotency_key, validation, or execution fields; the controller assigns them.",
             "Cover every included feedback_id in at least one proposed action.",
-            "A feedback_id is durable evidence for issue actions.",
-            "Use corpus_issue with classification corpus_issue for untargeted missing_content, wrong_content, stale_content, and unclear_content feedback.",
-            "Use corpus_pr with classification corpus_candidate for missing_content, wrong_content, stale_content, and unclear_content feedback when source_id or section_id evidence identifies the corpus target.",
+            "A feedback_id is durable evidence for corpus_issue actions.",
+            "Use corpus_pr with classification corpus_candidate when source_id or section_id evidence identifies the corpus target.",
+            "Use corpus_issue with classification corpus_issue when the request is untargeted, ambiguous, or cannot be safely resolved as a bounded PR.",
             "Use corpus_pr only with source_id or section_id evidence; upload_id alone is not a concrete PR target.",
             f"Use target_repo {DEFAULT_CORPUS_REPO} for corpus_pr and corpus_issue actions.",
-            f"Use product_issue with target_repo {DEFAULT_PRODUCT_REPO} for functionality feedback, non-actionable feedback, praise, duplicates, ambiguity, or anything you cannot confidently classify.",
             "Group feedback only when every record is same-topic and reviewable as one coherent owner decision.",
-            "Do not combine owner-input-blocked feedback with independently mergeable corpus-policy or content edits.",
+            "Do not route corpus change requests to product issues.",
         ],
     }
     messages = [
@@ -1711,7 +1711,7 @@ def _feedback_planning_model_request(
             "role": "system",
             "content": (
                 "You are the YouKnowMe Curator planning model. Produce conservative "
-                "feedback actions from durable evidence only."
+                "corpus change actions from durable evidence only."
             ),
         },
         {

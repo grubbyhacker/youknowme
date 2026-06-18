@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ykm.contracts import FeedbackRequest, UploadFileInput, UploadRequest
+from ykm.contracts import CorpusChangeRequest, UploadFileInput, UploadRequest
 from ykm.intake import IntakeError, IntakeStore
 
 
@@ -144,13 +144,13 @@ def test_stage_upload_rejects_unsafe_input(
         store.stage_upload(upload_request((filename, content)), build_id=None)
 
 
-def test_record_feedback_appends_bounded_jsonl(tmp_path: Path) -> None:
+def test_record_corpus_change_appends_bounded_jsonl(tmp_path: Path) -> None:
     store = IntakeStore(tmp_path / "intake")
 
-    response = store.record_feedback(
-        FeedbackRequest(
-            category="missing_content",
-            comment="I needed the exact SKU and it was not in the returned note.",
+    response = store.record_corpus_change(
+        CorpusChangeRequest(
+            intent="add_to_existing",
+            instruction="Add the exact SKU to the returned note.",
             source_id="hottub-home",
             section_id="section-1",
             result_ids=["result-1"],
@@ -162,47 +162,46 @@ def test_record_feedback_appends_bounded_jsonl(tmp_path: Path) -> None:
     path = tmp_path / "intake" / response.path
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert response.accepted is True
-    assert payload["event"] == "feedback"
+    assert payload["event"] == "corpus_change"
     assert payload["build_id"] == "build-123"
-    assert payload["category"] == "missing_content"
+    assert payload["intent"] == "add_to_existing"
+    assert payload["instruction"] == "Add the exact SKU to the returned note."
     assert payload["source_id"] == "hottub-home"
     assert "token" not in payload
 
 
-def test_record_feedback_accepts_comment_only(tmp_path: Path) -> None:
+def test_record_corpus_change_accepts_instruction_without_target(tmp_path: Path) -> None:
     store = IntakeStore(tmp_path / "intake")
 
-    response = store.record_feedback(
-        FeedbackRequest(comment="This answer was not useful enough to act on."),
+    response = store.record_corpus_change(
+        CorpusChangeRequest(
+            intent="update_existing",
+            instruction="Find the relevant birthday note and add the year.",
+        ),
         build_id="build-123",
         auth_path="mcp",
     )
 
     payload = json.loads((tmp_path / "intake" / response.path).read_text(encoding="utf-8"))
     assert response.accepted is True
-    assert payload["comment"] == "This answer was not useful enough to act on."
-    assert payload["category"] is None
+    assert payload["instruction"] == "Find the relevant birthday note and add the year."
+    assert payload["intent"] == "update_existing"
 
 
 @pytest.mark.parametrize(
-    "category",
+    "intent",
     [
-        "missing_content",
-        "wrong_content",
-        "stale_content",
-        "unclear_content",
-        "agent_note",
-        "needs_owner_action",
-        "positive_content",
-        "non_actionable",
+        "add_to_existing",
+        "update_existing",
+        "remove_from_existing",
     ],
 )
-def test_feedback_categories_accept_curator_additions(category: str) -> None:
-    request = FeedbackRequest(category=category, comment="bounded observation")
+def test_corpus_change_intents_are_bounded(intent: str) -> None:
+    request = CorpusChangeRequest(intent=intent, instruction="bounded corpus change")
 
-    assert request.category == category
+    assert request.intent == intent
 
 
-def test_feedback_comment_is_bounded() -> None:
+def test_corpus_change_instruction_is_bounded() -> None:
     with pytest.raises(ValidationError):
-        FeedbackRequest(category="agent_note", comment="x" * 2001)
+        CorpusChangeRequest(intent="add_to_existing", instruction="x" * 2001)

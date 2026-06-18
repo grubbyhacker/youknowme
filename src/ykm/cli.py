@@ -21,16 +21,7 @@ from ykm.live import LiveMcpError, call_live_tool, list_live_tools, live_config_
 from ykm.server import create_app
 
 
-FEEDBACK_CATEGORIES = [
-    "missing_content",
-    "wrong_content",
-    "stale_content",
-    "unclear_content",
-    "agent_note",
-    "needs_owner_action",
-    "positive_content",
-    "non_actionable",
-]
+CORPUS_CHANGE_INTENTS = ["add_to_existing", "update_existing", "remove_from_existing"]
 
 
 def main() -> None:
@@ -244,17 +235,21 @@ def _add_live_parser(subparsers: argparse._SubParsersAction) -> None:
     upload.add_argument("--dry-run", action="store_true")
     upload.add_argument("--yes", action="store_true", help="Actually call the live upload tool.")
 
-    feedback = live_subparsers.add_parser(
-        "feedback", parents=[output_parent], help="Record feedback through the feedback tool"
+    corpus_change = live_subparsers.add_parser(
+        "corpus-change",
+        parents=[output_parent],
+        help="Request a bounded change to existing corpus content",
     )
-    feedback.add_argument("--category", choices=FEEDBACK_CATEGORIES, required=True)
-    feedback.add_argument("--comment", required=True)
-    feedback.add_argument("--source-id")
-    feedback.add_argument("--section-id")
-    feedback.add_argument("--result-id", action="append", default=[])
-    feedback.add_argument("--upload-id")
-    feedback.add_argument("--dry-run", action="store_true")
-    feedback.add_argument("--yes", action="store_true", help="Actually call the live feedback tool.")
+    corpus_change.add_argument("--intent", choices=CORPUS_CHANGE_INTENTS, required=True)
+    corpus_change.add_argument("--instruction", required=True)
+    corpus_change.add_argument("--source-id")
+    corpus_change.add_argument("--section-id")
+    corpus_change.add_argument("--result-id", action="append", default=[])
+    corpus_change.add_argument("--upload-id")
+    corpus_change.add_argument("--dry-run", action="store_true")
+    corpus_change.add_argument(
+        "--yes", action="store_true", help="Actually call the live corpus_change tool."
+    )
 
 
 def _run_live(args: argparse.Namespace) -> None:
@@ -262,8 +257,8 @@ def _run_live(args: argparse.Namespace) -> None:
         if args.live_command == "upload":
             _run_live_upload(args)
             return
-        if args.live_command == "feedback":
-            _run_live_feedback(args)
+        if args.live_command == "corpus-change":
+            _run_live_corpus_change(args)
             return
 
         config = live_config_from_env(url=args.url, timeout_seconds=args.timeout)
@@ -285,12 +280,12 @@ def _run_live_upload(args: argparse.Namespace) -> None:
     _print_live_payload(call_live_tool(config, "upload", payload), args)
 
 
-def _run_live_feedback(args: argparse.Namespace) -> None:
-    payload = _live_feedback_arguments(args)
-    if _emit_write_preview_or_refusal(args, "feedback", payload):
+def _run_live_corpus_change(args: argparse.Namespace) -> None:
+    payload = _live_corpus_change_arguments(args)
+    if _emit_write_preview_or_refusal(args, "corpus_change", payload):
         return
     config = live_config_from_env(url=args.url, timeout_seconds=args.timeout)
-    _print_live_payload(call_live_tool(config, "feedback", payload), args)
+    _print_live_payload(call_live_tool(config, "corpus_change", payload), args)
 
 
 def _live_read_tool_call(args: argparse.Namespace) -> tuple[str, dict[str, Any]]:
@@ -330,10 +325,10 @@ def _live_upload_arguments(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def _live_feedback_arguments(args: argparse.Namespace) -> dict[str, Any]:
+def _live_corpus_change_arguments(args: argparse.Namespace) -> dict[str, Any]:
     return {
-        "category": args.category,
-        "comment": args.comment,
+        "intent": args.intent,
+        "instruction": args.instruction,
         "source_id": args.source_id,
         "section_id": args.section_id,
         "result_ids": args.result_id,
@@ -396,8 +391,10 @@ def _live_summary(payload: Any, command: str) -> str:
             for index, result in enumerate(payload)
             if isinstance(result, dict)
         )
-    if command in {"upload", "feedback"} and isinstance(payload, dict):
-        identifier = payload.get("upload_id") or payload.get("feedback_id") or payload.get("error")
+    if command in {"upload", "corpus-change"} and isinstance(payload, dict):
+        identifier = (
+            payload.get("upload_id") or payload.get("corpus_change_id") or payload.get("error")
+        )
         return f"{command}: {identifier}"
     return json.dumps(payload, indent=2, sort_keys=True)
 

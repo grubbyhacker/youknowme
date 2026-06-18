@@ -95,7 +95,7 @@ def test_model_feedback_planning_scenarios_match_deterministic_baseline(case: An
     assert result.passed, result.failures
 
 
-def test_model_feedback_planning_prompt_includes_feedback_comments() -> None:
+def test_model_feedback_planning_prompt_includes_corpus_change_instructions() -> None:
     case = load_feedback_scenario_cases(DEFAULT_SCENARIO_FIXTURE)[0]
 
     _, request = build_feedback_scenario_request(
@@ -105,12 +105,14 @@ def test_model_feedback_planning_prompt_includes_feedback_comments() -> None:
     )
 
     prompt_input = json.loads(request.input["messages"][1]["content"])
-    comments_by_id = {
-        record["feedback_id"]: record["comment"]
+    instructions_by_id = {
+        record["feedback_id"]: record["instruction"]
         for record in prompt_input["feedback_records"]
     }
-    assert comments_by_id["fb_missing_home_address"] == "Home address is missing from the corpus."
-    assert comments_by_id["fb_missing_beach_house_address"] == "Beach house address is missing."
+    assert (
+        instructions_by_id["fb_missing_home_address"] == "Home address is missing from the corpus."
+    )
+    assert instructions_by_id["fb_missing_beach_house_address"] == "Beach house address is missing."
 
 
 def test_model_feedback_planning_response_schema_is_strict_json_schema() -> None:
@@ -127,12 +129,10 @@ def test_model_feedback_planning_response_schema_is_strict_json_schema() -> None
     assert set(action_schema["properties"]["action_type"]["enum"]) == {
         "corpus_pr",
         "corpus_issue",
-        "product_issue",
     }
     assert set(action_schema["properties"]["classification"]["enum"]) == {
         "corpus_candidate",
         "corpus_issue",
-        "fallback",
     }
     evidence_schema = schema["$defs"]["ActionEvidence"]
     assert set(evidence_schema["required"]) == {

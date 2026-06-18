@@ -1,34 +1,38 @@
-# YouKnowMe Feedback Processing
+# YouKnowMe Corpus Change Processing
 
 ## Intake Contract
 
-Feedback intake is intentionally small. A feedback record requires only `comment`; optional evidence
-fields are `source_id`, `section_id`, `result_ids`, and `upload_id`. The legacy `category` field may
-still be present on old or compatibility callers, but Curator must not depend on the caller choosing
-the right category.
+The agent-facing write tool for modifying existing corpus content is `corpus_change`.
+Use `upload` for new file bundles.
 
-Feedback is sensitive intake data. It is not indexed or served directly.
+A corpus change request requires:
+
+- `intent`: `add_to_existing`, `update_existing`, or `remove_from_existing`
+- `instruction`: the bounded change Roger wants made
+
+Optional evidence fields are `source_id`, `section_id`, `result_ids`, and `upload_id`.
+Target evidence is helpful but not required; Curator may search the corpus when the request is clear
+but untargeted.
+
+Corpus change intake is sensitive. It is not indexed or served directly.
 
 ## Curator Outcomes
 
-Each actionable feedback record should become one GitHub outcome:
+Each actionable corpus change request becomes one durable `grubbyhacker/ykmcorpus` outcome:
 
-- `corpus_pr` in `grubbyhacker/ykmcorpus` when the agent can safely make a bounded corpus change.
-- `corpus_issue` in `grubbyhacker/ykmcorpus` when the feedback is about corpus data quality but the
-  agent cannot safely produce the change as a PR.
-- `product_issue` in `grubbyhacker/youknowme` for functionality feedback, praise, duplicates,
-  unclear feedback, non-actionable feedback, or any case the agent cannot confidently classify.
+- `corpus_pr` when Curator can safely make a bounded corpus edit.
+- `corpus_issue` when the request is corpus work but Curator cannot safely produce a PR.
 
-Feedback processing no longer uses local no-op, link-to-upload, deferred, or capacity-deferred
-feedback states. The decision log records only durable GitHub outcomes for new feedback processing:
-`issue_opened` or `pr_opened`.
+This workflow does not create YouKnowMe product issues and does not use product-feedback,
+non-actionable, or owner-escalation categories.
 
 ## Live Processing
 
-Manual live feedback processing uses `feedback_executor: "codex_proxy"`. Issue outcomes are created
-through the broker. Corpus PR outcomes run an agentic Codex loop against a temporary `ykmcorpus`
-checkout, validate the checkout, push a Curator branch, and create the pull request through the
-broker. If the agent cannot produce a valid corpus PR, it falls back to a `product_issue` so the
-feedback is not left idle.
+Manual live corpus change processing uses `feedback_executor: "codex_proxy"` in the existing Curator
+task schema. Corpus PR outcomes run an agentic Codex loop against a temporary `ykmcorpus` checkout,
+validate the checkout, push a Curator branch, and create the pull request through the broker.
 
-Checkpoint advancement requires all included feedback records to have a durable GitHub outcome.
+If the agent cannot produce a valid corpus PR, Curator files a bounded `ykmcorpus` issue that
+preserves the instruction, supplied evidence, and failure reason.
+
+Checkpoint advancement requires all included corpus change records to have a durable GitHub outcome.

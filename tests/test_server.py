@@ -13,8 +13,8 @@ import ykm.server as server_module
 from ykm.build import build_index
 from ykm.embeddings import FakeEmbeddingProvider
 from ykm.server import (
+    CORPUS_CHANGE_TOOL_DESCRIPTION,
     INDEX_LOADING_MESSAGE,
-    FEEDBACK_TOOL_DESCRIPTION,
     QUERY_TOOL_DESCRIPTION,
     SEARCH_TOOL_DESCRIPTION,
     UPLOAD_TOOL_DESCRIPTION,
@@ -65,14 +65,14 @@ def test_tool_descriptions_advertise_owner_specific_triggering() -> None:
 
 
 def test_write_tool_descriptions_advertise_staging_not_publishing() -> None:
-    description = f"{UPLOAD_TOOL_DESCRIPTION} {FEEDBACK_TOOL_DESCRIPTION}".lower()
+    description = f"{UPLOAD_TOOL_DESCRIPTION} {CORPUS_CHANGE_TOOL_DESCRIPTION}".lower()
 
     assert "stage" in description
     assert "ykm-upload-authoring-guidance" in description
     assert "type: skill" in description
     assert "does not publish, index, or merge" in description
     assert "protected intake queue" in description
-    assert "inert protected log" in description
+    assert "bounded modification to existing" in description
     assert "not indexed" in description
 
 

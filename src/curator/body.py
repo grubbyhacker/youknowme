@@ -19,7 +19,7 @@ def draft_action_body(
 ) -> str:
     feedback_section = _feedback_section(feedback_records or [])
     context_note = (
-        "This deterministic draft includes bounded feedback excerpts because the target is a "
+        "This deterministic draft includes bounded corpus change excerpts because the target is a "
         "private corpus workflow. It does not include corpus, upload, or log excerpts."
         if feedback_section
         else (
@@ -77,12 +77,12 @@ def _feedback_section(records: list[dict[str, Any]]) -> str:
     rendered: list[str] = []
     for record in records[:MAX_FEEDBACK_EXCERPTS]:
         feedback_id = _str_value(record.get("feedback_id")) or "unknown"
-        category = _str_value(record.get("category"))
-        comment = _str_value(record.get("comment"))
+        intent = _str_value(record.get("intent"))
+        instruction = _str_value(record.get("instruction")) or _str_value(record.get("comment"))
         lines = [f"### `{feedback_id}`"]
         metadata = []
-        if category:
-            metadata.append(f"category: `{category}`")
+        if intent:
+            metadata.append(f"intent: `{intent}`")
         source_id = _str_value(record.get("source_id"))
         if source_id:
             metadata.append(f"source: `{source_id}`")
@@ -94,18 +94,18 @@ def _feedback_section(records: list[dict[str, Any]]) -> str:
             metadata.append(f"upload: `{upload_id}`")
         if metadata:
             lines.append("- " + "; ".join(metadata))
-        if comment:
-            lines.extend(["", _bounded_quote(comment)])
+        if instruction:
+            lines.extend(["", _bounded_quote(instruction)])
         else:
             lines.append("")
-            lines.append("_No feedback comment text was captured._")
+            lines.append("_No corpus change instruction text was captured._")
         rendered.append("\n".join(lines))
     if not rendered:
         return ""
     suffix = ""
     if len(records) > MAX_FEEDBACK_EXCERPTS:
         suffix = f"\n\n_Additional feedback records omitted: {len(records) - MAX_FEEDBACK_EXCERPTS}._"
-    return "## Feedback\n\n" + "\n\n".join(rendered) + suffix
+    return "## Corpus Change Requests\n\n" + "\n\n".join(rendered) + suffix
 
 
 def _bounded_quote(value: str) -> str:
