@@ -9,9 +9,9 @@ from uuid import uuid4
 
 from ykm.build import detect_secret, parse_frontmatter
 from ykm.contracts import (
-    FeedbackLogRecord,
-    FeedbackRequest,
-    FeedbackResponse,
+    CorpusChangeLogRecord,
+    CorpusChangeRequest,
+    CorpusChangeResponse,
     StagedUploadFile,
     UploadFileInput,
     UploadRequest,
@@ -132,23 +132,23 @@ class IntakeStore:
             staged_path=f"uploads/pending/{upload_id}",
         )
 
-    def record_feedback(
+    def record_corpus_change(
         self,
-        request: FeedbackRequest,
+        request: CorpusChangeRequest,
         *,
         build_id: str | None,
         auth_path: str = "mcp",
-    ) -> FeedbackResponse:
+    ) -> CorpusChangeResponse:
         feedback_id = new_feedback_id()
         path = self.root / "feedback" / "feedback.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
-        record = FeedbackLogRecord(
+        record = CorpusChangeLogRecord(
             timestamp=now_utc(),
             feedback_id=feedback_id,
             auth_path=auth_path,
             build_id=build_id,
-            category=request.category,
-            comment=request.comment.strip(),
+            intent=request.intent,
+            instruction=request.instruction.strip(),
             source_id=request.source_id,
             section_id=request.section_id,
             result_ids=request.result_ids,
@@ -156,9 +156,9 @@ class IntakeStore:
         )
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record.model_dump(mode="json"), sort_keys=True) + "\n")
-        return FeedbackResponse(
+        return CorpusChangeResponse(
             accepted=True,
-            feedback_id=feedback_id,
+            corpus_change_id=feedback_id,
             path="feedback/feedback.jsonl",
         )
 

@@ -7,7 +7,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from curator.models import (
     CURATOR_SCHEMA_VERSION,
-    DEFAULT_PRODUCT_REPO,
     DEFAULT_TARGET_REPO,
     ActionEvidence,
     CuratorPrState,
@@ -22,9 +21,8 @@ from curator.state import deterministic_idempotency_key
 FeedbackPlanningClassification = Literal[
     "corpus_candidate",
     "corpus_issue",
-    "fallback",
 ]
-FeedbackPlanningActionType = Literal["corpus_pr", "corpus_issue", "product_issue"]
+FeedbackPlanningActionType = Literal["corpus_pr", "corpus_issue"]
 
 
 class FeedbackPlanningModelAction(BaseModel):
@@ -158,9 +156,7 @@ def build_feedback_planning_proposed_actions(
             raise ValueError(f"model corpus_pr action must target {DEFAULT_TARGET_REPO}")
         if action.action_type == "corpus_issue" and target_repo != DEFAULT_TARGET_REPO:
             raise ValueError(f"model corpus_issue action must target {DEFAULT_TARGET_REPO}")
-        if action.action_type == "product_issue" and target_repo != DEFAULT_PRODUCT_REPO:
-            raise ValueError(f"model product_issue action must target {DEFAULT_PRODUCT_REPO}")
-        if action.action_type not in {"corpus_pr", "corpus_issue", "product_issue"}:
+        if action.action_type not in {"corpus_pr", "corpus_issue"}:
             raise ValueError(f"model action uses unsupported feedback action type: {action.action_type}")
         covered_feedback_ids.update(action.evidence.feedback_ids)
         proposed_actions.append(
@@ -185,8 +181,6 @@ def build_feedback_planning_proposed_actions(
 def _default_target_repo(action_type: str) -> str:
     if action_type in {"corpus_pr", "corpus_issue"}:
         return DEFAULT_TARGET_REPO
-    if action_type == "product_issue":
-        return DEFAULT_PRODUCT_REPO
     raise ValueError(f"unsupported feedback action type: {action_type}")
 
 

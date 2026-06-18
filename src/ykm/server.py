@@ -26,7 +26,8 @@ from curator.state import (
 )
 from ykm.auth import AuthConfig, AuthMiddleware, AuthVerifier
 from ykm.contracts import (
-    FeedbackRequest,
+    CorpusChangeIntent,
+    CorpusChangeRequest,
     QueryLogRecord,
     QueryRequest,
     RetrieveRequest,
@@ -73,10 +74,10 @@ UPLOAD_TOOL_DESCRIPTION = (
     "(type: skill). This does not publish, index, or merge content. It stores bounded markdown files "
     "in the protected intake queue for later human or Curator processing."
 )
-FEEDBACK_TOOL_DESCRIPTION = (
-    "Record bounded feedback in an inert protected log for future YouKnowMe Curator review. Include "
-    "a clear comment and optional source, section, result, or upload evidence; it is not indexed, "
-    "and the Curator decides whether it becomes a corpus PR, a corpus issue, or a product issue."
+CORPUS_CHANGE_TOOL_DESCRIPTION = (
+    "Request a bounded modification to existing YouKnowMe corpus content. Use upload for new files. "
+    "Provide intent, a clear instruction, and any known source, section, result, or upload evidence. "
+    "The request is not indexed; Curator turns it into either a ykmcorpus PR or a ykmcorpus issue."
 )
 PROTECTED_RESOURCE_METADATA_PATHS = (
     "/.well-known/oauth-protected-resource",
@@ -365,20 +366,20 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
         )
         return response.model_dump(mode="json")
 
-    @mcp.tool(description=FEEDBACK_TOOL_DESCRIPTION)
-    def feedback(
-        comment: str,
-        category: str | None = None,
+    @mcp.tool(description=CORPUS_CHANGE_TOOL_DESCRIPTION)
+    def corpus_change(
+        intent: CorpusChangeIntent,
+        instruction: str,
         source_id: str | None = None,
         section_id: str | None = None,
         result_ids: list[str] | None = None,
         upload_id: str | None = None,
     ) -> dict[str, Any]:
         index = loaded_index()
-        response = intake.record_feedback(
-            FeedbackRequest(
-                category=category,
-                comment=comment,
+        response = intake.record_corpus_change(
+            CorpusChangeRequest(
+                intent=intent,
+                instruction=instruction,
                 source_id=source_id,
                 section_id=section_id,
                 result_ids=result_ids or [],
