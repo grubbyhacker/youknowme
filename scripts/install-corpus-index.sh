@@ -24,6 +24,12 @@ deploy_root=""
 compose_dir=""
 compose_service=""
 container_name=""
+start_epoch="$(date +%s)"
+install_id="unknown"
+source_commit="unknown"
+build_id="unknown"
+artifact_size_bytes=0
+healthy="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -95,6 +101,9 @@ PY
 
 artifact="$(abs_path "$artifact")"
 sha256_file="$(abs_path "$sha256_file")"
+if [[ -f "$artifact" ]]; then
+  artifact_size_bytes="$(wc -c < "$artifact")"
+fi
 deploy_root="$(python3 - "$deploy_root" <<'PY'
 from pathlib import Path
 import sys
@@ -125,11 +134,85 @@ mkdir -p "$builds_dir"
 
 staging_dir="$(mktemp -d "$builds_dir/.install.XXXXXXXXXX")"
 tmp_link="$deploy_root/.index-current.tmp.$$"
+
+escape_label_value() {
+  local value="${1-}"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  printf '%s' "$value"
+}
+
+emit_index_deploy_metrics() {
+  (
+    set +e
+    local rc="$1"
+    local textfile_dir="${INDEX_DEPLOY_TEXTFILE_DIR:-/docker/observability/textfile}"
+    local metrics_file="$textfile_dir/index_deploy.prom"
+
+    if [[ ! -d "$textfile_dir" ]]; then
+      return 0
+    fi
+
+    local now_epoch
+    local duration_seconds
+    local container_healthy_value=0
+    local success_value=0
+    local tmp_metrics
+    local labels
+    local safe_install_id
+    local safe_source_commit
+    local safe_build_id
+
+    now_epoch="$(date +%s)"
+    duration_seconds="$((now_epoch - start_epoch))"
+
+    if [[ "$rc" == "0" ]]; then
+      success_value=1
+    fi
+    if [[ "$healthy" == "true" ]]; then
+      container_healthy_value=1
+    fi
+
+    safe_install_id="$(escape_label_value "$install_id")"
+    safe_source_commit="$(escape_label_value "$source_commit")"
+    safe_build_id="$(escape_label_value "$build_id")"
+    labels="install_id=\"$safe_install_id\",source_commit=\"$safe_source_commit\",build_id=\"$safe_build_id\""
+
+    tmp_metrics="$(mktemp "$textfile_dir/.index_deploy.prom.XXXXXX")" || return 0
+    {
+      printf '# HELP index_deploy_success Whether the latest index deploy succeeded.\n'
+      printf '# TYPE index_deploy_success gauge\n'
+      printf 'index_deploy_success{%s} %s\n' "$labels" "$success_value"
+      printf '# HELP index_deploy_duration_seconds Wall-clock time spent during the index deploy script execution.\n'
+      printf '# TYPE index_deploy_duration_seconds gauge\n'
+      printf 'index_deploy_duration_seconds{%s} %s\n' "$labels" "$duration_seconds"
+      printf '# HELP index_deploy_timestamp_seconds Unix timestamp captured when index deploy metrics were emitted.\n'
+      printf '# TYPE index_deploy_timestamp_seconds gauge\n'
+      printf 'index_deploy_timestamp_seconds{%s} %s\n' "$labels" "$now_epoch"
+      printf '# HELP index_deploy_container_healthy Whether the installed container reached a healthy state.\n'
+      printf '# TYPE index_deploy_container_healthy gauge\n'
+      printf 'index_deploy_container_healthy{%s} %s\n' "$labels" "$container_healthy_value"
+      printf '# HELP index_deploy_artifact_bytes Size of the installed artifact in bytes.\n'
+      printf '# TYPE index_deploy_artifact_bytes gauge\n'
+      printf 'index_deploy_artifact_bytes{%s} %s\n' "$labels" "$artifact_size_bytes"
+    } >"$tmp_metrics" || { rm -f "$tmp_metrics"; return 0; }
+    mv "$tmp_metrics" "$metrics_file"
+  )
+}
+
 cleanup() {
   rm -rf "$staging_dir"
   rm -f "$tmp_link"
 }
-trap cleanup EXIT
+exit_handler() {
+  local rc=$?
+  emit_index_deploy_metrics "$rc"
+  cleanup || true
+}
+trap exit_handler EXIT
 
 echo "Extracting artifact..."
 if tar -tzf "$artifact" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
@@ -177,11 +260,24 @@ if not safe_source or not safe_build:
 
 print(index)
 print(f"{safe_source}-{safe_build}")
+print(source_commit)
+print(build_id)
 PY
 )" || die "$metadata"
 
 extracted_index="$(printf '%s\n' "$metadata" | sed -n '1p')"
 install_id="$(printf '%s\n' "$metadata" | sed -n '2p')"
+if [[ -z "$install_id" ]]; then
+  install_id="unknown"
+fi
+source_commit="$(printf '%s\n' "$metadata" | sed -n '3p')"
+build_id="$(printf '%s\n' "$metadata" | sed -n '4p')"
+if [[ -z "$source_commit" ]]; then
+  source_commit="unknown"
+fi
+if [[ -z "$build_id" ]]; then
+  build_id="unknown"
+fi
 build_dir="$builds_dir/$install_id"
 
 [[ -n "$extracted_index" ]] || die "could not determine extracted index path"
@@ -208,7 +304,6 @@ echo "Recreating container $compose_service..."
 docker compose -f "$compose_dir/docker-compose.yml" up -d --force-recreate "$compose_service"
 
 echo "Waiting for $container_name to become healthy..."
-healthy="false"
 for _ in $(seq 1 60); do
   status="$(docker inspect -f '{{.State.Health.Status}}' "$container_name" 2>/dev/null || true)"
   if [[ "$status" == "healthy" ]]; then
