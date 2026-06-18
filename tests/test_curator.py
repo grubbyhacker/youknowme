@@ -5571,6 +5571,125 @@ def test_pr_repair_validates_committed_tree_before_push(
     assert (verify / "homemaint" / "manual.md").read_text(encoding="utf-8") == "needs repair\n"
 
 
+def test_pr_repair_pushes_semantic_changes_when_only_workflow_filter_blocks_validation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    branch = "curator/run-pr-repair/upload-upl-20260606"
+    remote = tmp_path / "remote.git"
+    seed = tmp_path / "seed"
+    verify = tmp_path / "verify"
+    _git_for_test(["init", "--bare", str(remote)])
+    _git_for_test(["clone", str(remote), str(seed)])
+    _git_for_test(["checkout", "-b", "main"], cwd=seed)
+    (seed / ".ykm").mkdir()
+    (seed / "preferences" / "dev").mkdir(parents=True)
+    (seed / ".ykm" / "corpus-policy.yaml").write_text(
+        "corpus_roots:\n  - preferences\n",
+        encoding="utf-8",
+    )
+    (seed / "preferences" / "dev" / "dev-environment.md").write_text(
+        "---\nid: dev-environment\n---\n# Dev\n",
+        encoding="utf-8",
+    )
+    (seed / "preferences" / "dev" / "uptime-kuma-dashboard.md").write_text(
+        "---\nid: uptime-kuma-dashboard\n---\n# Kuma\n",
+        encoding="utf-8",
+    )
+    _git_for_test(["add", "--all"], cwd=seed)
+    _git_for_test(
+        [
+            "-c",
+            "user.name=Test Curator",
+            "-c",
+            "user.email=curator@example.test",
+            "commit",
+            "-m",
+            "Seed corpus",
+        ],
+        cwd=seed,
+    )
+    _git_for_test(["push", "origin", "main"], cwd=seed)
+    _git_for_test(["checkout", "-b", branch], cwd=seed)
+    _git_for_test(["push", "origin", branch], cwd=seed)
+
+    def fake_run_codex(**kwargs) -> Path:
+        checkout = kwargs["checkout"]
+        (checkout / "dev").mkdir()
+        for name in ("dev-environment.md", "uptime-kuma-dashboard.md"):
+            (checkout / "dev" / name).write_text(
+                (checkout / "preferences" / "dev" / name).read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            (checkout / "preferences" / "dev" / name).unlink()
+        (checkout / ".ykm" / "corpus-policy.yaml").write_text(
+            "corpus_roots:\n  - dev\n  - preferences\n",
+            encoding="utf-8",
+        )
+        transcript = kwargs["output"] / "transcript.txt"
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text("codex moved files to dev and left workflows untouched\n", encoding="utf-8")
+        return transcript
+
+    validation_command = [
+        sys.executable,
+        "-c",
+        (
+            "print('Corpus validation: 1 error(s), 0 warning(s)\\n\\nErrors:\\n"
+            "- .github/workflows/production-index-artifact.yml: workflow path filters "
+            "do not cover corpus root: dev'); raise SystemExit(1)"
+        ),
+    ]
+    monkeypatch.setattr("curator.pr_repair._run_codex", fake_run_codex)
+    monkeypatch.setenv("BROKER_AGENT_ID", "ykm-curator")
+    monkeypatch.setenv("BROKER_AGENT_SECRET", "broker-secret")
+
+    results = execute_pr_repairs(
+        run_id="run-pr-repair",
+        mode="manual_live",
+        reconciliations=[
+            CuratorPrReconciliation(
+                pr_number=18,
+                pr_state="changes_requested",
+                branch=branch,
+                run_id="run-pr-repair",
+                reason="owner requested dev root",
+            )
+        ],
+        snapshots=[],
+        executor="codex_proxy",
+        model="ykm-codex-gpt-5-mini",
+        validation_command=validation_command,
+        max_repairs=1,
+        output=tmp_path / "output",
+        broker_remote_url=str(remote),
+        codex_proxy_base_url="http://proxy:8092/v1",
+        codex_proxy_token="proxy-token",
+    )
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.status == "validation_failed"
+    assert result.pushed
+    assert result.repair_head_sha
+    assert result.review_request_comment_status == "pending"
+    assert "workflow path-filter update" in (result.review_request_comment or "")
+    assert "YKM-Curator-Action-Type: pr_repair_workflow_blocked" in (
+        result.review_request_comment or ""
+    )
+    assert result.changed_files == [
+        ".ykm/corpus-policy.yaml",
+        "dev/dev-environment.md",
+        "dev/uptime-kuma-dashboard.md",
+    ]
+
+    _git_for_test(["clone", "--branch", branch, str(remote), str(verify)])
+    assert (verify / "dev" / "dev-environment.md").exists()
+    assert (verify / "dev" / "uptime-kuma-dashboard.md").exists()
+    assert not (verify / "preferences" / "dev" / "dev-environment.md").exists()
+    assert not (verify / "preferences" / "dev" / "uptime-kuma-dashboard.md").exists()
+
+
 def test_pr_repair_blast_radius_override_label_bypasses_size_guard() -> None:
     reconciliation = CuratorPrReconciliation(
         pr_number=5,
@@ -5938,6 +6057,78 @@ def test_pr_repair_handoff_posts_comment_dismisses_reviews_resolves_threads_and_
     assert repair.dismissed_review_count == 1
     assert repair.resolved_thread_count == 1
     assert repair.label_update_count == 2
+
+
+def test_pr_repair_handoff_posts_workflow_blocker_without_review_or_label_mutations(
+    tmp_path: Path,
+) -> None:
+    broker_fixture = tmp_path / "broker-fixture.json"
+    broker_fixture.write_text(
+        json.dumps({"schema_version": "1", "reachable": True}) + "\n",
+        encoding="utf-8",
+    )
+    repair = PrRepairResult(
+        pr_number=18,
+        branch="curator/run/upload",
+        pr_state="changes_requested",
+        executor="codex_proxy",
+        model="ykm-codex-gpt-5-mini",
+        status="validation_failed",
+        message="pushed semantic changes but workflow filter blocks validation",
+        changed_files=[".ykm/corpus-policy.yaml", "dev/dev-environment.md"],
+        repair_head_sha="abc123repair",
+        validation_returncode=1,
+        validation_stdout_tail=(
+            "Corpus validation: 1 error(s), 0 warning(s)\n\nErrors:\n"
+            "- .github/workflows/production-index-artifact.yml: workflow path filters "
+            "do not cover corpus root: dev\n"
+        ),
+        review_request_comment=(
+            "Curator repair applied the semantic changes, but validation is blocked by a "
+            "workflow permission issue.\n\nYKM-Curator-Run: run\n"
+        ),
+        review_request_comment_status="pending",
+        pushed=True,
+    )
+    snapshot = CuratorPrSnapshot(
+        number=18,
+        state="open",
+        body="YKM-Curator-Run: run\n",
+        branch="curator/run/upload",
+        labels=["ym-curator: needs work"],
+        reviews=[
+            CuratorPrReviewSnapshot(
+                database_id=123,
+                state="CHANGES_REQUESTED",
+                author_login="grubbyhacker",
+            )
+        ],
+        review_threads=[
+            CuratorPrReviewThreadSnapshot(
+                id="PRRT_123",
+                is_resolved=False,
+                path="preferences/dev-environment.md",
+            )
+        ],
+    )
+
+    results = _complete_pr_repair_handoffs(
+        config=CuratorDryRunConfig(
+            run_id="run",
+            intake=tmp_path / "intake",
+            output=tmp_path / "output",
+            broker_fixture=broker_fixture,
+        ),
+        results=[repair],
+        snapshots=[snapshot],
+    )
+
+    assert [result.operation for result in results] == ["issue.comment"]
+    assert results[0].status == "simulated"
+    assert repair.review_request_comment_status == "posted"
+    assert repair.dismissed_review_count == 0
+    assert repair.resolved_thread_count == 0
+    assert repair.label_update_count == 0
 
 
 def test_pr_repair_handoff_stops_when_comment_fails(

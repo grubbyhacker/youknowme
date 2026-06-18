@@ -2222,7 +2222,7 @@ def _complete_pr_repair_handoffs(
     snapshots_by_number = {snapshot.number: snapshot for snapshot in snapshots}
     handoff_results: list[ExecutionResult] = []
     for result in results:
-        if not result.pushed or not result.review_request_comment:
+        if not result.review_request_comment:
             continue
         snapshot = snapshots_by_number.get(result.pr_number)
         repair_key = _pr_repair_handoff_key(result)
@@ -2242,6 +2242,8 @@ def _complete_pr_repair_handoffs(
         result.review_request_comment_message = comment_result.message
         handoff_results.append(comment_result)
         if comment_result.status == "failed":
+            continue
+        if result.status != "pushed":
             continue
 
         for review in (snapshot.reviews if snapshot else []):
@@ -2326,7 +2328,7 @@ def _load_pending_pr_repair_handoffs(intake: Path) -> list[PrRepairResult]:
 def _write_pending_pr_repair_handoffs(intake: Path, results: list[PrRepairResult]) -> None:
     pending_dir = _pr_repair_handoff_pending_dir(intake)
     for result in results:
-        if not result.pushed or not result.review_request_comment:
+        if not result.review_request_comment:
             continue
         pending_dir.mkdir(parents=True, exist_ok=True)
         path = _pr_repair_handoff_path(intake, result)
@@ -2352,7 +2354,14 @@ def _pr_repair_handoff_path(intake: Path, result: PrRepairResult) -> Path:
 
 
 def _pr_repair_handoff_key(result: PrRepairResult) -> str:
-    return result.repair_head_sha or result.branch or "unknown"
+    if result.repair_head_sha:
+        return result.repair_head_sha
+    if result.validation_returncode is not None:
+        return (
+            f"{result.branch or 'unknown'}:{result.status}:"
+            f"{result.validation_returncode}:{result.validation_stdout_tail}"
+        )
+    return result.branch or "unknown"
 
 
 def _pr_repair_handoff_metadata(
