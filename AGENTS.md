@@ -42,6 +42,12 @@ Before opening or updating a PR, run both `mise run lint` and the full `mise run
 there is a concrete blocker. Focused tests are useful while iterating, but they are not enough for
 presubmit.
 
+## Test Organization
+
+Keep test files focused by behavior or domain. Do not grow a single test module into a broad
+catch-all file; split it before it reaches 1,000 lines. The lint task enforces this limit for files
+under `tests/`.
+
 ## Agent Delivery Standard
 
 Give Roger PRs ready to review. Do not just return once changes are written and put the ball in
