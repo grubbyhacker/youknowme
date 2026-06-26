@@ -31,6 +31,9 @@ non-actionable, or owner-escalation categories.
 Manual live corpus change processing uses `feedback_executor: "codex_proxy"` in the existing Curator
 task schema. Corpus PR outcomes run an agentic Codex loop against a temporary `ykmcorpus` checkout,
 validate the checkout, push a Curator branch, and create the pull request through the broker.
+The Codex worker may leave uncommitted edits or make local commits on the prepared branch. Curator
+validates and applies guardrails to the full branch delta either way, then owns push, PR creation,
+and feedback decision state.
 
 If the agent cannot produce a valid corpus PR, Curator files a bounded `ykmcorpus` issue that
 preserves the instruction, supplied evidence, and failure reason.

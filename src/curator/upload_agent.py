@@ -127,6 +127,7 @@ def _execute_one_agentic_upload_review(
             git_env = _git_env(askpass)
             _run_git(["clone", "--depth=1", broker_remote_url, str(checkout)], cwd=None, env=git_env)
             _run_git(["checkout", "-B", preview.branch], cwd=checkout, env=git_env)
+            base_ref = _git_output(["rev-parse", "HEAD"], cwd=checkout, env=git_env).strip()
             transcript_path: Path | None = None
             summary_path = output / "upload-review-agent" / _safe_name(preview.upload_id) / "summary.json"
             validation: subprocess.CompletedProcess[str] | None = None
@@ -147,7 +148,7 @@ def _execute_one_agentic_upload_review(
                     attempt=attempt,
                     previous_validation=validation,
                 )
-                changed_files = _changed_files(checkout, git_env)
+                changed_files = _branch_changed_files(checkout, git_env, base_ref)
                 if not changed_files:
                     continue
                 forbidden_message = _forbidden_change_message(changed_files)
@@ -166,8 +167,8 @@ def _execute_one_agentic_upload_review(
                 validation = _run_validation(checkout, validation_command)
                 if validation.returncode == 0:
                     break
-            changed_files = _changed_files(checkout, git_env)
-            diff_stat = _diff_stat(checkout, git_env, changed_files)
+            changed_files = _branch_changed_files(checkout, git_env, base_ref)
+            diff_stat = _diff_stat(checkout, git_env, changed_files, base_ref=base_ref)
             summary = _read_agent_summary(summary_path, changed_files)
             draft_paths = _final_draft_paths(summary, changed_files)
             if not changed_files:
@@ -220,22 +221,52 @@ def _execute_one_agentic_upload_review(
                     elapsed_seconds=time.monotonic() - started,
                 )
                 return None, observation
-            _run_git(["add", "--all"], cwd=checkout, env=git_env)
-            diff_stat = _git_output(["diff", "--cached", "--stat"], cwd=checkout, env=git_env)
-            staged = subprocess.run(
-                ["git", "diff", "--cached", "--quiet"],
-                cwd=checkout,
-                env=git_env,
-                capture_output=True,
-                text=True,
-                timeout=GIT_TIMEOUT_SECONDS,
-                check=False,
-            )
-            if staged.returncode == 0:
-                return _failed_result(validated_intent, "upload review agent produced no staged commit changes"), _agent_observation(
+            uncommitted_files = _changed_files(checkout, git_env)
+            agent_committed = _has_branch_commits(checkout, git_env, base_ref)
+            if uncommitted_files:
+                _run_git(["add", "--all"], cwd=checkout, env=git_env)
+                staged = subprocess.run(
+                    ["git", "diff", "--cached", "--quiet"],
+                    cwd=checkout,
+                    env=git_env,
+                    capture_output=True,
+                    text=True,
+                    timeout=GIT_TIMEOUT_SECONDS,
+                    check=False,
+                )
+                if staged.returncode == 0:
+                    return _failed_result(validated_intent, "upload review agent produced no staged commit changes"), _agent_observation(
+                        preview,
+                        status="fail",
+                        message="upload review agent produced no staged commit changes",
+                        model=model,
+                        attempts=attempts_used,
+                        draft_paths=draft_paths,
+                        changed_files=changed_files,
+                        diff_stat=diff_stat,
+                        validation_command=validation_command,
+                        validation=validation,
+                        transcript_path=transcript_path,
+                        elapsed_seconds=time.monotonic() - started,
+                    )
+                _run_git(
+                    [
+                        "-c",
+                        f"user.name={GIT_AUTHOR_NAME}",
+                        "-c",
+                        f"user.email={GIT_AUTHOR_EMAIL}",
+                        "commit",
+                        "-m",
+                        f"Curate upload {preview.upload_id}",
+                    ],
+                    cwd=checkout,
+                    env=git_env,
+                )
+            elif not agent_committed:
+                return _failed_result(validated_intent, "upload review agent produced no commit changes"), _agent_observation(
                     preview,
                     status="fail",
-                    message="upload review agent produced no staged commit changes",
+                    message="upload review agent produced no commit changes",
                     model=model,
                     attempts=attempts_used,
                     draft_paths=draft_paths,
@@ -249,7 +280,7 @@ def _execute_one_agentic_upload_review(
             observation = _agent_observation(
                 preview,
                 status="pass",
-                message="Codex upload review produced a validated corpus diff.",
+                message="Codex upload review produced a validated corpus branch delta.",
                 model=model,
                 attempts=attempts_used,
                 draft_paths=draft_paths,
@@ -259,19 +290,6 @@ def _execute_one_agentic_upload_review(
                 validation=validation,
                 transcript_path=transcript_path,
                 elapsed_seconds=time.monotonic() - started,
-            )
-            _run_git(
-                [
-                    "-c",
-                    f"user.name={GIT_AUTHOR_NAME}",
-                    "-c",
-                    f"user.email={GIT_AUTHOR_EMAIL}",
-                    "commit",
-                    "-m",
-                    f"Curate upload {preview.upload_id}",
-                ],
-                cwd=checkout,
-                env=git_env,
             )
             _run_git(["push", "origin", f"HEAD:refs/heads/{preview.branch}"], cwd=checkout, env=git_env)
             if on_branch_pushed is not None:
@@ -396,7 +414,9 @@ def _upload_agent_prompt(
         "files and `.ykm/corpus-policy.yaml` directly when bounded policy vocabulary changes are "
         "needed. The corpus policy is a consistency guardrail and review surface, not an immutable "
         "permission boundary.\n\n"
-        "Do not commit, push, merge, close issues, relabel, or use network services directly. "
+        "You may make local commits on the prepared branch if that is the natural way to complete "
+        "the work. Do not push, merge, close issues, relabel, open pull requests, or use network "
+        "services directly. "
         "Do not edit `.github/workflows/*`, `.env`, `.env.*`, or generated private runtime files. "
         "Never create backup, temporary, swap, `.bak`, `.orig`, `.rej`, or `~` files in git. "
         "Do not copy secrets into the corpus. You may run tests and validation commands in this "
@@ -407,8 +427,9 @@ def _upload_agent_prompt(
         '{"content_summary":"one short sentence identifying the uploaded document",'
         '"draft_paths":["final/markdown-path.md"]}. The content_summary must help the owner '
         "recognize the uploaded document at a glance without quoting intake excerpts.\n\n"
-        "Success criteria: the validation command must pass after your edits. Leave your changes "
-        "uncommitted in the working tree for Curator to validate, commit, push, and open a PR.\n"
+        "Success criteria: the validation command must pass after your edits. Leave either "
+        "uncommitted working-tree changes or local commits on the prepared branch. Curator will "
+        "validate the final branch delta, push, and open the PR.\n"
         f"{previous}\n"
         "Upload payload JSON:\n"
         f"{json.dumps(payload, sort_keys=True)}"
@@ -533,8 +554,29 @@ def _changed_files(checkout: Path, env: dict[str, str]) -> list[str]:
     return sorted(set(files))
 
 
-def _diff_stat(checkout: Path, env: dict[str, str], changed_files: list[str]) -> str:
-    diff_stat = _git_output(["diff", "--stat"], cwd=checkout, env=env)
+def _branch_changed_files(checkout: Path, env: dict[str, str], base_ref: str) -> list[str]:
+    committed = _git_output(["diff", "--name-only", f"{base_ref}..HEAD"], cwd=checkout, env=env)
+    return sorted(set(_changed_files(checkout, env)) | set(committed.splitlines()))
+
+
+def _has_branch_commits(checkout: Path, env: dict[str, str], base_ref: str) -> bool:
+    count = _git_output(["rev-list", "--count", f"{base_ref}..HEAD"], cwd=checkout, env=env).strip()
+    return count not in {"", "0"}
+
+
+def _diff_stat(
+    checkout: Path,
+    env: dict[str, str],
+    changed_files: list[str],
+    *,
+    base_ref: str | None = None,
+) -> str:
+    diff_stat = ""
+    if base_ref:
+        diff_stat = _git_output(["diff", "--stat", f"{base_ref}..HEAD"], cwd=checkout, env=env)
+    working_stat = _git_output(["diff", "--stat"], cwd=checkout, env=env)
+    if working_stat:
+        diff_stat = (diff_stat.rstrip() + "\n" + working_stat).lstrip()
     untracked = _git_output(
         ["ls-files", "--others", "--exclude-standard"],
         cwd=checkout,

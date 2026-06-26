@@ -28,8 +28,11 @@ from curator.state import deterministic_idempotency_key
 from curator.upload_agent import (
     GIT_AUTHOR_EMAIL,
     GIT_AUTHOR_NAME,
+    _branch_changed_files,
     _changed_files,
+    _has_branch_commits,
     _git_env,
+    _git_output,
     _run_git,
     _run_validation,
     _safe_name,
@@ -86,7 +89,16 @@ def execute_agentic_feedback_actions(
         if result.status == "failed" and mode == "manual_live":
             results.append(
                 broker_adapter.create_issue(
-                    _fallback_issue_intent(run_id=run_id, source_intent=intent, reason=result.message)
+                    _fallback_issue_intent(
+                        run_id=run_id,
+                        source_intent=intent,
+                        reason=result.message,
+                        feedback_records=[
+                            records_by_feedback_id[feedback_id]
+                            for feedback_id in intent.evidence.feedback_ids
+                            if feedback_id in records_by_feedback_id
+                        ],
+                    )
                 )
             )
         else:
@@ -124,6 +136,7 @@ def _execute_corpus_pr(
             git_env = _git_env(askpass)
             _run_git(["clone", "--depth=1", broker_remote_url, str(checkout)], cwd=None, env=git_env)
             _run_git(["checkout", "-B", intent.branch], cwd=checkout, env=git_env)
+            base_ref = _git_output(["rev-parse", "HEAD"], cwd=checkout, env=git_env).strip()
             validation: subprocess.CompletedProcess[str] | None = None
             for attempt in range(1, max_attempts + 1):
                 _run_codex_feedback_agent(
@@ -139,7 +152,7 @@ def _execute_corpus_pr(
                     attempt=attempt,
                     previous_validation=validation,
                 )
-                changed_files = _changed_files(checkout, git_env)
+                changed_files = _branch_changed_files(checkout, git_env, base_ref)
                 if not changed_files:
                     continue
                 backup_or_temp_paths = forbidden_backup_or_temp_paths(changed_files)
@@ -152,36 +165,41 @@ def _execute_corpus_pr(
                 validation = _run_validation(checkout, validation_command)
                 if validation.returncode == 0:
                     break
-            changed_files = _changed_files(checkout, git_env)
+            changed_files = _branch_changed_files(checkout, git_env, base_ref)
             if not changed_files:
                 return _failed_result(intent, "Codex feedback agent produced no corpus changes")
             if validation is None or validation.returncode != 0:
                 return _failed_result(intent, "feedback corpus PR validation failed")
-            _run_git(["add", "--all"], cwd=checkout, env=git_env)
-            staged = subprocess.run(
-                ["git", "diff", "--cached", "--quiet"],
-                cwd=checkout,
-                env=git_env,
-                capture_output=True,
-                text=True,
-                timeout=GIT_TIMEOUT_SECONDS,
-                check=False,
-            )
-            if staged.returncode == 0:
-                return _failed_result(intent, "feedback agent produced no staged commit changes")
-            _run_git(
-                [
-                    "-c",
-                    f"user.name={GIT_AUTHOR_NAME}",
-                    "-c",
-                    f"user.email={GIT_AUTHOR_EMAIL}",
-                    "commit",
-                    "-m",
-                    f"Curate feedback {','.join(intent.evidence.feedback_ids)[:80]}",
-                ],
-                cwd=checkout,
-                env=git_env,
-            )
+            uncommitted_files = _changed_files(checkout, git_env)
+            agent_committed = _has_branch_commits(checkout, git_env, base_ref)
+            if uncommitted_files:
+                _run_git(["add", "--all"], cwd=checkout, env=git_env)
+                staged = subprocess.run(
+                    ["git", "diff", "--cached", "--quiet"],
+                    cwd=checkout,
+                    env=git_env,
+                    capture_output=True,
+                    text=True,
+                    timeout=GIT_TIMEOUT_SECONDS,
+                    check=False,
+                )
+                if staged.returncode == 0:
+                    return _failed_result(intent, "feedback agent produced no staged commit changes")
+                _run_git(
+                    [
+                        "-c",
+                        f"user.name={GIT_AUTHOR_NAME}",
+                        "-c",
+                        f"user.email={GIT_AUTHOR_EMAIL}",
+                        "commit",
+                        "-m",
+                        f"Curate feedback {','.join(intent.evidence.feedback_ids)[:80]}",
+                    ],
+                    cwd=checkout,
+                    env=git_env,
+                )
+            elif not agent_committed:
+                return _failed_result(intent, "feedback agent produced no commit changes")
             _run_git(["push", "origin", f"HEAD:refs/heads/{intent.branch}"], cwd=checkout, env=git_env)
             result = broker_adapter.create_pull(intent)
             if result.message:
@@ -290,9 +308,13 @@ def _feedback_agent_prompt(
         "You are in a clean checkout of the private ykmcorpus repository.\n"
         "Use the corpus change records and durable evidence IDs to make the smallest correct corpus edit.\n"
         "If no source or section is supplied, search the checkout for one clear bounded target before editing.\n"
+        "You may make local commits on the prepared branch if that is the natural way to complete the work.\n"
+        "Do not push, merge, close issues, relabel, open pull requests, or use network services directly.\n"
         "Do not edit secrets, workflows, generated artifacts, or unrelated files.\n"
         "If the feedback cannot be safely resolved as a corpus change, make no changes.\n"
-        f"After editing, the controller will run: {validation_command!r}.\n"
+        "Leave either uncommitted working-tree changes or local commits on the prepared branch. "
+        f"After editing, the controller will run: {validation_command!r}, validate the final branch delta, "
+        "push, and open the PR.\n"
         f"{previous}\n"
         "Corpus change task JSON:\n"
         f"{json.dumps(payload, indent=2, sort_keys=True)}\n"
@@ -304,6 +326,7 @@ def _fallback_issue_intent(
     run_id: str,
     source_intent: ExecutionIntent,
     reason: str | None,
+    feedback_records: list[dict[str, object]] | None = None,
 ) -> ExecutionIntent:
     evidence = ActionEvidence.model_validate(source_intent.evidence.model_dump())
     idempotency_key = deterministic_idempotency_key("corpus_issue", evidence)
@@ -315,7 +338,7 @@ def _fallback_issue_intent(
         evidence=evidence,
         target_repo=DEFAULT_TARGET_REPO,
     )
-    body = draft_action_body(run_id, action)
+    body = draft_action_body(run_id, action, feedback_records=feedback_records or [])
     if reason:
         body = f"{body}\n\n## Fallback Reason\n\n{reason[:1000]}\n"
     return ExecutionIntent(
