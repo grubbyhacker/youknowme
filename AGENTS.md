@@ -10,6 +10,15 @@ This repository is the home for the production YouKnowMe project.
 
 The POC in 'POC/' should be ignored and never mentioned. Do not try to maintain the POC code it will be deleted.
 
+## Corpus Change Boundary
+
+Do not make direct changes in the YouKnowMe corpus unless Roger explicitly asks for that exact
+manual corpus edit. When Roger asks about corpus feedback, missing knowledge, stale served content,
+or why a submitted corpus-change request has not appeared yet, treat it as a request to inspect or
+improve the Curator/agent workflow so the agent makes the corpus change. The normal answer should be
+a YouKnowMe feature fix, bug fix, diagnostic, or operational status lookup, not bypassing Curator by
+editing the corpus yourself.
+
 ## Documentation
 
 Place the PRD and supporting documentation in `docs/`.

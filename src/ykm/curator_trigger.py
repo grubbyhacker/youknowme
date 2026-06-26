@@ -30,6 +30,7 @@ class CuratorUploadTriggerConfig:
     url: str = ""
     token: str = ""
     debounce_seconds: float = 90.0
+    feedback_debounce_seconds: float = 0.0
     timeout_seconds: float = 20.0
 
     @classmethod
@@ -39,6 +40,9 @@ class CuratorUploadTriggerConfig:
             url=os.getenv("YKM_CURATOR_TRIGGER_URL", "").strip(),
             token=os.getenv("YKM_CURATOR_TRIGGER_TOKEN", "").strip(),
             debounce_seconds=_env_float("YKM_CURATOR_TRIGGER_DEBOUNCE_SECONDS", 90.0),
+            feedback_debounce_seconds=_env_float(
+                "YKM_CURATOR_TRIGGER_FEEDBACK_DEBOUNCE_SECONDS", 0.0
+            ),
             timeout_seconds=_env_float("YKM_CURATOR_TRIGGER_TIMEOUT_SECONDS", 20.0),
         )
 
@@ -62,35 +66,43 @@ class CuratorUploadTrigger:
         self._logger = logger
         self._lock = threading.Lock()
         self._timer: TimerLike | None = None
-        self._pending_upload_id: str | None = None
+        self._pending_event: str | None = None
 
         if self.config.enabled and not self.config.active:
             self._logger.warning(
-                "Curator upload trigger enabled without URL/token; upload trigger disabled"
+                "Curator trigger enabled without URL/token; trigger disabled"
             )
 
     def record_upload(self, upload_id: str) -> None:
+        self._record_event("upload", upload_id, self.config.debounce_seconds)
+
+    def record_feedback(self, feedback_id: str) -> None:
+        self._record_event("feedback", feedback_id, self.config.feedback_debounce_seconds)
+
+    def _record_event(self, event_type: str, event_id: str, debounce_seconds: float) -> None:
         if not self.config.enabled:
             return
         if not self.config.active:
             self._logger.warning(
-                "Skipping Curator upload trigger for %s because URL/token is not configured",
-                upload_id,
+                "Skipping Curator trigger for %s %s because URL/token is not configured",
+                event_type,
+                event_id,
             )
             return
 
         with self._lock:
             if self._timer is not None:
                 self._timer.cancel()
-            self._pending_upload_id = upload_id
-            self._timer = self._timer_factory(self.config.debounce_seconds, self._launch_pending)
+            self._pending_event = f"{event_type} {event_id}"
+            self._timer = self._timer_factory(debounce_seconds, self._launch_pending)
             self._timer.daemon = True
             self._timer.start()
 
         self._logger.info(
-            "Scheduled Curator upload trigger for %s in %.1f seconds",
-            upload_id,
-            self.config.debounce_seconds,
+            "Scheduled Curator trigger for %s %s in %.1f seconds",
+            event_type,
+            event_id,
+            debounce_seconds,
         )
 
     def stop(self) -> None:
@@ -98,22 +110,22 @@ class CuratorUploadTrigger:
             if self._timer is not None:
                 self._timer.cancel()
                 self._timer = None
-            self._pending_upload_id = None
+            self._pending_event = None
 
     def _launch_pending(self) -> None:
         with self._lock:
-            upload_id = self._pending_upload_id
-            self._pending_upload_id = None
+            event = self._pending_event
+            self._pending_event = None
             self._timer = None
 
-        if upload_id is None:
+        if event is None:
             return
 
-        self._logger.info("Launching Curator after upload trigger for %s", upload_id)
+        self._logger.info("Launching Curator after trigger for %s", event)
         try:
             self._launcher(self.config)
         except Exception:
-            self._logger.exception("Curator upload trigger failed for %s", upload_id)
+            self._logger.exception("Curator trigger failed for %s", event)
 
 
 def launch_curator(config: CuratorUploadTriggerConfig) -> None:
