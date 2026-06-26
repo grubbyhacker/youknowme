@@ -12,7 +12,7 @@ run = "uv run pytest"
 
 [tasks.lint]
 description = "Run lint checks"
-run = "uv run ruff check ."
+run = "uv run ruff check . && uv run scripts/check-test-file-lines.py"
 
 [tasks.demo]
 description = "Build the synthetic corpus and run local CLI demo queries"
