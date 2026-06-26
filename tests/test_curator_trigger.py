@@ -7,14 +7,14 @@ from typing import Callable
 
 import pytest
 
-from ykm.contracts import UploadFileInput, UploadRequest
+from ykm.contracts import CorpusChangeRequest, UploadFileInput, UploadRequest
 from ykm.curator_trigger import (
     CuratorUploadTrigger,
     CuratorUploadTriggerConfig,
     launch_curator,
 )
 from ykm.intake import IntakeError, IntakeStore
-from ykm.server import stage_upload_for_mcp
+from ykm.server import record_corpus_change_for_mcp, stage_upload_for_mcp
 
 
 class ManualTimer:
@@ -53,6 +53,20 @@ def test_disabled_trigger_ignores_upload() -> None:
     assert timers == []
 
 
+def test_trigger_config_reads_feedback_debounce_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("YKM_CURATOR_TRIGGER_ENABLED", "true")
+    monkeypatch.setenv("YKM_CURATOR_TRIGGER_URL", "http://curator.example/launch")
+    monkeypatch.setenv("YKM_CURATOR_TRIGGER_TOKEN", "token")
+    monkeypatch.setenv("YKM_CURATOR_TRIGGER_DEBOUNCE_SECONDS", "90")
+    monkeypatch.setenv("YKM_CURATOR_TRIGGER_FEEDBACK_DEBOUNCE_SECONDS", "3")
+
+    config = CuratorUploadTriggerConfig.from_env()
+
+    assert config.active is True
+    assert config.debounce_seconds == 90
+    assert config.feedback_debounce_seconds == 3
+
+
 def test_upload_trigger_debounces_to_latest_upload() -> None:
     timers: list[ManualTimer] = []
     launched: list[str] = []
@@ -75,6 +89,34 @@ def test_upload_trigger_debounces_to_latest_upload() -> None:
     assert [timer.interval for timer in timers] == [90, 90]
     assert timers[0].cancelled is True
     assert timers[1].started is True
+    timers[0].fire()
+    assert launched == []
+    timers[1].fire()
+    assert launched == ["http://curator.example/launch"]
+
+
+def test_feedback_trigger_uses_feedback_debounce_and_cancels_pending_upload() -> None:
+    timers: list[ManualTimer] = []
+    launched: list[str] = []
+    config = CuratorUploadTriggerConfig(
+        enabled=True,
+        url="http://curator.example/launch",
+        token="token",
+        debounce_seconds=90,
+        feedback_debounce_seconds=0,
+    )
+    trigger = CuratorUploadTrigger(
+        config,
+        launcher=lambda launch_config: launched.append(launch_config.url),
+        timer_factory=lambda interval, callback: timers.append(ManualTimer(interval, callback))
+        or timers[-1],
+    )
+
+    trigger.record_upload("upl_1")
+    trigger.record_feedback("fb_1")
+
+    assert [timer.interval for timer in timers] == [90, 0]
+    assert timers[0].cancelled is True
     timers[0].fire()
     assert launched == []
     timers[1].fire()
@@ -173,3 +215,27 @@ def test_stage_upload_for_mcp_does_not_trigger_rejected_upload(tmp_path: Path) -
         )
 
     assert uploads == []
+
+
+def test_record_corpus_change_for_mcp_triggers_feedback(tmp_path: Path) -> None:
+    feedback_ids: list[str] = []
+    store = IntakeStore(tmp_path / "intake")
+    trigger = CuratorUploadTrigger(
+        CuratorUploadTriggerConfig(enabled=True, url="http://curator.example/launch", token="token"),
+        launcher=lambda _config: None,
+        timer_factory=lambda interval, callback: ManualTimer(interval, callback),
+    )
+    trigger.record_feedback = feedback_ids.append  # type: ignore[method-assign]
+
+    response = record_corpus_change_for_mcp(
+        store,
+        CorpusChangeRequest(
+            intent="update_existing",
+            instruction="Add the supplied article URL to the existing article list.",
+            source_id="roger-published-article-urls",
+        ),
+        build_id="build-1",
+        trigger=trigger,
+    )
+
+    assert feedback_ids == [response.corpus_change_id]

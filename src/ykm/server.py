@@ -28,6 +28,7 @@ from ykm.auth import AuthConfig, AuthMiddleware, AuthVerifier
 from ykm.contracts import (
     CorpusChangeIntent,
     CorpusChangeRequest,
+    CorpusChangeResponse,
     QueryLogRecord,
     QueryRequest,
     RetrieveRequest,
@@ -167,6 +168,18 @@ def stage_upload_for_mcp(
 ) -> UploadResponse:
     response = intake.stage_upload(request, build_id=build_id, auth_path="mcp")
     trigger.record_upload(response.upload_id)
+    return response
+
+
+def record_corpus_change_for_mcp(
+    intake: IntakeStore,
+    request: CorpusChangeRequest,
+    *,
+    build_id: str | None,
+    trigger: CuratorUploadTrigger,
+) -> CorpusChangeResponse:
+    response = intake.record_corpus_change(request, build_id=build_id, auth_path="mcp")
+    trigger.record_feedback(response.corpus_change_id)
     return response
 
 
@@ -376,7 +389,8 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
         upload_id: str | None = None,
     ) -> dict[str, Any]:
         index = loaded_index()
-        response = intake.record_corpus_change(
+        response = record_corpus_change_for_mcp(
+            intake,
             CorpusChangeRequest(
                 intent=intent,
                 instruction=instruction,
@@ -386,7 +400,7 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
                 upload_id=upload_id,
             ),
             build_id=index.manifest.build_id,
-            auth_path="mcp",
+            trigger=curator_upload_trigger,
         )
         return response.model_dump(mode="json")
 

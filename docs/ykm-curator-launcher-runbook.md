@@ -151,6 +151,18 @@ The timer principal should be scoped to `ykm-curator-live`, `ykm-curator-dry-run
 `ykm-curator-repair-live` available for manual rollback or operator diagnostics during this
 milestone, but do not point the timer at those one-area profiles.
 
+## Feedback Status Lookup
+
+Use the repository script for read-only production feedback diagnostics instead of inventing SSH
+commands:
+
+```bash
+scripts/prod-feedback-status.sh fb_20260626_002857_1b2f7b87
+```
+
+The script reads the production intake queue, feedback decision log, Curator status file, and recent
+broker run reports over SSH. It does not modify production state.
+
 Before enabling the timer change, manually launch the live profile with the operator token:
 
 ```bash
