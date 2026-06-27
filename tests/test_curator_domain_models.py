@@ -57,6 +57,28 @@ def test_upload_review_pull_intent_surfaces_draft_page_context() -> None:
     assert "- Page: `preferences/dev-environment.md`" in intent.body
 
 
+def test_upload_review_pull_intent_uses_supplied_target_repo() -> None:
+    preview = UploadReviewPreview(
+        upload_id="upl_dev_env",
+        queue="pending",
+        action_id="upl_act_1",
+        idempotency_key="upload:abc123",
+        current_state="pending",
+        proposed_state="claimed",
+        branch="curator/run-upload/upload-upl-dev-env-abc123",
+        reason="preview",
+        draft_paths=["preferences/dev-environment.md"],
+    )
+
+    intent = upload_review_pull_intent(
+        run_id="run-upload",
+        preview=preview,
+        target_repo="grubbyhacker/ykmcorpus-staging",
+    )
+
+    assert intent.target_repo == "grubbyhacker/ykmcorpus-staging"
+
+
 def test_upload_snapshot_counts_deferred_and_archive(tmp_path: Path, monkeypatch) -> None:
     intake = tmp_path / "intake"
     for state in ("pending", "claimed", "processed", "rejected", "archive", "deferred"):
@@ -572,5 +594,3 @@ def test_curator_task_rejects_unknown_schema_version() -> None:
             run_id="run-bad-schema",
             enabled_actions=["plan_feedback"],
         )
-
-

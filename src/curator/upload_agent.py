@@ -72,6 +72,7 @@ def execute_agentic_upload_review_prs(
     output: Path,
     codex_proxy_base_url: str | None,
     codex_proxy_token: str | None,
+    target_repo: str = "grubbyhacker/ykmcorpus",
     on_branch_pushed: Callable[[ExecutionIntent], None] | None = None,
 ) -> tuple[list[ExecutionResult], list[UploadReviewObservation]]:
     results: list[ExecutionResult] = []
@@ -92,6 +93,7 @@ def execute_agentic_upload_review_prs(
             output=output,
             codex_proxy_base_url=codex_proxy_base_url,
             codex_proxy_token=codex_proxy_token,
+            target_repo=target_repo,
             on_branch_pushed=on_branch_pushed,
         )
         observations.append(observation)
@@ -114,9 +116,10 @@ def _execute_one_agentic_upload_review(
     output: Path,
     codex_proxy_base_url: str | None,
     codex_proxy_token: str | None,
+    target_repo: str,
     on_branch_pushed: Callable[[ExecutionIntent], None] | None,
 ) -> tuple[ExecutionResult | None, UploadReviewObservation]:
-    intent = upload_review_pull_intent(run_id=run_id, preview=preview)
+    intent = upload_review_pull_intent(run_id=run_id, preview=preview, target_repo=target_repo)
     if bundle is None:
         return None, _agent_observation(
             preview,
@@ -251,6 +254,7 @@ def _execute_one_agentic_upload_review(
                 preview=preview,
                 content_summary=summary.get("content_summary"),
                 draft_paths=draft_paths,
+                target_repo=target_repo,
             )
             if mode != "manual_live":
                 observation = _agent_observation(

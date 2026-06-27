@@ -30,12 +30,14 @@ def execute_upload_review_pr(
     broker_adapter,
     preview: UploadReviewPreview,
     output: UploadReviewModelOutput,
+    target_repo: str = "grubbyhacker/ykmcorpus",
     on_branch_pushed: Callable[[ExecutionIntent], None] | None = None,
 ) -> ExecutionResult:
     intent = upload_review_pull_intent(
         run_id=run_id,
         preview=preview,
         content_summary=output.content_summary,
+        target_repo=target_repo,
     )
     if output.upload_id != preview.upload_id:
         return _failed_result(intent, f"upload review output mismatch for {preview.upload_id}")
@@ -91,6 +93,7 @@ def upload_review_pull_intent(
     preview: UploadReviewPreview,
     content_summary: str | None = None,
     draft_paths: list[str] | None = None,
+    target_repo: str = "grubbyhacker/ykmcorpus",
 ) -> ExecutionIntent:
     action = ProposedAction(
         action_id=preview.action_id,
@@ -98,14 +101,14 @@ def upload_review_pull_intent(
         classification="upload_review",
         idempotency_key="corpus_pr:" + preview.idempotency_key.split(":", maxsplit=1)[-1],
         evidence=ActionEvidence(upload_ids=[preview.upload_id]),
-        target_repo="grubbyhacker/ykmcorpus",
+        target_repo=target_repo,
     )
     effective_draft_paths = draft_paths if draft_paths is not None else preview.draft_paths
     return ExecutionIntent(
         action_id=preview.action_id,
         operation="pull.create",
         idempotency_key=preview.idempotency_key,
-        target_repo="grubbyhacker/ykmcorpus",
+        target_repo=target_repo,
         branch=preview.branch,
         evidence=ActionEvidence(upload_ids=[preview.upload_id]),
         title=_upload_review_pr_title(preview, draft_paths=effective_draft_paths),
