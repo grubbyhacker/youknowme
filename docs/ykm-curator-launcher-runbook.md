@@ -344,6 +344,36 @@ The generated Codex config sets `wire_api = "responses"` and passes `X-GH-Agent-
 `ykm-codex-gpt-5-mini`; `ykm-codex-haiku` and `ykm-codex-sonnet` remain useful comparison or
 fallback aliases.
 
+## Live Upload-Agent E2E
+
+After changes to the agentic upload-review harness, run a controlled live upload E2E before trusting
+the timer path. Use a non-secret markdown upload around 20k characters, preferably one that requires
+a small `.ykm/corpus-policy.yaml` vocabulary update, so the test covers path-backed upload input,
+repo inspection, validation, branch push, and PR creation.
+
+Expected result:
+
+- run status is `pass`
+- `mode=manual_live`
+- `included_upload_ids` contains the test upload
+- `upload_review_observation_count=1`
+- `upload_review_validation_failure_count=0`
+- `github_mutation_count=1`
+- the transcript shows Codex reading upload files from the staged input paths rather than receiving
+  the entire upload body in the initial prompt
+- a real ykmcorpus PR is opened ready for review
+
+If the run fails with `upload review Codex harness failed` and the transcript contains
+`stream disconnected before completion` or `stream closed before response.completed`, repeat the
+same upload/profile twice more with `ykm-codex-gpt-5-mini`. Only treat it as a model-specific
+problem if the same retryable harness failure repeats on the same upload after this path-backed
+prompt change.
+
+For model comparison, use only configured aliases that are no more expensive than
+`ykm-codex-gpt-5-mini`. Record the run ID, model alias, PR number, validation result, mutation count,
+and transcript path. Do not switch production away from `ykm-codex-gpt-5-mini` unless the same
+controlled upload repeatedly fails on that alias and passes on a same-or-cheaper alias.
+
 The current Curator GitHub App scope does not include workflow write permission. If Codex repairs
 touch `.github/workflows/*`, the Curator should report the repair as rejected/permission-blocked
 instead of attempting to push; base-repository CI path-filter changes need a separate privileged

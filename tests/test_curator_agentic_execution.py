@@ -15,28 +15,70 @@ from curator.models import (
     ExecutionResult,
 )
 from curator.state import deterministic_idempotency_key
-from curator.upload_agent import _upload_agent_prompt, execute_agentic_upload_review_prs
+from curator.upload_agent import (
+    MAX_UPLOAD_AGENT_FILE_CHARS,
+    _stage_upload_agent_input,
+    _upload_agent_prompt,
+    execute_agentic_upload_review_prs,
+)
 from tests.curator_test_support import _fake_mise, _upload_agent_preview_and_bundle
 
 
-def test_upload_agent_prompt_allows_policy_edits_and_requires_summary(tmp_path: Path) -> None:
+def test_upload_agent_prompt_uses_staged_input_paths_without_file_content(tmp_path: Path) -> None:
     preview, bundle = _upload_agent_preview_and_bundle(tmp_path)
+    upload_input = _stage_upload_agent_input(bundle, tmp_path / "upload-input")
     prompt = _upload_agent_prompt(
         run_id="run-upload-agent",
         preview=preview,
         bundle=bundle,
+        upload_input=upload_input,
         validation_command=["mise", "run", "validate"],
         summary_path=tmp_path / "summary.json",
         previous_validation=None,
     )
 
+    assert str(upload_input.root) in prompt
+    assert str(upload_input.files[0].path) in prompt
+    assert "# Tooling\n\nUse uv for Python dependencies." not in prompt
     assert "Edit markdown corpus files and `.ykm/corpus-policy.yaml` directly" in prompt
     assert "not an immutable permission boundary" in prompt
+    assert "Inspect those files with shell tools" in prompt
     assert "summary_path" in prompt
     assert "content_summary" in prompt
     assert "You may make local commits" in prompt
     assert "Do not push" in prompt
     assert "Never create backup" in prompt
+
+
+def test_upload_agent_stages_failed_runbook_sized_file_without_prompt_body(tmp_path: Path) -> None:
+    preview, bundle = _upload_agent_preview_and_bundle(tmp_path)
+    source = Path(bundle.path) / "files" / "tooling.md"
+    body = "x" * 19923
+    source.write_text(body, encoding="utf-8")
+
+    upload_input = _stage_upload_agent_input(bundle, tmp_path / "upload-input")
+    prompt = _upload_agent_prompt(
+        run_id="run-upload-agent",
+        preview=preview,
+        bundle=bundle,
+        upload_input=upload_input,
+        validation_command=["mise", "run", "validate"],
+        summary_path=tmp_path / "summary.json",
+        previous_validation=None,
+    )
+
+    assert upload_input.files[0].char_count == 19923
+    assert upload_input.files[0].path.read_text(encoding="utf-8") == body
+    assert body not in prompt
+
+
+def test_upload_agent_rejects_files_over_path_backed_limit(tmp_path: Path) -> None:
+    _preview, bundle = _upload_agent_preview_and_bundle(tmp_path)
+    source = Path(bundle.path) / "files" / "tooling.md"
+    source.write_text("x" * (MAX_UPLOAD_AGENT_FILE_CHARS + 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="too large for agentic upload review"):
+        _stage_upload_agent_input(bundle, tmp_path / "upload-input")
 
 
 def test_agentic_upload_review_creates_pr_after_validated_codex_diff(
@@ -83,6 +125,85 @@ def test_agentic_upload_review_creates_pr_after_validated_codex_diff(
     assert observation.draft_paths == ["homemaint/tooling.md"]
     assert "homemaint/tooling.md" in (observation.diff_stat or "")
     assert observation.returncode == 0
+
+
+def test_agentic_upload_review_retries_retryable_codex_stream_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    preview, bundle = _upload_agent_preview_and_bundle(tmp_path)
+    broker = FixtureBrokerAdapter(
+        BrokerFixtureState(
+            schema_version="1",
+            reachable=True,
+            allowed_operations=["pull.create"],
+        )
+    )
+    _fake_upload_agent_git(tmp_path, monkeypatch)
+    _fake_upload_agent_codex(tmp_path, monkeypatch, mode="stream_fail_once")
+    _fake_mise(tmp_path, monkeypatch, exit_code=0, stdout="validation ok\n")
+    monkeypatch.setenv("BROKER_AGENT_ID", "ykm-curator")
+    monkeypatch.setenv("BROKER_AGENT_SECRET", "broker-secret")
+
+    results, observations = execute_agentic_upload_review_prs(
+        run_id="run-upload-agent",
+        mode="manual_live",
+        broker_remote_url="https://broker/git/grubbyhacker/ykmcorpus.git",
+        broker_adapter=broker,
+        previews=[preview],
+        bundles=[bundle],
+        model="ykm-codex-gpt-5-mini",
+        max_attempts=2,
+        validation_command=["mise", "run", "validate"],
+        output=tmp_path / "output",
+        codex_proxy_base_url="http://proxy:8092",
+        codex_proxy_token="proxy-token",
+    )
+
+    assert len(results) == 1
+    assert results[0].status == "simulated"
+    assert len(observations) == 1
+    observation = observations[0]
+    assert observation.status == "pass"
+    assert observation.attempts == 2
+    assert observation.changed_files == ["homemaint/tooling.md"]
+    assert (tmp_path / "output" / "upload-review-agent" / "upl_tooling" / "codex-attempt-1.txt").exists()
+    assert (tmp_path / "output" / "upload-review-agent" / "upl_tooling" / "codex-attempt-2.txt").exists()
+
+
+def test_agentic_upload_review_reports_actual_attempts_for_nonretryable_codex_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    preview, bundle = _upload_agent_preview_and_bundle(tmp_path)
+    broker = FixtureBrokerAdapter(BrokerFixtureState(schema_version="1", reachable=True))
+    _fake_upload_agent_git(tmp_path, monkeypatch)
+    _fake_upload_agent_codex(tmp_path, monkeypatch, mode="nonretryable_fail")
+    _fake_mise(tmp_path, monkeypatch, exit_code=0, stdout="validation ok\n")
+    monkeypatch.setenv("BROKER_AGENT_ID", "ykm-curator")
+    monkeypatch.setenv("BROKER_AGENT_SECRET", "broker-secret")
+
+    results, observations = execute_agentic_upload_review_prs(
+        run_id="run-upload-agent",
+        mode="manual_live",
+        broker_remote_url="https://broker/git/grubbyhacker/ykmcorpus.git",
+        broker_adapter=broker,
+        previews=[preview],
+        bundles=[bundle],
+        model="ykm-codex-gpt-5-mini",
+        max_attempts=2,
+        validation_command=["mise", "run", "validate"],
+        output=tmp_path / "output",
+        codex_proxy_base_url="http://proxy:8092",
+        codex_proxy_token="proxy-token",
+    )
+
+    assert len(results) == 1
+    assert results[0].status == "failed"
+    assert len(observations) == 1
+    assert observations[0].status == "fail"
+    assert observations[0].attempts == 1
+    assert "Codex execution failed" in observations[0].message
 
 
 def test_agentic_upload_review_creates_pr_after_agent_local_commit(
@@ -395,6 +516,7 @@ def _fake_upload_agent_codex(
         (
             "#!/usr/bin/env python3\n"
             "import json\n"
+            "import os\n"
             "import pathlib\n"
             "import re\n"
             "import sys\n"
@@ -403,6 +525,10 @@ def _fake_upload_agent_codex(
             "match = re.search(r'\"summary_path\": \"([^\"]+)\"', prompt)\n"
             "summary = pathlib.Path(match.group(1))\n"
             "summary.parent.mkdir(parents=True, exist_ok=True)\n"
+            "payload = json.loads(prompt.split('Upload payload JSON:\\n', 1)[1])\n"
+            "upload_file = pathlib.Path(payload['files'][0]['path'])\n"
+            "assert upload_file.exists(), upload_file\n"
+            "assert 'Use uv for Python dependencies.' in upload_file.read_text()\n"
             "cwd = pathlib.Path.cwd()\n"
             "if mode == 'workflow':\n"
             "    path = cwd / '.github' / 'workflows' / 'validate.yml'\n"
@@ -416,6 +542,26 @@ def _fake_upload_agent_codex(
             "    path.write_text('backup copy\\n')\n"
             "    summary.write_text(json.dumps({'content_summary': 'A backup artifact.', "
             "'draft_paths': []}))\n"
+            "elif mode == 'stream_fail_once':\n"
+            "    marker = pathlib.Path(os.environ['CODEX_HOME']).parent / 'stream-failed'\n"
+            "    if not marker.exists():\n"
+            "        marker.write_text('1\\n')\n"
+            "        path = cwd / 'homemaint' / 'partial.md'\n"
+            "        path.parent.mkdir(parents=True, exist_ok=True)\n"
+            "        path.write_text('partial failed attempt\\n')\n"
+            "        sys.stderr.write('ERROR: Reconnecting... 1/5\\n')\n"
+            "        sys.stderr.write('ERROR: stream disconnected before completion: "
+            "stream closed before response.completed\\n')\n"
+            "        raise SystemExit(1)\n"
+            "    path = cwd / 'homemaint' / 'tooling.md'\n"
+            "    path.parent.mkdir(parents=True, exist_ok=True)\n"
+            "    path.write_text('---\\nid: tooling\\ntype: procedure\\ntags: "
+            "[home-maintenance]\\n---\\n\\n# Tooling\\n')\n"
+            "    summary.write_text(json.dumps({'content_summary': 'A tooling note about "
+            "Python dependencies.', 'draft_paths': ['homemaint/tooling.md']}))\n"
+            "elif mode == 'nonretryable_fail':\n"
+            "    sys.stderr.write('fatal deterministic prompt contract failure\\n')\n"
+            "    raise SystemExit(1)\n"
             "elif mode == 'committed':\n"
             "    path = cwd / 'homemaint' / 'tooling.md'\n"
             "    path.parent.mkdir(parents=True, exist_ok=True)\n"
@@ -466,6 +612,8 @@ def _fake_upload_agent_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
             "    if (cwd / 'homemaint' / 'tooling.md').exists() and not "
             "(cwd / '.agent-committed').exists():\n"
             "        paths.append('?? homemaint/tooling.md')\n"
+            "    if (cwd / 'homemaint' / 'partial.md').exists():\n"
+            "        paths.append('?? homemaint/partial.md')\n"
             "    if (cwd / '.github' / 'workflows' / 'validate.yml').exists():\n"
             "        paths.append('?? .github/workflows/validate.yml')\n"
             "    if (cwd / '.ykm' / 'corpus-policy.yaml.bak').exists():\n"
@@ -478,6 +626,8 @@ def _fake_upload_agent_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
             "    if (cwd / 'homemaint' / 'tooling.md').exists() and not "
             "(cwd / '.agent-committed').exists():\n"
             "        paths.append('homemaint/tooling.md')\n"
+            "    if (cwd / 'homemaint' / 'partial.md').exists():\n"
+            "        paths.append('homemaint/partial.md')\n"
             "    if (cwd / '.github' / 'workflows' / 'validate.yml').exists():\n"
             "        paths.append('.github/workflows/validate.yml')\n"
             "    if (cwd / '.ykm' / 'corpus-policy.yaml.bak').exists():\n"
@@ -496,6 +646,15 @@ def _fake_upload_agent_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
             "    if (cwd / '.agent-committed').exists():\n"
             "        sys.stdout.write('homemaint/tooling.md\\n')\n"
             "    raise SystemExit(0)\n"
+            "if args[:1] == ['reset']:\n"
+            "    raise SystemExit(0)\n"
+            "if args[:1] == ['clean']:\n"
+            "    cwd = pathlib.Path.cwd()\n"
+            "    for rel in ['homemaint/partial.md']:\n"
+            "        path = cwd / rel\n"
+            "        if path.exists():\n"
+            "            path.unlink()\n"
+            "    raise SystemExit(0)\n"
             "if args[:2] == ['diff', '--stat']:\n"
             "    cwd = pathlib.Path.cwd()\n"
             "    if (cwd / 'homemaint' / 'tooling.md').exists():\n"
@@ -513,5 +672,3 @@ def _fake_upload_agent_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     return script
-
-
