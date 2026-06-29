@@ -23,6 +23,8 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.event == 'push'
+    env:
+      DEPLOY_PORT: "443"
 
     steps:
       - name: Checkout vps-ops
@@ -69,11 +71,13 @@ jobs:
 
           ansible-playbook -i inventory/production.yml playbooks/deploy-youknowme.yml \
             -e "ykm_image=${ykm_image}" \
-            -e "ansible_ssh_private_key_file=/tmp/hermes-deploy"
+            -e "ansible_ssh_private_key_file=/tmp/hermes-deploy" \
+            -e "ansible_port=${DEPLOY_PORT}"
 
           ansible-playbook -i inventory/production.yml playbooks/deploy-gh-agent-broker.yml \
             -e "ykm_curator_image=${ykm_image}" \
-            -e "ansible_ssh_private_key_file=/tmp/hermes-deploy"
+            -e "ansible_ssh_private_key_file=/tmp/hermes-deploy" \
+            -e "ansible_port=${DEPLOY_PORT}"
 
       - name: Log successful deploy telemetry
         if: success()
@@ -90,7 +94,7 @@ jobs:
           outcome: failure
           ssh_host: srv1656293.hstgr.cloud
           ssh_user: github-deployer
-          ssh_port: "22"
+          ssh_port: ${{ env.DEPLOY_PORT }}
           ssh_key_path: /tmp/hermes-deploy
           service_label: youknowme
           github_token: ${{ github.token }}
