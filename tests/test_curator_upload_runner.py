@@ -17,6 +17,8 @@ from curator.models import (
 from ykm.curator import CuratorDryRunConfig, run_curator_dry_run
 from curator.runner import (
     _execute_agentic_upload_review_prs,
+    _target_repo_from_task_payload,
+    parse_curator_task_payload,
 )
 
 
@@ -55,10 +57,11 @@ def test_runner_agentic_upload_review_respects_upload_mutation_budget(
         + "\n",
         encoding="utf-8",
     )
-    captured: dict[str, list[str]] = {}
+    captured: dict[str, object] = {}
 
     def fake_execute(**kwargs):
         captured["upload_ids"] = [preview.upload_id for preview in kwargs["previews"]]
+        captured["target_repo"] = kwargs["target_repo"]
         return [], []
 
     monkeypatch.setattr("curator.runner.execute_agentic_upload_review_prs_in_checkout", fake_execute)
@@ -83,6 +86,7 @@ def test_runner_agentic_upload_review_respects_upload_mutation_budget(
             pending_uploads=["upl_tooling", "upl_second"],
             bundles=[bundle_one, bundle_two],
         ),
+        target_repo="grubbyhacker/ykmcorpus-staging",
         model="ykm-codex-gpt-5-mini",
         max_attempts=2,
         max_upload_prs=1,
@@ -90,6 +94,44 @@ def test_runner_agentic_upload_review_respects_upload_mutation_budget(
     )
 
     assert captured["upload_ids"] == ["upl_tooling"]
+    assert captured["target_repo"] == "grubbyhacker/ykmcorpus-staging"
+
+
+def test_runner_uses_broker_task_repo_as_corpus_target() -> None:
+    assert (
+        _target_repo_from_task_payload({"repo": "grubbyhacker/ykmcorpus-staging"})
+        == "grubbyhacker/ykmcorpus-staging"
+    )
+
+
+def test_broker_task_payload_preserves_staging_repo_metadata() -> None:
+    task_payload, task, message = parse_curator_task_payload(
+        {
+            "run_id": "run-staging",
+            "repo": "grubbyhacker/ykmcorpus-staging",
+            "base_branch": "main",
+            "branch": "curator-staging/ykm-curator/run-staging",
+            "worker_agent_id": "ykm-curator:run-staging",
+            "broker_remote_url": "http://broker:8080/git/grubbyhacker/ykmcorpus-staging.git",
+            "task": json.dumps(
+                {
+                    "schema_version": "1",
+                    "run_id": "$SANDBOX_RUN_ID",
+                    "mode": "dry_run",
+                    "enabled_actions": ["plan_uploads"],
+                }
+            ),
+        }
+    )
+
+    assert task is not None
+    assert message == "broker task contract loaded with embedded Curator task"
+    assert task.run_id == "run-staging"
+    assert task_payload["repo"] == "grubbyhacker/ykmcorpus-staging"
+    assert (
+        task_payload["broker_remote_url"]
+        == "http://broker:8080/git/grubbyhacker/ykmcorpus-staging.git"
+    )
 
 
 def test_runner_observes_model_upload_review_draft_validation(
@@ -529,5 +571,3 @@ def test_runner_retries_pending_upload_pr_creation_after_broker_failure(
     assert metadata["branch"].startswith("curator/run-upload-pr-retry/upload-upl-tooling-")
     assert second_report.upload_metadata_update_count == 1
     assert not pending_files[0].exists()
-
-

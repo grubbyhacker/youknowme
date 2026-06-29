@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
@@ -15,7 +16,6 @@ from curator.pr_repair import (
     CODEX_TIMEOUT_SECONDS,
     GIT_TIMEOUT_SECONDS,
     VALIDATION_TIMEOUT_SECONDS,
-    CodexRepairError,
     _codex_base_url,
     _codex_config,
     _tail,
@@ -29,10 +29,33 @@ from curator.upload_pr import (
 
 
 MAX_UPLOAD_AGENT_FILES = 5
-MAX_UPLOAD_AGENT_FILE_CHARS = 20000
+MAX_UPLOAD_AGENT_FILE_CHARS = 200000
 MAX_UPLOAD_AGENT_MANIFEST_CHARS = 20000
 CURATOR_GUIDANCE_PATH = Path("skills/curator-guidance.md")
 FORBIDDEN_CHANGED_FILES = {".env"}
+
+
+@dataclass(frozen=True)
+class UploadAgentFileInput:
+    original_filename: str
+    path: Path
+    char_count: int
+    byte_count: int
+
+
+@dataclass(frozen=True)
+class UploadAgentInput:
+    root: Path
+    manifest_path: Path
+    manifest: dict[str, Any]
+    files: list[UploadAgentFileInput]
+
+
+class UploadCodexError(RuntimeError):
+    def __init__(self, message: str, *, transcript_path: Path, retryable: bool) -> None:
+        super().__init__(message)
+        self.transcript_path = transcript_path
+        self.retryable = retryable
 
 
 def execute_agentic_upload_review_prs(
@@ -49,6 +72,7 @@ def execute_agentic_upload_review_prs(
     output: Path,
     codex_proxy_base_url: str | None,
     codex_proxy_token: str | None,
+    target_repo: str = "grubbyhacker/ykmcorpus",
     on_branch_pushed: Callable[[ExecutionIntent], None] | None = None,
 ) -> tuple[list[ExecutionResult], list[UploadReviewObservation]]:
     results: list[ExecutionResult] = []
@@ -69,6 +93,7 @@ def execute_agentic_upload_review_prs(
             output=output,
             codex_proxy_base_url=codex_proxy_base_url,
             codex_proxy_token=codex_proxy_token,
+            target_repo=target_repo,
             on_branch_pushed=on_branch_pushed,
         )
         observations.append(observation)
@@ -91,9 +116,10 @@ def _execute_one_agentic_upload_review(
     output: Path,
     codex_proxy_base_url: str | None,
     codex_proxy_token: str | None,
+    target_repo: str,
     on_branch_pushed: Callable[[ExecutionIntent], None] | None,
 ) -> tuple[ExecutionResult | None, UploadReviewObservation]:
-    intent = upload_review_pull_intent(run_id=run_id, preview=preview)
+    intent = upload_review_pull_intent(run_id=run_id, preview=preview, target_repo=target_repo)
     if bundle is None:
         return None, _agent_observation(
             preview,
@@ -119,6 +145,7 @@ def _execute_one_agentic_upload_review(
             validation_command=validation_command,
         )
     started = time.monotonic()
+    attempts_used = 0
     try:
         with tempfile.TemporaryDirectory(prefix="ykm-upload-agent-") as temp_root:
             root = Path(temp_root)
@@ -128,26 +155,49 @@ def _execute_one_agentic_upload_review(
             _run_git(["clone", "--depth=1", broker_remote_url, str(checkout)], cwd=None, env=git_env)
             _run_git(["checkout", "-B", preview.branch], cwd=checkout, env=git_env)
             base_ref = _git_output(["rev-parse", "HEAD"], cwd=checkout, env=git_env).strip()
+            upload_input = _stage_upload_agent_input(bundle, root / "upload-input" / _safe_name(preview.upload_id))
             transcript_path: Path | None = None
             summary_path = output / "upload-review-agent" / _safe_name(preview.upload_id) / "summary.json"
             validation: subprocess.CompletedProcess[str] | None = None
-            attempts_used = 0
             for attempt in range(1, max_attempts + 1):
                 attempts_used = attempt
-                transcript_path = _run_codex_upload_agent(
-                    run_id=run_id,
-                    preview=preview,
-                    bundle=bundle,
-                    checkout=checkout,
-                    output=output,
-                    summary_path=summary_path,
-                    model=model,
-                    proxy_base_url=_codex_base_url(codex_proxy_base_url),
-                    proxy_token=codex_proxy_token,
-                    validation_command=validation_command,
-                    attempt=attempt,
-                    previous_validation=validation,
-                )
+                try:
+                    transcript_path = _run_codex_upload_agent(
+                        run_id=run_id,
+                        preview=preview,
+                        bundle=bundle,
+                        upload_input=upload_input,
+                        checkout=checkout,
+                        output=output,
+                        summary_path=summary_path,
+                        model=model,
+                        proxy_base_url=_codex_base_url(codex_proxy_base_url),
+                        proxy_token=codex_proxy_token,
+                        validation_command=validation_command,
+                        attempt=attempt,
+                        previous_validation=validation,
+                    )
+                except UploadCodexError as exc:
+                    transcript_path = exc.transcript_path
+                    if exc.retryable and attempt < max_attempts:
+                        _reset_checkout_for_retry(checkout, git_env, base_ref)
+                        _remove_if_exists(summary_path)
+                        continue
+                    message = (
+                        "upload review Codex harness failed"
+                        if exc.retryable
+                        else "upload review Codex execution failed"
+                    )
+                    return _failed_result(intent, f"{message}: {exc}"), _agent_observation(
+                        preview,
+                        status="fail",
+                        message=f"{message}: {exc}",
+                        model=model,
+                        attempts=attempt,
+                        validation_command=validation_command,
+                        transcript_path=transcript_path,
+                        elapsed_seconds=time.monotonic() - started,
+                    )
                 changed_files = _branch_changed_files(checkout, git_env, base_ref)
                 if not changed_files:
                     continue
@@ -204,6 +254,7 @@ def _execute_one_agentic_upload_review(
                 preview=preview,
                 content_summary=summary.get("content_summary"),
                 draft_paths=draft_paths,
+                target_repo=target_repo,
             )
             if mode != "manual_live":
                 observation = _agent_observation(
@@ -297,15 +348,13 @@ def _execute_one_agentic_upload_review(
             result = broker_adapter.create_pull(validated_intent)
             return result, observation
     except Exception as exc:  # noqa: BLE001 - live upload failures must be reportable.
-        transcript_path = str(exc.transcript_path) if isinstance(exc, CodexRepairError) else None
         return _failed_result(intent, f"upload review agent failed: {exc}"), _agent_observation(
             preview,
             status="fail",
             message=f"upload review agent failed: {exc}",
             model=model,
-            attempts=max_attempts,
+            attempts=attempts_used,
             validation_command=validation_command,
-            transcript_path=Path(transcript_path) if transcript_path else None,
             elapsed_seconds=time.monotonic() - started,
         )
 
@@ -315,6 +364,7 @@ def _run_codex_upload_agent(
     run_id: str,
     preview: UploadReviewPreview,
     bundle: UploadBundleSnapshot,
+    upload_input: UploadAgentInput,
     checkout: Path,
     output: Path,
     summary_path: Path,
@@ -340,6 +390,7 @@ def _run_codex_upload_agent(
         run_id=run_id,
         preview=preview,
         bundle=bundle,
+        upload_input=upload_input,
         checkout=checkout,
         validation_command=validation_command,
         summary_path=summary_path,
@@ -373,9 +424,10 @@ def _run_codex_upload_agent(
     )
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()[:500]
-        raise CodexRepairError(
+        raise UploadCodexError(
             f"codex exec failed with exit {result.returncode}: {detail}",
             transcript_path=transcript,
+            retryable=_is_retryable_codex_harness_failure(result),
         )
     return transcript
 
@@ -385,6 +437,7 @@ def _upload_agent_prompt(
     run_id: str,
     preview: UploadReviewPreview,
     bundle: UploadBundleSnapshot,
+    upload_input: UploadAgentInput,
     checkout: Path | None = None,
     validation_command: list[str],
     summary_path: Path,
@@ -394,8 +447,18 @@ def _upload_agent_prompt(
         "run_id": run_id,
         "upload_id": bundle.upload_id,
         "preview": preview.model_dump(mode="json"),
-        "manifest": _read_upload_manifest(Path(bundle.path)),
-        "files": _read_upload_files(Path(bundle.path)),
+        "manifest": upload_input.manifest,
+        "input_root": str(upload_input.root),
+        "manifest_path": str(upload_input.manifest_path),
+        "files": [
+            {
+                "filename": file.original_filename,
+                "path": str(file.path),
+                "char_count": file.char_count,
+                "byte_count": file.byte_count,
+            }
+            for file in upload_input.files
+        ],
         "curator_guidance": _read_curator_guidance(checkout),
         "validation_command": validation_command,
         "summary_path": str(summary_path),
@@ -410,7 +473,11 @@ def _upload_agent_prompt(
         )
     return (
         "You are the YouKnowMe Curator upload agent working in a ykmcorpus checkout.\n"
-        "Normalize the supplied upload into a small reviewable corpus diff. Edit markdown corpus "
+        "Normalize the supplied upload into a small reviewable corpus diff. The upload input is "
+        "available on disk at the paths in the payload. Inspect those files with shell tools such "
+        "as `rg`, `sed`, and `python`; do not assume the full upload content is present in this "
+        "prompt. Copy or rewrite only the intended durable corpus content into the checkout. "
+        "Edit markdown corpus "
         "files and `.ykm/corpus-policy.yaml` directly when bounded policy vocabulary changes are "
         "needed. The corpus policy is a consistency guardrail and review surface, not an immutable "
         "permission boundary.\n\n"
@@ -421,6 +488,8 @@ def _upload_agent_prompt(
         "Never create backup, temporary, swap, `.bak`, `.orig`, `.rej`, or `~` files in git. "
         "Do not copy secrets into the corpus. You may run tests and validation commands in this "
         "checkout and should fix validation failures before finishing.\n\n"
+        "Do not add or commit the upload input directory itself; it is outside the checkout for "
+        "reference only.\n\n"
         "Follow any approved curator_guidance in the upload payload. Guidance is owner-reviewed "
         "source policy, not optional advice.\n\n"
         "When finished, write a JSON object to the exact summary_path with this shape: "
@@ -462,22 +531,86 @@ def _read_upload_manifest(bundle_path: Path) -> dict[str, Any]:
     return payload
 
 
-def _read_upload_files(bundle_path: Path) -> list[dict[str, str]]:
+def _stage_upload_agent_input(bundle: UploadBundleSnapshot, input_root: Path) -> UploadAgentInput:
+    bundle_path = Path(bundle.path)
+    manifest = _read_upload_manifest(bundle_path)
     files_dir = bundle_path / "files"
     if not files_dir.exists() or not files_dir.is_dir():
         raise ValueError("upload bundle has no files directory for agentic upload review")
-    paths = sorted(path for path in files_dir.iterdir() if path.is_file())
-    if len(paths) > MAX_UPLOAD_AGENT_FILES:
+    source_paths = sorted(path for path in files_dir.iterdir() if path.is_file())
+    if len(source_paths) > MAX_UPLOAD_AGENT_FILES:
         raise ValueError(f"upload bundle exceeds {MAX_UPLOAD_AGENT_FILES} files for agentic upload review")
-    files: list[dict[str, str]] = []
-    for path in paths:
-        text = path.read_text(encoding="utf-8")
-        if len(text) > MAX_UPLOAD_AGENT_FILE_CHARS:
-            raise ValueError(f"{path.name} is too large for agentic upload review")
-        files.append({"filename": path.name, "content": text})
-    if not files:
+    if not source_paths:
         raise ValueError("upload bundle contains no files for agentic upload review")
-    return files
+
+    staged_files_dir = input_root / "files"
+    staged_files_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = input_root / "manifest.json"
+    source_manifest_path = bundle_path / "manifest.json"
+    if source_manifest_path.exists():
+        shutil.copy2(source_manifest_path, manifest_path)
+    else:
+        manifest_path.write_text("{}\n", encoding="utf-8")
+    _make_readonly(manifest_path)
+
+    staged_files: list[UploadAgentFileInput] = []
+    for source_path in source_paths:
+        text = source_path.read_text(encoding="utf-8")
+        if len(text) > MAX_UPLOAD_AGENT_FILE_CHARS:
+            raise ValueError(f"{source_path.name} is too large for agentic upload review")
+        staged_path = staged_files_dir / source_path.name
+        shutil.copy2(source_path, staged_path)
+        _make_readonly(staged_path)
+        staged_files.append(
+            UploadAgentFileInput(
+                original_filename=source_path.name,
+                path=staged_path,
+                char_count=len(text),
+                byte_count=source_path.stat().st_size,
+            )
+        )
+    return UploadAgentInput(
+        root=input_root,
+        manifest_path=manifest_path,
+        manifest=manifest,
+        files=staged_files,
+    )
+
+
+def _make_readonly(path: Path) -> None:
+    try:
+        path.chmod(0o400)
+    except OSError:
+        pass
+
+
+def _is_retryable_codex_harness_failure(result: subprocess.CompletedProcess[str]) -> bool:
+    text = f"{result.stderr}\n{result.stdout}".lower()
+    retryable_fragments = [
+        "stream disconnected before completion",
+        "stream closed before response.completed",
+        "error: reconnecting",
+        "connection reset",
+        "connection refused",
+        "connection aborted",
+        "timed out",
+        "timeout",
+        "unexpected eof",
+        "eof while parsing",
+    ]
+    return any(fragment in text for fragment in retryable_fragments)
+
+
+def _reset_checkout_for_retry(checkout: Path, env: dict[str, str], base_ref: str) -> None:
+    _run_git(["reset", "--hard", base_ref], cwd=checkout, env=env)
+    _run_git(["clean", "-fd"], cwd=checkout, env=env)
+
+
+def _remove_if_exists(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def _read_agent_summary(summary_path: Path, changed_files: list[str]) -> dict[str, Any]:

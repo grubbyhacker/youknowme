@@ -108,6 +108,7 @@ def run_curator_dry_run(config: CuratorDryRunConfig) -> CuratorDryRunReport:
     started_at = datetime.now(UTC)
     task_payload, task_model = _read_task(config.task, probes)
     run_id = task_model.run_id if task_model is not None else config.run_id
+    target_repo = _target_repo_from_task_payload(task_payload)
     mode = task_model.mode if task_model is not None else "dry_run"
     enabled_actions = set(task_model.enabled_actions if task_model is not None else [])
     requested_upload_ids = task_model.upload_ids if task_model is not None else []
@@ -170,6 +171,7 @@ def run_curator_dry_run(config: CuratorDryRunConfig) -> CuratorDryRunReport:
         "mode": mode,
         "started_at": started_at,
         "task_payload": task_payload,
+        "target_repo": target_repo,
         "lock_path": lock_path,
         "enabled_actions": enabled_actions,
         "requested_upload_ids": requested_upload_ids,
@@ -226,6 +228,7 @@ def _run_with_lock(
     mode: str,
     started_at: datetime,
     task_payload: dict[str, Any] | None,
+    target_repo: str,
     lock_path: Path,
     enabled_actions: set[str],
     requested_upload_ids: list[str],
@@ -337,6 +340,7 @@ def _run_with_lock(
         feedback_plan, model_probe, model_usage = _apply_model_feedback_planning(
             config=config,
             run_id=run_id,
+            target_repo=target_repo,
             model=feedback_model,
             model_call_budget=ModelCallBudget.model_validate(model_call_budget),
             base_plan=feedback_plan,
@@ -403,10 +407,11 @@ def _run_with_lock(
         issue_snapshots = _load_broker_fixture_issue_snapshots(config, probes)
         if config.enable_broker_reads and config.broker_fixture is None:
             issue_references = _known_issue_references(latest_decisions, queue_snapshot)
-            pr_snapshots = _load_http_broker_pr_snapshots(config, probes)
+            pr_snapshots = _load_http_broker_pr_snapshots(config, probes, target_repo=target_repo)
             issue_snapshots = _load_http_broker_issue_snapshots(
                 config,
                 probes,
+                target_repo=target_repo,
                 issue_numbers=sorted(issue_references),
                 issue_references=issue_references,
             )
@@ -487,6 +492,7 @@ def _run_with_lock(
                     config=config,
                     results=pr_repair_results,
                     snapshots=pr_snapshots,
+                    target_repo=target_repo,
                 )
                 if pr_repair_handoff_results and all(
                     result.status != "failed" for result in pr_repair_handoff_results
@@ -526,6 +532,7 @@ def _run_with_lock(
             upload_plan=upload_plan,
             observations=upload_review_observations,
             outputs=upload_model_outputs,
+            target_repo=target_repo,
         )
     )
     metadata_error_count = sum(1 for bundle in queue_snapshot.bundles if bundle.metadata_error)
@@ -611,7 +618,7 @@ def _run_with_lock(
         probes.extend(HttpBrokerAdapter(config.broker_url).preflight_intents(execution_intents))
     if config.broker_url is not None and "plan_uploads" in enabled_actions:
         upload_preflight = HttpBrokerAdapter(config.broker_url).upload_review_preflight(
-            target_repo=DEFAULT_CORPUS_REPO,
+            target_repo=target_repo,
             previews=upload_plan.review_previews,
         )
         if upload_preflight is not None:
@@ -619,12 +626,12 @@ def _run_with_lock(
     if config.broker_url is not None and "reconcile" in enabled_actions:
         probes.append(
             HttpBrokerAdapter(config.broker_url).pr_reconciliation_preflight(
-                target_repo=DEFAULT_CORPUS_REPO,
+                target_repo=target_repo,
                 snapshots=pr_snapshots,
             )
         )
         issue_preflight = HttpBrokerAdapter(config.broker_url).issue_reconciliation_preflight(
-            target_repo=DEFAULT_CORPUS_REPO,
+            target_repo=target_repo,
             issue_numbers=_known_issue_numbers(latest_decisions, queue_snapshot),
         )
         if issue_preflight is not None:
@@ -894,6 +901,7 @@ def _run_with_lock(
                     task_payload=task_payload,
                     upload_plan=upload_plan,
                     upload_snapshot=queue_snapshot,
+                    target_repo=target_repo,
                     model=upload_review_agent_model,
                     max_attempts=upload_review_max_attempts,
                     max_upload_prs=_upload_pr_creation_budget(github_mutation_budget),
@@ -953,6 +961,7 @@ def _run_with_lock(
                 upload_plan=upload_plan,
                 observations=upload_review_observations,
                 outputs=upload_model_outputs,
+                target_repo=target_repo,
             )
             live_execution_results.extend(upload_results)
             upload_pr_metadata_paths, upload_pr_metadata_probes = (
@@ -1135,6 +1144,7 @@ def _empty_report(
     mode: str,
     started_at: datetime,
     task_payload: dict[str, Any] | None,
+    target_repo: str,
     lock_path: Path,
     enabled_actions: set[str],
     requested_upload_ids: list[str],
@@ -1430,7 +1440,12 @@ def parse_curator_task_payload(payload: dict[str, Any]) -> tuple[dict[str, Any],
             None,
             f"embedded Curator task run_id {task.run_id!r} does not match broker run_id {broker_run_id!r}",
         )
-    return embedded_payload, task, "broker task contract loaded with embedded Curator task"
+    task_payload = dict(embedded_payload)
+    for key in ("repo", "broker_remote_url"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            task_payload[key] = value.strip()
+    return task_payload, task, "broker task contract loaded with embedded Curator task"
 
 
 def _apply_broker_parameters(
@@ -1546,6 +1561,7 @@ def _apply_model_feedback_planning(
     *,
     config: CuratorDryRunConfig,
     run_id: str,
+    target_repo: str,
     model: str | None,
     model_call_budget: ModelCallBudget,
     base_plan: FeedbackPlan,
@@ -1587,6 +1603,7 @@ def _apply_model_feedback_planning(
         adapter = _model_adapter(config)
         request = _feedback_planning_model_request(
             run_id=run_id,
+            target_repo=target_repo,
             model=model,
             model_call_budget=model_call_budget,
             base_plan=base_plan,
@@ -1661,6 +1678,7 @@ def _feedback_planning_model_request(
     model_call_budget: ModelCallBudget,
     base_plan: FeedbackPlan,
     feedback_records: list[dict[str, Any]],
+    target_repo: str = DEFAULT_CORPUS_REPO,
 ) -> ModelCallRequest:
     included = set(base_plan.included_feedback_ids)
     records = []
@@ -1701,7 +1719,7 @@ def _feedback_planning_model_request(
             "Use corpus_pr with classification corpus_candidate when source_id or section_id evidence identifies the corpus target.",
             "Use corpus_issue with classification corpus_issue when the request is untargeted, ambiguous, or cannot be safely resolved as a bounded PR.",
             "Use corpus_pr only with source_id or section_id evidence; upload_id alone is not a concrete PR target.",
-            f"Use target_repo {DEFAULT_CORPUS_REPO} for corpus_pr and corpus_issue actions.",
+            f"Use target_repo {target_repo} for corpus_pr and corpus_issue actions.",
             "Group feedback only when every record is same-topic and reviewable as one coherent owner decision.",
             "Do not route corpus change requests to product issues.",
         ],
@@ -1890,6 +1908,7 @@ def _upload_review_execution_intents(
     upload_plan: UploadPlan,
     observations: list[UploadReviewObservation],
     outputs: dict[str, UploadReviewModelOutput],
+    target_repo: str,
 ) -> list[ExecutionIntent]:
     passing_upload_ids = {
         observation.upload_id for observation in observations if observation.status == "pass"
@@ -1899,6 +1918,7 @@ def _upload_review_execution_intents(
             run_id=run_id,
             preview=preview,
             content_summary=outputs[preview.upload_id].content_summary,
+            target_repo=target_repo,
         )
         for preview in upload_plan.review_previews
         if preview.upload_id in passing_upload_ids and preview.upload_id in outputs
@@ -1913,6 +1933,7 @@ def _execute_upload_review_prs(
     upload_plan: UploadPlan,
     observations: list[UploadReviewObservation],
     outputs: dict[str, UploadReviewModelOutput],
+    target_repo: str,
 ) -> list[ExecutionResult]:
     adapter = (
         FixtureBrokerAdapter.from_path(config.broker_fixture)
@@ -1927,6 +1948,7 @@ def _execute_upload_review_prs(
                 run_id=run_id,
                 preview=preview,
                 content_summary=output.content_summary if output is not None else None,
+                target_repo=target_repo,
             )
             results.append(
                 ExecutionResult(
@@ -1959,6 +1981,7 @@ def _execute_upload_review_prs(
             run_id=run_id,
             preview=preview,
             content_summary=output.content_summary,
+            target_repo=target_repo,
         )
         if intent.idempotency_key in pending_keys or intent.idempotency_key in retried_keys:
             continue
@@ -1969,6 +1992,7 @@ def _execute_upload_review_prs(
                 broker_adapter=adapter,
                 preview=preview,
                 output=output,
+                target_repo=target_repo,
                 on_branch_pushed=lambda pushed_intent: _write_pending_upload_pr_creation_intent(
                     config.intake,
                     pushed_intent,
@@ -1987,6 +2011,7 @@ def _execute_agentic_upload_review_prs(
     task_payload: dict[str, Any] | None,
     upload_plan: UploadPlan,
     upload_snapshot: UploadQueueSnapshot,
+    target_repo: str,
     model: str,
     max_attempts: int,
     max_upload_prs: int,
@@ -2025,6 +2050,7 @@ def _execute_agentic_upload_review_prs(
         output=config.output,
         codex_proxy_base_url=config.codex_proxy_base_url or config.model_proxy_url or "http://gh-agent-proxy:8092",
         codex_proxy_token=config.codex_proxy_token or config.model_proxy_token,
+        target_repo=target_repo,
         on_branch_pushed=lambda pushed_intent: _write_pending_upload_pr_creation_intent(
             config.intake,
             pushed_intent,
@@ -2035,7 +2061,11 @@ def _execute_agentic_upload_review_prs(
         if result.status != "failed":
             matching_intent = next(
                 (
-                    upload_review_pull_intent(run_id=run_id, preview=preview)
+                    upload_review_pull_intent(
+                        run_id=run_id,
+                        preview=preview,
+                        target_repo=target_repo,
+                    )
                     for preview in previews
                     if preview.action_id == result.action_id
                 ),
@@ -2213,6 +2243,7 @@ def _complete_pr_repair_handoffs(
     config: CuratorDryRunConfig,
     results: list[PrRepairResult],
     snapshots: list[CuratorPrSnapshot],
+    target_repo: str = DEFAULT_CORPUS_REPO,
 ) -> list[ExecutionResult]:
     adapter = (
         FixtureBrokerAdapter.from_path(config.broker_fixture)
@@ -2229,7 +2260,7 @@ def _complete_pr_repair_handoffs(
         action_id = f"pr_repair_comment_{result.pr_number}"
         idempotency_key = f"pr-repair-comment:{result.pr_number}:{repair_key}"
         comment_result = adapter.add_issue_comment(
-            target_repo=DEFAULT_CORPUS_REPO,
+            target_repo=target_repo,
             issue_number=result.pr_number,
             body=result.review_request_comment,
             action_id=action_id,
@@ -2253,7 +2284,7 @@ def _complete_pr_repair_handoffs(
             if not review_id:
                 continue
             dismiss_result = adapter.dismiss_pull_review(
-                target_repo=DEFAULT_CORPUS_REPO,
+                target_repo=target_repo,
                 pr_number=result.pr_number,
                 review_id=review_id,
                 message=_repair_resolution_message(result),
@@ -2270,7 +2301,7 @@ def _complete_pr_repair_handoffs(
             if thread.is_resolved or not thread.id:
                 continue
             resolve_result = adapter.resolve_review_thread(
-                target_repo=DEFAULT_CORPUS_REPO,
+                target_repo=target_repo,
                 pr_number=result.pr_number,
                 thread_id=thread.id,
                 message=_repair_resolution_message(result),
@@ -2286,7 +2317,7 @@ def _complete_pr_repair_handoffs(
         labels = set(snapshot.labels if snapshot else [])
         if CURATOR_WAITING_REVIEW_LABEL not in labels:
             label_result = adapter.add_issue_label(
-                target_repo=DEFAULT_CORPUS_REPO,
+                target_repo=target_repo,
                 issue_number=result.pr_number,
                 label=CURATOR_WAITING_REVIEW_LABEL,
                 action_id=f"pr_repair_add_waiting_review_{result.pr_number}",
@@ -2300,7 +2331,7 @@ def _complete_pr_repair_handoffs(
             handoff_results.append(label_result)
         if CURATOR_NEEDS_WORK_LABEL in labels:
             label_result = adapter.remove_issue_label(
-                target_repo=DEFAULT_CORPUS_REPO,
+                target_repo=target_repo,
                 issue_number=result.pr_number,
                 label=CURATOR_NEEDS_WORK_LABEL,
                 action_id=f"pr_repair_remove_needs_work_{result.pr_number}",
@@ -2402,7 +2433,7 @@ def _broker_remote_url(config: CuratorDryRunConfig, task_payload: dict[str, Any]
     if task_remote_url:
         return task_remote_url
     if config.broker_url:
-        return f"{config.broker_url.rstrip('/')}/git/{DEFAULT_CORPUS_REPO}.git"
+        return f"{config.broker_url.rstrip('/')}/git/{_target_repo_from_task_payload(task_payload)}.git"
     return ""
 
 
@@ -2412,6 +2443,15 @@ def _task_broker_remote_url(task_payload: dict[str, Any] | None) -> str | None:
         if isinstance(broker_remote_url, str) and broker_remote_url:
             return broker_remote_url
     return None
+
+
+def _target_repo_from_task_payload(task_payload: dict[str, Any] | None) -> str:
+    if task_payload is None:
+        return DEFAULT_CORPUS_REPO
+    repo = task_payload.get("repo")
+    if isinstance(repo, str) and repo.strip():
+        return repo.strip()
+    return DEFAULT_CORPUS_REPO
 
 
 def _read_curator_guidance(corpus_checkout: Path | None) -> str:
@@ -2861,6 +2901,8 @@ def _load_broker_fixture_issue_snapshots(
 def _load_http_broker_pr_snapshots(
     config: CuratorDryRunConfig,
     probes: list[CuratorProbe],
+    *,
+    target_repo: str,
 ) -> list[CuratorPrSnapshot]:
     if config.broker_url is None:
         probes.append(
@@ -2872,7 +2914,7 @@ def _load_http_broker_pr_snapshots(
         )
         return []
     snapshots, probe = HttpBrokerAdapter(config.broker_url).read_pr_snapshots(
-        target_repo=DEFAULT_CORPUS_REPO,
+        target_repo=target_repo,
     )
     probes.append(probe)
     return snapshots
@@ -2882,6 +2924,7 @@ def _load_http_broker_issue_snapshots(
     config: CuratorDryRunConfig,
     probes: list[CuratorProbe],
     *,
+    target_repo: str,
     issue_numbers: list[int],
     issue_references: dict[int, list[dict[str, Any]]] | None = None,
 ) -> list[CuratorIssueSnapshot]:
@@ -2896,7 +2939,7 @@ def _load_http_broker_issue_snapshots(
             )
         return []
     snapshots, probe = HttpBrokerAdapter(config.broker_url).read_issue_snapshots(
-        target_repo=DEFAULT_CORPUS_REPO,
+        target_repo=target_repo,
         issue_numbers=issue_numbers,
     )
     if probe is not None:
