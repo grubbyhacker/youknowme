@@ -24,7 +24,7 @@ jobs:
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.event == 'push'
     env:
-      DEPLOY_PORT: "443"
+      DEPLOY_PORT: "22"
 
     steps:
       - name: Checkout vps-ops
@@ -64,6 +64,14 @@ jobs:
           install -m 0600 /dev/null ~/.config/vps-ops/vault-password
           printf '%s' "$ANSIBLE_VAULT_PASSWORD" > ~/.config/vps-ops/vault-password
 
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:github-actions-deploy
+          ping: 100.66.40.39
+
       - name: Deploy YouKnowMe services
         working-directory: vps-ops
         run: |
@@ -72,11 +80,13 @@ jobs:
           ansible-playbook -i inventory/production.yml playbooks/deploy-youknowme.yml \
             -e "ykm_image=${ykm_image}" \
             -e "ansible_ssh_private_key_file=/tmp/hermes-deploy" \
+            -e "ansible_host=100.66.40.39" \
             -e "ansible_port=${DEPLOY_PORT}"
 
           ansible-playbook -i inventory/production.yml playbooks/deploy-gh-agent-broker.yml \
             -e "ykm_curator_image=${ykm_image}" \
             -e "ansible_ssh_private_key_file=/tmp/hermes-deploy" \
+            -e "ansible_host=100.66.40.39" \
             -e "ansible_port=${DEPLOY_PORT}"
 
       - name: Log successful deploy telemetry
@@ -92,7 +102,7 @@ jobs:
         uses: ./vps-ops/.github/actions/deploy-telemetry
         with:
           outcome: failure
-          ssh_host: srv1656293.hstgr.cloud
+          ssh_host: 100.66.40.39
           ssh_user: github-deployer
           ssh_port: ${{ env.DEPLOY_PORT }}
           ssh_key_path: /tmp/hermes-deploy
