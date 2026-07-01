@@ -54,7 +54,21 @@ Give Roger PRs ready to review. Do not just return once changes are written and 
 Roger's court. The goal is nearly always to produce a PR that is well tested, including staging
 validation when applicable, before sending it for review.
 
+For repo-mutating tasks, finish with:
+
+1. A committed change on a feature branch.
+1. A pushed branch.
+1. A non-draft PR in Ready-for-review state.
+1. Validation summary (at minimum `mise run lint` and `mise run test`, or an explicit blocker with rationale).
+1. A clean task worktree or a documented blocker.
+
 Never, ever send Roger a PR in Draft mode. It makes no sense for this repository's agent workflow.
+
+If a task cannot produce a ready PR, do not leave uncommitted local edits. Report the exact dirty file
+set and the concrete blocker so Roger can decide next action.
+
+Code review is the human gate for acceptance; agents do not merge their own PRs unless Roger explicitly
+instructs an exception.
 
 ## Deployment
 
@@ -125,6 +139,15 @@ Use the standard flow: feature branch, pull request, CI passing, then merge. CI 
 and tests before merge. The Docker image is published by CI on pushes to `main`.
 
 Do not push directly to `main`.
+
+After merge, clean up local and remote state:
+
+1. `git fetch --prune`
+1. Checkout `main` and fast-forward to `origin/main`.
+1. Delete the merged local branch.
+1. Delete the remote feature branch if needed.
+1. Remove the task worktree.
+1. Verify clean status.
 
 Delete old feature branches after they are merged or no longer needed.
 
