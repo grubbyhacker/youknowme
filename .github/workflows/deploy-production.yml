@@ -3,7 +3,7 @@ name: Deploy Production
 # Required repository secrets:
 # - DEPLOY_SSH_PRIVATE_KEY: ed25519 private key for github-deployer@100.66.40.39 (vps on Tailnet)
 # - VPS_OPS_READ_TOKEN: fine-grained PAT with read access to grubbyhacker/vps-ops
-# - ANSIBLE_VAULT_PASSWORD: password for decrypting ansible-vault secrets in vps-ops
+# - VPS_OPS_* Doppler env-source runtime secrets consumed by the vps-ops deploy wrapper
 # - TS_OAUTH_CLIENT_ID: OAuth client ID for tailscale/github-action@v4
 # - TS_OAUTH_SECRET: OAuth client secret for tailscale/github-action@v4
 
@@ -58,14 +58,6 @@ jobs:
           install -m 0600 /dev/null /tmp/hermes-deploy
           printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > /tmp/hermes-deploy
 
-      - name: Write vault password
-        env:
-          ANSIBLE_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
-        run: |
-          mkdir -p ~/.config/vps-ops
-          install -m 0600 /dev/null ~/.config/vps-ops/vault-password
-          printf '%s' "$ANSIBLE_VAULT_PASSWORD" > ~/.config/vps-ops/vault-password
-
       - name: Connect to Tailscale
         uses: tailscale/github-action@v4
         with:
@@ -76,16 +68,42 @@ jobs:
 
       - name: Deploy YouKnowMe services
         working-directory: vps-ops
+        env:
+          VPS_OPS_SECRET_BACKEND: doppler
+          VPS_OPS_DOPPLER_SOURCE: env
+          VPS_OPS_GH_BROKER_ADMIN_SECRET: ${{ secrets.VPS_OPS_GH_BROKER_ADMIN_SECRET }}
+          VPS_OPS_GH_BROKER_REPORTER_01_SECRET: ${{ secrets.VPS_OPS_GH_BROKER_REPORTER_01_SECRET }}
+          VPS_OPS_GH_BROKER_SANDBOX_MCP_TOKEN: ${{ secrets.VPS_OPS_GH_BROKER_SANDBOX_MCP_TOKEN }}
+          VPS_OPS_GH_BROKER_YKM_CURATOR_BROKER_SECRET: ${{ secrets.VPS_OPS_GH_BROKER_YKM_CURATOR_BROKER_SECRET }}
+          VPS_OPS_GH_BROKER_AGENT_PROXY_TOKEN: ${{ secrets.VPS_OPS_GH_BROKER_AGENT_PROXY_TOKEN }}
+          VPS_OPS_GH_BROKER_LITELLM_MASTER_KEY: ${{ secrets.VPS_OPS_GH_BROKER_LITELLM_MASTER_KEY }}
+          VPS_OPS_GH_BROKER_OPENROUTER_API_KEY: ${{ secrets.VPS_OPS_GH_BROKER_OPENROUTER_API_KEY }}
+          VPS_OPS_GH_BROKER_REPORTER_APP_PEM: ${{ secrets.VPS_OPS_GH_BROKER_REPORTER_APP_PEM }}
+          VPS_OPS_GH_BROKER_YKM_CURATOR_APP_PEM: ${{ secrets.VPS_OPS_GH_BROKER_YKM_CURATOR_APP_PEM }}
+          VPS_OPS_YKM_CLOUDFLARED_TUNNEL_TOKEN: ${{ secrets.VPS_OPS_YKM_CLOUDFLARED_TUNNEL_TOKEN }}
+          VPS_OPS_YKM_OPENROUTER_API_KEY: ${{ secrets.VPS_OPS_YKM_OPENROUTER_API_KEY }}
+          VPS_OPS_HERMES_ADMIN_USERNAME: ${{ secrets.VPS_OPS_HERMES_ADMIN_USERNAME }}
+          VPS_OPS_HERMES_ADMIN_PASSWORD: ${{ secrets.VPS_OPS_HERMES_ADMIN_PASSWORD }}
+          VPS_OPS_HERMES_BROKER_AGENT_ID: ${{ secrets.VPS_OPS_HERMES_BROKER_AGENT_ID }}
+          VPS_OPS_HERMES_BROKER_AGENT_SECRET: ${{ secrets.VPS_OPS_HERMES_BROKER_AGENT_SECRET }}
+          VPS_OPS_HERMES_BROKER_URL: ${{ secrets.VPS_OPS_HERMES_BROKER_URL }}
+          VPS_OPS_HERMES_HOME: ${{ secrets.VPS_OPS_HERMES_HOME }}
+          VPS_OPS_HERMES_SANDBOX_MCP_TOKEN: ${{ secrets.VPS_OPS_HERMES_SANDBOX_MCP_TOKEN }}
+          VPS_OPS_HERMES_TRAEFIK_HOST: ${{ secrets.VPS_OPS_HERMES_TRAEFIK_HOST }}
+          VPS_OPS_HERMES_YKM_CF_ACCESS_CLIENT_ID: ${{ secrets.VPS_OPS_HERMES_YKM_CF_ACCESS_CLIENT_ID }}
+          VPS_OPS_HERMES_YKM_CF_ACCESS_CLIENT_SECRET: ${{ secrets.VPS_OPS_HERMES_YKM_CF_ACCESS_CLIENT_SECRET }}
+          VPS_OPS_OBSERVABILITY_GRAFANA_ADMIN_PASSWORD: ${{ secrets.VPS_OPS_OBSERVABILITY_GRAFANA_ADMIN_PASSWORD }}
+          VPS_OPS_TAILSCALE_AUTHKEY: ${{ secrets.VPS_OPS_TAILSCALE_AUTHKEY }}
         run: |
           ykm_image="ghcr.io/grubbyhacker/youknowme:sha-${{ github.event.workflow_run.head_sha }}"
 
-          ansible-playbook -i inventory/production.yml playbooks/deploy-youknowme.yml \
+          scripts/run-ansible-playbook.sh -i inventory/production.yml playbooks/deploy-youknowme.yml \
             -e "ykm_image=${ykm_image}" \
             -e "ansible_ssh_private_key_file=/tmp/hermes-deploy" \
             -e "ansible_host=100.66.40.39" \
             -e "ansible_port=${DEPLOY_PORT}"
 
-          ansible-playbook -i inventory/production.yml playbooks/deploy-gh-agent-broker.yml \
+          scripts/run-ansible-playbook.sh -i inventory/production.yml playbooks/deploy-gh-agent-broker.yml \
             -e "ykm_curator_image=${ykm_image}" \
             -e "ansible_ssh_private_key_file=/tmp/hermes-deploy" \
             -e "ansible_host=100.66.40.39" \
@@ -115,4 +133,3 @@ jobs:
         if: always()
         run: |
           rm -f /tmp/hermes-deploy
-          rm -f ~/.config/vps-ops/vault-password
