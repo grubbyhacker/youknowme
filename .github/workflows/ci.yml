@@ -3,6 +3,7 @@ name: YKM CI
 on:
   pull_request:
     paths:
+      - ".github/dependabot.yml"
       - ".github/workflows/ci.yml"
       - ".github/workflows/deploy-production.yml"
       - "AGENTS.md"
