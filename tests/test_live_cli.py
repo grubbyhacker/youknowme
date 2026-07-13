@@ -42,6 +42,28 @@ def test_live_config_allows_local_http_without_auth() -> None:
     assert config == LiveMcpConfig(url="http://127.0.0.1:8765/mcp", headers={})
 
 
+def test_live_cli_loads_private_operator_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "youknowme-cli.env"
+    config_path.write_text("YKM_LIVE_MCP_URL=https://operator.example/mcp\n", encoding="utf-8")
+    config_path.chmod(0o600)
+    monkeypatch.delenv("YKM_LIVE_MCP_URL", raising=False)
+
+    cli._load_live_operator_config(config_path)
+
+    assert cli.os.environ["YKM_LIVE_MCP_URL"] == "https://operator.example/mcp"
+
+
+def test_live_cli_rejects_overexposed_operator_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "youknowme-cli.env"
+    config_path.write_text("YKM_LIVE_MCP_URL=https://operator.example/mcp\n", encoding="utf-8")
+    config_path.chmod(0o644)
+
+    with pytest.raises(SystemExit, match="must not be accessible"):
+        cli._load_live_operator_config(config_path)
+
+
 def test_live_query_cli_calls_mcp_tool(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     captured: dict[str, object] = {}
     config = LiveMcpConfig(url="https://example.test/mcp", headers={"Authorization": "Bearer token"})

@@ -22,6 +22,7 @@ from ykm.server import create_app
 
 
 CORPUS_CHANGE_INTENTS = ["add_to_existing", "update_existing", "remove_from_existing"]
+DEFAULT_LIVE_CONFIG_PATH = Path.home() / ".config" / "vps-ops" / "youknowme-cli.env"
 
 
 def main() -> None:
@@ -96,8 +97,8 @@ def main() -> None:
     curator.add_argument("--simulate-execution", action="store_true")
 
     args = parser.parse_args()
-    if args.command != "curator-dry-run":
-        load_dotenv()
+    if args.command == "live":
+        _load_live_operator_config(args.config)
 
     if args.command == "build":
         output = build_index(
@@ -184,6 +185,12 @@ def main() -> None:
 
 def _add_live_parser(subparsers: argparse._SubParsersAction) -> None:
     live = subparsers.add_parser("live", help="Call the live YouKnowMe MCP over streamable HTTP")
+    live.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_LIVE_CONFIG_PATH,
+        help=f"Operator env file. Defaults to {DEFAULT_LIVE_CONFIG_PATH}.",
+    )
     live.add_argument("--url", help="MCP URL. Defaults to YKM_LIVE_MCP_URL or production.")
     live.add_argument(
         "--timeout",
@@ -250,6 +257,16 @@ def _add_live_parser(subparsers: argparse._SubParsersAction) -> None:
     corpus_change.add_argument(
         "--yes", action="store_true", help="Actually call the live corpus_change tool."
     )
+
+
+def _load_live_operator_config(path: Path) -> None:
+    if not path.exists():
+        return
+    if not path.is_file():
+        raise SystemExit(f"live CLI config is not a regular file: {path}")
+    if path.stat().st_mode & 0o077:
+        raise SystemExit(f"live CLI config must not be accessible by group or others: {path}")
+    load_dotenv(path, override=False)
 
 
 def _run_live(args: argparse.Namespace) -> None:

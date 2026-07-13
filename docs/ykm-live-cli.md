@@ -6,13 +6,19 @@ intake writes.
 
 ## Configuration
 
-Create local `.env` entries for the live route and Cloudflare Access credentials:
+Create `~/.config/vps-ops/youknowme-cli.env` with mode `0600` for the live route and Cloudflare
+Access credentials. This operator file is outside the repository and is included in the encrypted
+VPS Ops configuration backup:
 
 ```bash
 YKM_LIVE_MCP_URL=https://mcp.fleiglabs.cc/mcp
 YKM_CF_ACCESS_CLIENT_ID=...
 YKM_CF_ACCESS_CLIENT_SECRET=...
 ```
+
+The live CLI loads this file without overriding variables already exported by the caller. To use a
+different operator file for one invocation, pass `ykm live --config /path/to/file ...`. The CLI
+rejects a config file that is accessible by group or others.
 
 Advanced alternatives:
 
@@ -24,6 +30,9 @@ YKM_LIVE_TIMEOUT_SECONDS=30
 
 For HTTPS URLs, the CLI fails before calling MCP if no auth is configured. Service-token headers are
 preferred when `YKM_CF_ACCESS_CLIENT_ID` and `YKM_CF_ACCESS_CLIENT_SECRET` are present.
+
+The repository `.env` is not loaded by the CLI. Local build, query, evaluation, and serve commands
+receive any required settings through the invoking environment.
 
 ## Read Commands
 

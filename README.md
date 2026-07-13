@@ -43,7 +43,7 @@ YKM_EMBEDDING_PROVIDER=fake uv run ykm query "weekly spa maintenance" --index .y
 YKM_EMBEDDING_PROVIDER=fake uv run ykm eval --index .ykm/demo-index --cases fixtures/eval/synthetic.json
 ```
 
-To use real embeddings later, create `.env` from `.env.example`, set `OPENROUTER_API_KEY`, and use:
+To use real embeddings later, export `OPENROUTER_API_KEY` in the invoking shell and use:
 
 ```bash
 YKM_EMBEDDING_PROVIDER=openrouter uv run ykm build --corpus /path/to/content-repo --out .ykm/openrouter-index
@@ -55,8 +55,8 @@ Generated indexes and logs live under `.ykm/` and are ignored.
 
 ## Live MCP CLI
 
-Use `ykm live` to call the production MCP route from a development machine with local Cloudflare
-Access credentials in `.env`.
+Use `ykm live` to call the production MCP route from a development machine with narrowly scoped
+Cloudflare Access credentials in `~/.config/vps-ops/youknowme-cli.env`.
 
 ```bash
 uv run ykm live health --pretty
