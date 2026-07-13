@@ -120,6 +120,10 @@ upload/feedback triggers. Immediate triggers should launch `ykm-curator-live` to
 create a separate worker path or scheduler in this milestone. Concurrency is handled by the Curator
 run lock, so callers only need to request a launch and inspect the resulting report.
 
+Immediate triggers include an `Idempotency-Key` header in the form
+`ykm:curator-trigger:v1:<event_type>:<event_id>`. Retries for the same semantic event reuse that
+key, while later events use a different key.
+
 The embedded Curator task should be fixed to:
 
 ```json
