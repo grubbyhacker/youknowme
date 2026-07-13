@@ -21,7 +21,7 @@ class TimerLike(Protocol):
 
 
 TimerFactory = Callable[[float, Callable[[], None]], TimerLike]
-LaunchFn = Callable[["CuratorUploadTriggerConfig"], None]
+LaunchFn = Callable[["CuratorUploadTriggerConfig", str, str], None]
 
 
 @dataclass(frozen=True)
@@ -66,7 +66,7 @@ class CuratorUploadTrigger:
         self._logger = logger
         self._lock = threading.Lock()
         self._timer: TimerLike | None = None
-        self._pending_event: str | None = None
+        self._pending_event: tuple[str, str] | None = None
 
         if self.config.enabled and not self.config.active:
             self._logger.warning(
@@ -93,7 +93,7 @@ class CuratorUploadTrigger:
         with self._lock:
             if self._timer is not None:
                 self._timer.cancel()
-            self._pending_event = f"{event_type} {event_id}"
+            self._pending_event = (event_type, event_id)
             self._timer = self._timer_factory(debounce_seconds, self._launch_pending)
             self._timer.daemon = True
             self._timer.start()
@@ -114,25 +114,31 @@ class CuratorUploadTrigger:
 
     def _launch_pending(self) -> None:
         with self._lock:
-            event = self._pending_event
+            pending_event = self._pending_event
             self._pending_event = None
             self._timer = None
 
-        if event is None:
+        if pending_event is None:
             return
 
-        self._logger.info("Launching Curator after trigger for %s", event)
+        event_type, event_id = pending_event
+        self._logger.info("Launching Curator after trigger for %s %s", event_type, event_id)
         try:
-            self._launcher(self.config)
+            self._launcher(self.config, event_type, event_id)
         except Exception:
-            self._logger.exception("Curator trigger failed for %s", event)
+            self._logger.exception("Curator trigger failed for %s %s", event_type, event_id)
 
 
-def launch_curator(config: CuratorUploadTriggerConfig) -> None:
+def launch_curator(
+    config: CuratorUploadTriggerConfig, event_type: str, event_id: str
+) -> None:
     request = Request(
         config.url,
         method="POST",
-        headers={"Authorization": f"Bearer {config.token}"},
+        headers={
+            "Authorization": f"Bearer {config.token}",
+            "Idempotency-Key": f"ykm:curator-trigger:v1:{event_type}:{event_id}",
+        },
     )
     try:
         with urlopen(request, timeout=config.timeout_seconds) as response:

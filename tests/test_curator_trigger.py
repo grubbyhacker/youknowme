@@ -69,7 +69,7 @@ def test_trigger_config_reads_feedback_debounce_from_env(monkeypatch: pytest.Mon
 
 def test_upload_trigger_debounces_to_latest_upload() -> None:
     timers: list[ManualTimer] = []
-    launched: list[str] = []
+    launched: list[tuple[str, str]] = []
     config = CuratorUploadTriggerConfig(
         enabled=True,
         url="http://curator.example/launch",
@@ -78,7 +78,7 @@ def test_upload_trigger_debounces_to_latest_upload() -> None:
     )
     trigger = CuratorUploadTrigger(
         config,
-        launcher=lambda launch_config: launched.append(launch_config.url),
+        launcher=lambda _config, event_type, event_id: launched.append((event_type, event_id)),
         timer_factory=lambda interval, callback: timers.append(ManualTimer(interval, callback))
         or timers[-1],
     )
@@ -92,12 +92,12 @@ def test_upload_trigger_debounces_to_latest_upload() -> None:
     timers[0].fire()
     assert launched == []
     timers[1].fire()
-    assert launched == ["http://curator.example/launch"]
+    assert launched == [("upload", "upl_2")]
 
 
 def test_feedback_trigger_uses_feedback_debounce_and_cancels_pending_upload() -> None:
     timers: list[ManualTimer] = []
-    launched: list[str] = []
+    launched: list[tuple[str, str]] = []
     config = CuratorUploadTriggerConfig(
         enabled=True,
         url="http://curator.example/launch",
@@ -107,7 +107,7 @@ def test_feedback_trigger_uses_feedback_debounce_and_cancels_pending_upload() ->
     )
     trigger = CuratorUploadTrigger(
         config,
-        launcher=lambda launch_config: launched.append(launch_config.url),
+        launcher=lambda _config, event_type, event_id: launched.append((event_type, event_id)),
         timer_factory=lambda interval, callback: timers.append(ManualTimer(interval, callback))
         or timers[-1],
     )
@@ -120,15 +120,15 @@ def test_feedback_trigger_uses_feedback_debounce_and_cancels_pending_upload() ->
     timers[0].fire()
     assert launched == []
     timers[1].fire()
-    assert launched == ["http://curator.example/launch"]
+    assert launched == [("feedback", "fb_1")]
 
 
 def test_stop_cancels_pending_trigger() -> None:
     timers: list[ManualTimer] = []
-    launched: list[str] = []
+    launched: list[tuple[str, str]] = []
     trigger = CuratorUploadTrigger(
         CuratorUploadTriggerConfig(enabled=True, url="http://curator.example/launch", token="token"),
-        launcher=lambda launch_config: launched.append(launch_config.url),
+        launcher=lambda _config, event_type, event_id: launched.append((event_type, event_id)),
         timer_factory=lambda interval, callback: timers.append(ManualTimer(interval, callback))
         or timers[-1],
     )
@@ -141,13 +141,18 @@ def test_stop_cancels_pending_trigger() -> None:
     assert launched == []
 
 
-def test_launch_curator_posts_bearer_token() -> None:
-    received: dict[str, str] = {}
+def test_launch_curator_posts_bearer_token_and_stable_event_key() -> None:
+    received: list[dict[str, str]] = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:
-            received["path"] = self.path
-            received["authorization"] = self.headers.get("Authorization", "")
+            received.append(
+                {
+                    "path": self.path,
+                    "authorization": self.headers.get("Authorization", ""),
+                    "idempotency_key": self.headers.get("Idempotency-Key", ""),
+                }
+            )
             self.send_response(202)
             self.end_headers()
 
@@ -158,22 +163,36 @@ def test_launch_curator_posts_bearer_token() -> None:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        launch_curator(
-            CuratorUploadTriggerConfig(
-                enabled=True,
-                url=f"http://127.0.0.1:{server.server_port}/v1/launch",
-                token="secret",
-                timeout_seconds=2,
-            )
+        config = CuratorUploadTriggerConfig(
+            enabled=True,
+            url=f"http://127.0.0.1:{server.server_port}/v1/launch",
+            token="secret",
+            timeout_seconds=2,
         )
+        launch_curator(config, "upload", "upl_123")
+        launch_curator(config, "upload", "upl_123")
+        launch_curator(config, "feedback", "fb_456")
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
-    assert received == {
-        "path": "/v1/launch",
-        "authorization": "Bearer secret",
-    }
+    assert received == [
+        {
+            "path": "/v1/launch",
+            "authorization": "Bearer secret",
+            "idempotency_key": "ykm:curator-trigger:v1:upload:upl_123",
+        },
+        {
+            "path": "/v1/launch",
+            "authorization": "Bearer secret",
+            "idempotency_key": "ykm:curator-trigger:v1:upload:upl_123",
+        },
+        {
+            "path": "/v1/launch",
+            "authorization": "Bearer secret",
+            "idempotency_key": "ykm:curator-trigger:v1:feedback:fb_456",
+        },
+    ]
 
 
 def test_stage_upload_for_mcp_records_successful_upload(tmp_path: Path) -> None:
@@ -181,7 +200,7 @@ def test_stage_upload_for_mcp_records_successful_upload(tmp_path: Path) -> None:
     store = IntakeStore(tmp_path / "intake")
     trigger = CuratorUploadTrigger(
         CuratorUploadTriggerConfig(enabled=True, url="http://curator.example/launch", token="token"),
-        launcher=lambda _config: None,
+        launcher=lambda _config, _event_type, _event_id: None,
         timer_factory=lambda interval, callback: ManualTimer(interval, callback),
     )
     trigger.record_upload = uploads.append  # type: ignore[method-assign]
@@ -201,7 +220,7 @@ def test_stage_upload_for_mcp_does_not_trigger_rejected_upload(tmp_path: Path) -
     store = IntakeStore(tmp_path / "intake")
     trigger = CuratorUploadTrigger(
         CuratorUploadTriggerConfig(enabled=True, url="http://curator.example/launch", token="token"),
-        launcher=lambda _config: None,
+        launcher=lambda _config, _event_type, _event_id: None,
         timer_factory=lambda interval, callback: ManualTimer(interval, callback),
     )
     trigger.record_upload = uploads.append  # type: ignore[method-assign]
@@ -222,7 +241,7 @@ def test_record_corpus_change_for_mcp_triggers_feedback(tmp_path: Path) -> None:
     store = IntakeStore(tmp_path / "intake")
     trigger = CuratorUploadTrigger(
         CuratorUploadTriggerConfig(enabled=True, url="http://curator.example/launch", token="token"),
-        launcher=lambda _config: None,
+        launcher=lambda _config, _event_type, _event_id: None,
         timer_factory=lambda interval, callback: ManualTimer(interval, callback),
     )
     trigger.record_feedback = feedback_ids.append  # type: ignore[method-assign]
