@@ -162,6 +162,8 @@ def test_live_upload_dry_run_does_not_call_mcp(
             "upload",
             "--file",
             str(markdown),
+            "--idempotency-key",
+            "cli:upload:note-1",
             "--purpose",
             "CLI smoke",
             "--suggested-type",
@@ -179,6 +181,7 @@ def test_live_upload_dry_run_does_not_call_mcp(
     payload = json.loads(capsys.readouterr().out)
     assert payload == {
         "arguments": {
+            "idempotency_key": "cli:upload:note-1",
             "files": [{"content": "# Note\n\nBody.\n", "filename": "note.md"}],
             "purpose": "CLI smoke",
             "suggested_related": ["other-source"],
@@ -196,7 +199,19 @@ def test_live_upload_requires_confirmation(
     markdown = tmp_path / "note.md"
     markdown.write_text("# Note\n", encoding="utf-8")
     monkeypatch.setattr(cli, "call_live_tool", lambda *_: pytest.fail("unexpected MCP call"))
-    monkeypatch.setattr(sys, "argv", ["ykm", "live", "upload", "--file", str(markdown)])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "ykm",
+            "live",
+            "upload",
+            "--file",
+            str(markdown),
+            "--idempotency-key",
+            "cli:upload:note-1",
+        ],
+    )
 
     with pytest.raises(SystemExit) as excinfo:
         cli.main()

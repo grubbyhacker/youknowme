@@ -57,11 +57,14 @@ uv run ykm live query "thermostat setup" --limit 2 --summary
 ## Intake Write Commands
 
 Upload and feedback are intentionally guarded. `--dry-run` prints the exact MCP payload without
-calling the server. Live writes require `--yes`.
+calling the server. Live writes require `--yes`. Uploads also require a stable caller-generated
+`--idempotency-key`; reuse the same key when retrying the same payload. Reusing a key with different
+content is rejected.
 
 ```bash
 uv run ykm live upload \
   --file /path/to/new-note.md \
+  --idempotency-key operator:upload:new-note-1 \
   --purpose "operator CLI smoke" \
   --suggested-type note \
   --suggested-tag maintenance \
@@ -72,6 +75,7 @@ uv run ykm live upload \
 ```bash
 uv run ykm live upload \
   --file /path/to/new-note.md \
+  --idempotency-key operator:upload:new-note-1 \
   --purpose "operator CLI smoke" \
   --yes \
   --pretty

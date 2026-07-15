@@ -73,7 +73,8 @@ UPLOAD_TOOL_DESCRIPTION = (
     "Stage agent-curated markdown for future YouKnowMe corpus review. Before preparing an upload, "
     "retrieve and follow the normal YKM guidance source ykm-upload-authoring-guidance "
     "(type: skill). This does not publish, index, or merge content. It stores bounded markdown files "
-    "in the protected intake queue for later human or Curator processing."
+    "in the protected intake queue for later human or Curator processing. Supply a stable caller "
+    "idempotency key so retries return the original upload instead of staging a duplicate."
 )
 CORPUS_CHANGE_TOOL_DESCRIPTION = (
     "Request a bounded modification to existing YouKnowMe corpus content. Use upload for new files. "
@@ -358,6 +359,7 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
 
     @mcp.tool(description=UPLOAD_TOOL_DESCRIPTION)
     def upload(
+        idempotency_key: str,
         files: list[dict[str, str]],
         purpose: str | None = None,
         suggested_type: str | None = None,
@@ -368,6 +370,7 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
         response = stage_upload_for_mcp(
             intake,
             UploadRequest(
+                idempotency_key=idempotency_key,
                 files=[UploadFileInput(**file) for file in files],
                 purpose=purpose,
                 suggested_type=suggested_type,

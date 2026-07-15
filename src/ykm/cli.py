@@ -235,6 +235,7 @@ def _add_live_parser(subparsers: argparse._SubParsersAction) -> None:
         "upload", parents=[output_parent], help="Stage markdown through the upload tool"
     )
     upload.add_argument("--file", type=Path, action="append", required=True)
+    upload.add_argument("--idempotency-key", required=True)
     upload.add_argument("--purpose")
     upload.add_argument("--suggested-type")
     upload.add_argument("--suggested-tag", action="append", default=[])
@@ -331,6 +332,7 @@ def _live_read_tool_call(args: argparse.Namespace) -> tuple[str, dict[str, Any]]
 
 def _live_upload_arguments(args: argparse.Namespace) -> dict[str, Any]:
     return {
+        "idempotency_key": args.idempotency_key,
         "files": [
             {"filename": path.name, "content": path.read_text(encoding="utf-8")}
             for path in args.file
