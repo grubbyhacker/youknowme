@@ -3,13 +3,20 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: scripts/prod-feedback-status.sh [feedback-id] [--host hermes-vps]
+Usage: scripts/prod-feedback-status.sh [feedback-id] [options]
 
 Read-only production diagnostic for YouKnowMe feedback intake and Curator status.
+
+Options:
+  --host HOST          SSH host (default: YKM_PROD_SSH_HOST or 100.66.40.39)
+  --ssh-user USER      SSH user (default: YKM_PROD_SSH_USER or github-deployer)
+  --identity PATH      SSH private key (default: YKM_PROD_SSH_IDENTITY or ~/.ssh/hermes-deploy)
 USAGE
 }
 
-host="${YKM_PROD_SSH_HOST:-hermes-vps}"
+host="${YKM_PROD_SSH_HOST:-100.66.40.39}"
+ssh_user="${YKM_PROD_SSH_USER:-github-deployer}"
+identity="${YKM_PROD_SSH_IDENTITY:-$HOME/.ssh/hermes-deploy}"
 feedback_id=""
 
 while [[ $# -gt 0 ]]; do
@@ -17,6 +24,16 @@ while [[ $# -gt 0 ]]; do
     --host)
       [[ $# -ge 2 ]] || { usage; exit 2; }
       host="$2"
+      shift 2
+      ;;
+    --ssh-user)
+      [[ $# -ge 2 ]] || { usage; exit 2; }
+      ssh_user="$2"
+      shift 2
+      ;;
+    --identity)
+      [[ $# -ge 2 ]] || { usage; exit 2; }
+      identity="$2"
       shift 2
       ;;
     -h|--help)
@@ -42,7 +59,12 @@ fi
 
 feedback_arg="${feedback_id:--}"
 
-ssh -o BatchMode=yes "$host" python3 - "$feedback_arg" <<'PY'
+[[ -r "$identity" ]] || {
+  echo "readable SSH identity required; set --identity or YKM_PROD_SSH_IDENTITY: $identity" >&2
+  exit 2
+}
+
+ssh -o BatchMode=yes -o IdentitiesOnly=yes -i "$identity" "$ssh_user@$host" python3 - "$feedback_arg" <<'PY'
 from __future__ import annotations
 
 import json
@@ -56,7 +78,7 @@ intake_root = Path("/docker/youknowme/data/intake")
 feedback_path = intake_root / "feedback" / "feedback.jsonl"
 decisions_path = intake_root / "feedback" / "curator-decisions.jsonl"
 status_path = intake_root / "curator-status.json"
-runs_root = Path("/srv/hermes-sandbox-broker/runs")
+runs_root = Path("/srv/sandbox-broker/state/runs")
 
 
 def read_jsonl(path: Path) -> list[tuple[int, dict[str, object]]]:
