@@ -37,7 +37,10 @@ class ManualTimer:
 
 
 def upload_request(filename: str = "note.md", content: str = "# Note\n") -> UploadRequest:
-    return UploadRequest(files=[UploadFileInput(filename=filename, content=content)])
+    return UploadRequest(
+        idempotency_key="test:curator-trigger:upload-1",
+        files=[UploadFileInput(filename=filename, content=content)],
+    )
 
 
 def test_disabled_trigger_ignores_upload() -> None:
@@ -213,6 +216,25 @@ def test_stage_upload_for_mcp_records_successful_upload(tmp_path: Path) -> None:
     )
 
     assert uploads == [response.upload_id]
+
+
+def test_stage_upload_for_mcp_replay_uses_same_curator_event_id(tmp_path: Path) -> None:
+    uploads: list[str] = []
+    store = IntakeStore(tmp_path / "intake")
+    trigger = CuratorUploadTrigger(
+        CuratorUploadTriggerConfig(enabled=True, url="http://curator.example/launch", token="token"),
+        launcher=lambda _config, _event_type, _event_id: None,
+        timer_factory=lambda interval, callback: ManualTimer(interval, callback),
+    )
+    trigger.record_upload = uploads.append  # type: ignore[method-assign]
+    request = upload_request()
+
+    first = stage_upload_for_mcp(store, request, build_id="build-1", trigger=trigger)
+    replay = stage_upload_for_mcp(store, request, build_id="build-2", trigger=trigger)
+
+    assert replay.upload_id == first.upload_id
+    assert replay.replayed is True
+    assert uploads == [first.upload_id, first.upload_id]
 
 
 def test_stage_upload_for_mcp_does_not_trigger_rejected_upload(tmp_path: Path) -> None:
