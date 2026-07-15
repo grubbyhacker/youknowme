@@ -164,8 +164,11 @@ commands:
 scripts/prod-feedback-status.sh fb_20260626_002857_1b2f7b87
 ```
 
-The script reads the production intake queue, feedback decision log, Curator status file, and recent
-broker run reports over SSH. It does not modify production state.
+The script uses the scoped `github-deployer` SSH identity and `~/.ssh/hermes-deploy` by default.
+Override the host, user, or key only with `--host`, `--ssh-user`, and `--identity` (or their
+`YKM_PROD_SSH_*` environment-variable equivalents). It reads the production intake queue, feedback
+decision log, Curator status file, and recent broker run reports over SSH. It does not modify production
+state.
 
 Before enabling the timer change, manually launch the live profile with the operator token:
 
