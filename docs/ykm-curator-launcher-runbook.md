@@ -167,8 +167,24 @@ scripts/prod-feedback-status.sh fb_20260626_002857_1b2f7b87
 The script uses the scoped `github-deployer` SSH identity and `~/.ssh/hermes-deploy` by default.
 Override the host, user, or key only with `--host`, `--ssh-user`, and `--identity` (or their
 `YKM_PROD_SSH_*` environment-variable equivalents). It reads the production intake queue, feedback
-decision log, Curator status file, and recent broker run reports over SSH. It does not modify production
-state.
+decision log, and Curator status file over SSH. For recent Curator runs it invokes the managed
+`ykm-curator-run-reports` reader, which calls the broker's local, read-only operator API. It never reads
+broker state directories, Docker, journald, or the protected operator environment file.
+`recent_curator_runs.availability` is `available` only when that API returns telemetry. An empty `runs`
+list with `available` means no matching runs; `inaccessible` or `unknown` means no conclusion about
+whether Curator ran. It does not modify production state.
+
+### Broker run-report access prerequisite
+
+`github-deployer` must not be granted access to the broker admin token or its environment file. To make
+run reports actionable, vps-ops must install a root-owned
+`/usr/local/libexec/ykm-curator-run-reports` helper and grant `github-deployer` passwordless sudo for
+only this exact invocation: `.../ykm-curator-run-reports --limit 5`. The helper must load the protected
+token itself, use it only for broker `GET /v1/runs` (and, if needed, corresponding per-run report reads),
+and emit filtered JSON with a top-level `runs` list. It must reject all other arguments and must not
+launch, stop, clean up, read logs, read arbitrary artifacts, or reveal the token. Until that managed
+capability exists, the script deliberately reports reader access failure instead of treating protected
+telemetry as an empty run history.
 
 Before enabling the timer change, manually launch the live profile with the operator token:
 

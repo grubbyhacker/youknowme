@@ -68,6 +68,7 @@ ssh -o BatchMode=yes -o IdentitiesOnly=yes -i "$identity" "$ssh_user@$host" pyth
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -78,7 +79,13 @@ intake_root = Path("/docker/youknowme/data/intake")
 feedback_path = intake_root / "feedback" / "feedback.jsonl"
 decisions_path = intake_root / "feedback" / "curator-decisions.jsonl"
 status_path = intake_root / "curator-status.json"
-runs_root = Path("/srv/sandbox-broker/state/runs")
+broker_runs_helper = (
+    "sudo",
+    "-n",
+    "/usr/local/libexec/ykm-curator-run-reports",
+    "--limit",
+    "5",
+)
 
 
 def read_jsonl(path: Path) -> list[tuple[int, dict[str, object]]]:
@@ -138,31 +145,81 @@ if status_path.exists():
     except json.JSONDecodeError as exc:
         last_status = {"_invalid_json": str(exc)}
 
-recent_runs = []
-if runs_root.exists():
-    reports = sorted(
-        runs_root.glob("*/output/run-report.json"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    for report_path in reports[:5]:
-        try:
-            report = json.loads(report_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            report = {"_invalid_json": str(exc)}
-        recent_runs.append(
-            {
-                "run_id": report_path.parent.parent.name,
-                "path": str(report_path),
-                "mtime": report_path.stat().st_mtime,
-                "status": report.get("status"),
-                "mode": report.get("mode"),
-                "feedback_count": report.get("feedback_count"),
-                "included_feedback_ids": report.get("included_feedback_ids"),
-                "feedback_decisions_appended": report.get("feedback_decisions_appended"),
-                "github_mutation_count": report.get("github_mutation_count"),
-            }
+def recent_curator_runs() -> dict[str, object]:
+    """Read broker reports through the narrowly-scoped managed API helper."""
+    try:
+        completed = subprocess.run(
+            broker_runs_helper,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=10,
         )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return {
+            "availability": "inaccessible",
+            "source": "sandbox_broker_operator_api",
+            "runs": [],
+            "reason": "managed_api_reader_unavailable",
+            "required_capability": "read-only broker run-report access",
+        }
+    if completed.returncode != 0:
+        return {
+            "availability": "inaccessible",
+            "source": "sandbox_broker_operator_api",
+            "runs": [],
+            "reason": "managed_api_reader_denied_or_failed",
+            "required_capability": "read-only broker run-report access",
+        }
+    try:
+        listing = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return {
+            "availability": "unknown",
+            "source": "sandbox_broker_operator_api",
+            "runs": [],
+            "reason": "managed_api_reader_invalid_response",
+            "required_capability": "read-only broker run-report access",
+        }
+
+    if isinstance(listing, dict):
+        runs = listing.get("runs")
+    else:
+        runs = listing
+    if not isinstance(runs, list) or not all(isinstance(run, dict) for run in runs):
+        return {
+            "availability": "unknown",
+            "source": "sandbox_broker_operator_api",
+            "runs": [],
+            "reason": "operator_api_unexpected_run_listing",
+            "required_capability": "read-only broker run-report access",
+        }
+
+    # Do not echo arbitrary broker metadata. Keep this diagnostic to run-report fields only.
+    allowed_fields = (
+        "run_id",
+        "id",
+        "profile",
+        "status",
+        "mode",
+        "created_at",
+        "started_at",
+        "completed_at",
+        "feedback_count",
+        "included_feedback_ids",
+        "feedback_decisions_appended",
+        "github_mutation_count",
+    )
+    curator_runs = [
+        {field: run[field] for field in allowed_fields if field in run}
+        for run in runs
+        if isinstance(run.get("profile"), str) and run["profile"].startswith("ykm-curator-")
+    ]
+    return {
+        "availability": "available",
+        "source": "sandbox_broker_operator_api",
+        "runs": curator_runs[:5],
+    }
 
 payload = {
     "paths": {
@@ -170,7 +227,7 @@ payload = {
         "feedback": str(feedback_path),
         "decisions": str(decisions_path),
         "curator_status": str(status_path),
-        "broker_runs": str(runs_root),
+        "broker_runs_api": "http://127.0.0.1:8091/v1/runs",
     },
     "feedback": {
         "total": len(feedback_records),
@@ -180,7 +237,7 @@ payload = {
     },
     "requested_feedback": requested,
     "last_curator_status": last_status,
-    "recent_curator_runs": recent_runs,
+    "recent_curator_runs": recent_curator_runs(),
 }
 print(json.dumps(payload, indent=2, sort_keys=True))
 PY
