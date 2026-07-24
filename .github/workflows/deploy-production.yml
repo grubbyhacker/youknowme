@@ -3,6 +3,7 @@ name: Deploy Production
 # Required repository secrets:
 # - DEPLOY_SSH_PRIVATE_KEY: ed25519 private key for github-deployer@100.66.40.39 (vps on Tailnet)
 # - VPS_OPS_READ_TOKEN: fine-grained PAT with read access to grubbyhacker/vps-ops
+# - VPS_OPS_GH_BROKER_AGENTD_COORDINATOR_TOKEN: agentd coordinator token already used by gh-agent-broker
 # - VPS_OPS_* Doppler env-source runtime secrets consumed by the vps-ops deploy wrapper
 # - TS_OAUTH_CLIENT_ID: OAuth client ID for tailscale/github-action@v4
 # - TS_OAUTH_SECRET: OAuth client secret for tailscale/github-action@v4
@@ -21,6 +22,10 @@ jobs:
     name: Deploy youknowme
     runs-on: ubuntu-latest
     environment: production
+    permissions:
+      contents: read
+      issues: write
+      packages: read
     if: >
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'main' &&
@@ -73,6 +78,9 @@ jobs:
           VPS_OPS_DOPPLER_SOURCE: env
           VPS_OPS_DOPPLER_ROLES: youknowme,gh-agent-broker
           # Keep in sync with vps-ops scripts/doppler-secret-mapping.json for the requested roles.
+          VPS_OPS_GH_BROKER_AGENTD_COORDINATOR_TOKEN: ${{ secrets.VPS_OPS_GH_BROKER_AGENTD_COORDINATOR_TOKEN }}
+          VPS_OPS_GH_BROKER_GHCR_PACKAGES_READ_TOKEN: ${{ github.token }}
+          VPS_OPS_GH_BROKER_GHCR_PULL_USERNAME: ${{ github.actor }}
           VPS_OPS_GH_BROKER_ADMIN_SECRET: ${{ secrets.VPS_OPS_GH_BROKER_ADMIN_SECRET }}
           VPS_OPS_GH_BROKER_REPORTER_01_SECRET: ${{ secrets.VPS_OPS_GH_BROKER_REPORTER_01_SECRET }}
           VPS_OPS_GH_BROKER_SANDBOX_MCP_TOKEN: ${{ secrets.VPS_OPS_GH_BROKER_SANDBOX_MCP_TOKEN }}
