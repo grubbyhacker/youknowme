@@ -116,6 +116,7 @@ jobs:
 
           scripts/run-ansible-playbook.sh -i inventory/production.yml playbooks/deploy-gh-agent-broker.yml \
             -e "ykm_curator_image=${ykm_image}" \
+            -e "authority_worker_managed_ghcr_pull_enabled=false" \
             -e "ansible_ssh_private_key_file=/tmp/hermes-deploy" \
             -e "ansible_host=100.66.40.39" \
             -e "ansible_port=${DEPLOY_PORT}"
