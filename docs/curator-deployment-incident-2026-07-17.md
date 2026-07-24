@@ -29,10 +29,11 @@ mapping:
 - `VPS_OPS_GH_BROKER_GHCR_PACKAGES_READ_TOKEN`
 - `VPS_OPS_GH_BROKER_GHCR_PULL_USERNAME`
 
-The YouKnowMe repository currently lacks the agentd coordinator secret. Roger
-must configure `VPS_OPS_GH_BROKER_AGENTD_COORDINATOR_TOKEN` in the YouKnowMe
-repository, using the same value already used by `gh-agent-broker`, before merge
-and deployment. No secret value is recorded or changed here.
+The incident was control-plane drift: `ci_youknowme_github` allowed this name
+and its GitHub sync was enabled, but the name had not been copied into that
+Doppler boundary. The managed migration copied the existing broker-boundary
+value into `ci_youknowme_github`; Doppler then synchronized it to the YouKnowMe
+production environment. No secret value is recorded here.
 
 ## Evidence and proof
 
@@ -43,4 +44,3 @@ and deployment. No secret value is recorded or changed here.
 - Independent broker evidence: `gh-agent-broker` self-deploy `a6f330a` is
   healthy.
 - Required proof: static deploy-secret contract plus YouKnowMe CI.
-
