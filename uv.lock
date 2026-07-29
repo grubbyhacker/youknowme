@@ -871,7 +871,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "lancedb", specifier = ">=0.25.0" },
     { name = "markdown-it-py", specifier = ">=3.0.0" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.9.0" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.9.0,<2.0.0" },
     { name = "numpy", specifier = ">=2.2.0" },
     { name = "pydantic", specifier = ">=2.11.0" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10.0" },
