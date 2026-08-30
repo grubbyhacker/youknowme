@@ -1,4 +1,4 @@
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -15,7 +15,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY src ./src
 RUN uv sync --frozen --no-dev --no-editable && rm -rf /root/.cache/uv
 
-FROM node:24-bookworm-slim AS codex
+FROM node:26-bookworm-slim AS codex
 
 ARG CODEX_VERSION=0.139.0
 ARG TARGETARCH
@@ -29,7 +29,7 @@ RUN case "$TARGETARCH" in \
       @openai/codex@${CODEX_VERSION} \
       "${CODEX_NATIVE_ALIAS}@npm:${CODEX_NATIVE_PACKAGE}"
 
-FROM python:3.12-slim AS runtime
+FROM python:3.14-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
