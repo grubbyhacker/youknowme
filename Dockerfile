@@ -15,7 +15,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY src ./src
 RUN uv sync --frozen --no-dev --no-editable && rm -rf /root/.cache/uv
 
-FROM node:24-bookworm-slim AS codex
+FROM node:25-bookworm-slim AS codex
 
 ARG CODEX_VERSION=0.139.0
 ARG TARGETARCH
