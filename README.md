@@ -40,8 +40,12 @@ Authenticated YouKnowMe MCP  <----  AI agents
         |
         | uploads and change requests
         v
-Protected intake -> Curator -> pull request -> human review -> corpus rebuild
+Protected intake -> Curator -> sandbox/broker boundary -> pull request -> human review -> corpus rebuild
 ```
+
+Curator holds no GitHub credential of its own. It pushes branches and opens pull requests through
+the sandbox/broker boundary (gh-agent-broker), which injects the real token and forwards the request
+upstream — so the corpus PR path never exposes a write credential to the agent.
 
 The production serving path is deliberately narrow:
 

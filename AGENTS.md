@@ -51,8 +51,8 @@ under `tests/`.
 ## Agent Delivery Standard
 
 Give Roger PRs ready to review. Do not just return once changes are written and put the ball in
-Roger's court. The goal is nearly always to produce a PR that is well tested, including staging
-validation when applicable, before sending it for review.
+Roger's court. The goal is nearly always to produce a PR that is well tested before sending it for
+review.
 
 For repo-mutating tasks, finish with:
 
@@ -88,26 +88,16 @@ understand production state. Acceptable read-only checks include commands such a
 metadata. Do not edit files, restart services, change containers, or run deploy/maintenance commands
 on `hermes-vps` unless explicitly authorized for that specific operation.
 
-The GitHub production environment gate requires approval before the deploy proceeds.
+The deploy job targets a `production` GitHub Environment, which scopes the deployment secrets. That
+Environment declares no reviewer, so the deploy does not pause for human approval — it proceeds as
+soon as CI passes on `main`.
 
-## Local Staging
+## Local Development
 
-Staging runs on localhost with Docker from the `grubbyhacker/vps-ops` repository:
-
-```bash
-mise run deploy:staging -- youknowme
-```
-
-Staging uses `YKM_AUTH_MODE=local` and requires the local auth header:
-
-```text
-X-YKM-Local-Secret: staging-local-secret
-```
-
-When staging is running, the service is available at `http://127.0.0.1:8765`.
-
-The staging index must be rsynced from production before staging can start. The expected local path
-is `~/staging/youknowme/data/index-current`.
+There is currently no local staging environment. The former `~/staging` stack and its
+`mise run deploy:staging` interface were removed on 2026-07-24; the local inventory held
+Ansible-rendered credentials and must not be reintroduced. If you find an instruction telling you to
+run `deploy:staging` (here or anywhere else), it is stale — ignore it.
 
 ## Docker Image
 
@@ -127,7 +117,7 @@ loaded.
 
 `public` mode requires a Cloudflare Access JWT and is used in production.
 
-`local` mode requires the `X-YKM-Local-Secret` header and is used in staging and development.
+`local` mode requires the `X-YKM-Local-Secret` header and is used for development.
 
 ## Git Workflow
 
