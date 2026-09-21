@@ -1,7 +1,12 @@
 # YouKnowMe Curator Implementation Status
 
-Status: single live Curator runner path implemented and covered locally; production profile wiring
-is owned by the deployment repository.
+Status: single live Curator runner path implemented, covered locally, and running in production. The
+production launcher is already wired — the owner-controlled timer invokes the sandbox-broker profile
+with the combined live task contract. This is not future work. The launcher's deployment shape is
+owned by the deployment repository; its invocation path is live.
+
+Curator runs live Codex through a scoped, broker-owned proxy. Earlier revisions of this document
+claimed Curator makes no live model calls; that claim was wrong and has been corrected throughout.
 
 Use this file to restart Curator implementation work without relying on chat history. The contract
 source of truth remains `docs/ykm-phase4-curator.md` and `docs/ykm-curator-contracts.md`.
@@ -11,11 +16,31 @@ source of truth remains `docs/ykm-phase4-curator.md` and `docs/ykm-curator-contr
 - Production Curator code lives under `src/curator`.
 - `POC/` is reference-only and must stay untouched unless explicitly requested.
 - YKM serving remains passive.
-- Do not add merge, deploy, index rebuild, queue movement, provider-key use, direct GitHub token use,
-  direct GitHub mutations, or live model calls.
-- Prefer deterministic and offline behavior first.
-- Broker/model behavior is allowed only through the documented broker/proxy contracts and currently
-  remains preflight-only unless explicitly enabled by a future contract.
+- Curator runs live Codex. Model execution reaches the provider only through a scoped, broker-owned
+  proxy: `src/curator/upload_agent.py` and `src/curator/pr_repair.py` run `codex exec` against the
+  proxy base URL and token supplied by `src/curator/cli.py`
+  (`--codex-proxy-base-url` / `--codex-proxy-token`, falling back to `CODEX_PROXY_BASE_URL` /
+  `CODEX_PROXY_TOKEN` then `GH_AGENT_PROXY_URL` / `GH_AGENT_PROXY_TOKEN`). The Codex binary is baked
+  into the runtime image by the `codex` stage in `Dockerfile`.
+- The scheduled production profile enables Codex-backed feedback work, upload review with PR
+  creation, and repair of existing Curator PRs.
+- Curator never receives provider credentials and never receives direct GitHub credentials. It holds
+  only a scoped proxy token and the broker agent identity (`BROKER_AGENT_ID` /
+  `BROKER_AGENT_SECRET`); see `_git_env` and `_write_askpass` in `src/curator/upload_pr.py`.
+  Forbidden secret environment checks stay in force.
+- All GitHub mutations remain broker-mediated. Pushes go through the broker Git remote and pull
+  requests through `HttpBrokerAdapter.create_pull`, which posts to
+  `/v1/repos/<owner>/<repo>/pulls` (`src/curator/adapters.py`). Curator never calls GitHub directly.
+- Merge, deployment, index rebuild, and upload-queue movement remain outside Curator's authority. Do
+  not add them.
+- Repository scope stays allowlisted: `allowed_pr_repos` in `src/curator/models.py`, enforced in
+  `src/curator/policy.py`.
+- Prefer deterministic and offline behavior first. Model-backed actions stay task-gated: a run
+  performs Codex work only when the task explicitly sets the relevant `codex_proxy` executor.
+- The legacy typed planning budget is a distinct mechanism from Codex executor invocation. The typed
+  path is `ModelProxyAdapter` in `src/curator/adapters.py`; the Codex executor path is
+  `upload_agent.py` / `pr_repair.py`. A closed or unused typed planning budget must never be cited as
+  evidence that no model runs.
 
 ## Implemented
 
@@ -92,25 +117,28 @@ Observed result at the latest Curator handoff:
 - Broker-backed upload review PR creation is enabled only for validated `manual_live` upload-review
   observations. Feedback issue/PR creation and PR repair handoff mutations are enabled only through
   task-explicit `codex_proxy` executor settings plus broker/proxy preflight.
-- Model-backed feedback planning and upload-review observe remain explicit opt-ins. Offline and
-  live-proxy eval harnesses exist; production live model calls require a future planning execution
-  contract.
+- Model-backed feedback planning and upload-review observe are task-gated opt-ins, not future work.
+  Production runs execute live Codex through the broker-owned proxy when the task sets the relevant
+  `codex_proxy` executor. Offline and live-proxy eval harnesses also exist. What remains undefined is
+  a broader *typed* planning execution contract; that gap does not make Curator model-free.
 - Upload-review PR creation does not move upload queue directories or write upload `curator.json`.
   Reconciliation can still discover the PR later from Curator markers and branch naming.
 - Add real upload claim/process/reject/archive queue movement only after the queue mutation contract is
   explicitly enabled.
 - Add broader PR maintenance actions for owner comments, failed checks, and stale/blocked PRs after
   their edit/comment execution contracts are explicitly enabled.
-- Add or update the production launcher outside the Curator worker so the owner-controlled timer
-  invokes sandbox-broker profile `ykm-curator-live` with the combined live task contract. Curator is
-  not an always-on daemon, YKM serving does not launch it, and broker services do not decide when it
-  should run.
+- The production launcher is already wired and is not future work. The owner-controlled timer invokes
+  the sandbox-broker profile `ykm-curator-live` with the combined live task contract, and
+  `src/ykm/curator_trigger.py` fires the launch request (covered by `tests/test_curator_trigger.py`).
+  Curator is not an always-on daemon, YKM serving does not run it in-process, and broker services do
+  not decide when it should run.
 
 ## Completion Audit
 
-- Safety boundary: satisfied. No production code or docs were added under `POC/`; the Curator does
-  not use direct GitHub tokens, provider keys, merge/deploy/index rebuild operations, queue moves, or
-  live model calls.
+- Safety boundary: satisfied. No production code or docs were added under `POC/`. Curator uses no
+  provider credentials and no direct GitHub credentials, performs no merge, deployment, index
+  rebuild, or upload-queue movement, and makes no direct GitHub mutations. It does run live Codex,
+  through a scoped broker-owned proxy only.
 - Deterministic controller: satisfied for the contracted initial manual workflow. It validates task
   contracts, locks runs, freezes feedback windows, plans feedback/uploads, reconciles fixture and
   opt-in broker-read snapshots, applies state-only safe decisions, and writes JSON/Markdown reports.
@@ -118,17 +146,21 @@ Observed result at the latest Curator handoff:
   and PR repair handoffs when the task explicitly enables the relevant executor. Live reads are
   opt-in and authenticated through broker agent credentials only. Mutations use broker Git and broker
   mutation surfaces, not direct GitHub tokens.
-- Model boundary: satisfied for health, budgets, and typed fixture validation. Live model planning is
-  intentionally closed until a future model execution contract enables it.
+- Model boundary: satisfied, with live execution. Health probes, budgets, and typed fixture
+  validation all hold, and live Codex execution runs only through the scoped broker-owned proxy with
+  a proxy token — never a provider key. The scheduled production profile enables Codex-backed
+  feedback work, upload review with PR creation, and repair of existing Curator PRs. The typed
+  planning budget is a separate mechanism from Codex executor invocation and is not evidence that no
+  model runs; `tests/test_curator_live_upload_agent_e2e.py` asserts a live run producing a
+  `pull.create`.
 - Upload queue mutation: intentionally deferred by contract. Upload plans and reconciliation previews
   do not move queue directories.
 
 ## Next Implementation Targets
 
-1. Wire the VPS Curator launcher to the single `ykm-curator-live` sandbox-broker profile and update
-   the timer principal to allow only that live profile plus dry/state diagnostics.
-2. Define any remaining broker mutation execution contracts for broader PR maintenance, branch
+1. Define any remaining broker mutation execution contracts for broader PR maintenance, branch
    edits, idempotency reuse, and budget-denial persistence.
-3. Define the future model execution contract for feedback planning, upload review, PR comment
-   classification, and PR body drafting.
-4. Define the future queue movement contract before any upload directory moves are enabled.
+1. Define the remaining typed model execution contract for PR comment classification and PR body
+   drafting. Feedback work, upload review with PR creation, and repair of existing Curator PRs
+   already run live Codex through the broker-owned proxy.
+1. Define the future queue movement contract before any upload directory moves are enabled.
