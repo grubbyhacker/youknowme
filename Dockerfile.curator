@@ -1,0 +1,120 @@
+# Dedicated youknowme-curator agent image.
+#
+# Stage 2 of the agent platform coupling work
+# (agent-infra-docs/design/agent-platform-coupling.md). Curator ships as its own
+# artifact derived from the versioned shared runtime base, NOT as the YouKnowMe
+# service image, so that ordinary service changes never manufacture agent
+# releases.
+#
+# The base (ghcr.io/grubbyhacker/agent-runtime-base) carries the bounded runtime:
+# the gh-agent-broker CLI, the worker entrypoints, Codex, mise, and a minimal
+# shell toolchain -- and deliberately no repository dependencies and no agent
+# code. This image adds ONLY the Curator application code and its Python
+# dependency closure, plus the fixed container invocation contract.
+#
+# Container invocation contract (owned by AgentType policy in vps-ops; this image
+# implements it):
+#   * fixed entrypoint;
+#   * the platform supplies /input/work-item.json (read-only);
+#   * mode travels in the typed input, never on the command line;
+#   * versioned results are written under /output.
+#
+# The base coordinate is pinned to an immutable digest by the caller at build
+# time. CI resolves and passes AGENT_RUNTIME_BASE; the default here is only a
+# convenience for local builds and is overridden in CI.
+
+# renovate: agent-runtime-base
+ARG AGENT_RUNTIME_BASE=ghcr.io/grubbyhacker/agent-runtime-base:main
+
+########################################################################
+# Builder: resolve the Python dependency closure with uv.
+#
+# python + uv are not present in the shared base (an agent reaches GitHub only
+# through the broker; the base is a shell/broker runtime). The dependency closure
+# is built here from the frozen lockfile and copied into the final image as a
+# self-contained virtualenv, so the runtime layer installs no build tooling.
+########################################################################
+FROM python:3.12-slim AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+
+COPY --from=ghcr.io/astral-sh/uv:0.9.16 /uv /uvx /usr/local/bin/
+
+WORKDIR /app
+
+# Dependency layer first, for cache reuse and so the dependency-manifest hash is
+# derived from exactly these two files.
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+# Curator application code and the single ykm module it imports
+# (ykm.build.parse_frontmatter). The YouKnowMe server, CLI, and service wiring
+# are deliberately NOT part of this agent image.
+COPY src/curator ./src/curator
+COPY src/ykm ./src/ykm
+RUN uv sync --frozen --no-dev --no-editable && rm -rf /root/.cache/uv
+
+########################################################################
+# Runtime: the dedicated Curator agent, derived from the shared runtime base.
+########################################################################
+FROM ${AGENT_RUNTIME_BASE} AS runtime
+
+# Re-declare so it is available to the label instruction below.
+ARG AGENT_RUNTIME_BASE
+
+# Provenance, supplied by CI. Non-secret. These become image labels and are the
+# machine-checkable provenance the promotion contract verifies.
+ARG SOURCE_REVISION=unknown
+ARG DEPENDENCY_MANIFEST_SHA256=unknown
+
+# python is provided by copying the builder's interpreter and the resolved
+# virtualenv. The base owns PATH ordering; prepend the venv so `python` and the
+# `curator` entrypoint resolve to the application environment.
+ENV PATH="/app/.venv/bin:${PATH}" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    YKM_CURATOR_INPUT=/input/work-item.json \
+    YKM_CURATOR_OUTPUT=/output
+
+USER root
+
+# The self-contained interpreter + resolved application virtualenv.
+COPY --from=builder /usr/local/bin/python3.12 /usr/local/bin/python3.12
+COPY --from=builder /usr/local/lib/python3.12 /usr/local/lib/python3.12
+COPY --from=builder /usr/local/lib/libpython3.12.so* /usr/local/lib/
+COPY --from=builder /app/.venv /app/.venv
+RUN ldconfig && ln -sf /usr/local/bin/python3.12 /usr/local/bin/python3 \
+    && ln -sf /usr/local/bin/python3.12 /usr/local/bin/python
+
+# Record the dependency manifest hash inside the image. The shared base is
+# asserted to carry NO such manifest, so its presence here marks this as a
+# derived agent image and gives the broker a local, inspectable provenance
+# anchor.
+RUN install -d /usr/local/share/agent-image \
+    && printf '%s\n' "${DEPENDENCY_MANIFEST_SHA256}" \
+        > /usr/local/share/agent-image/dependency-manifest.sha256 \
+    && printf '%s\n' "${SOURCE_REVISION}" \
+        > /usr/local/share/agent-image/source-revision
+
+# The fixed entrypoint. The platform mounts /input read-only and /output
+# writable; mode and all parameters travel in /input/work-item.json.
+COPY scripts/curator-agent-entrypoint.sh /usr/local/bin/curator-agent-entrypoint
+RUN chmod 0755 /usr/local/bin/curator-agent-entrypoint
+
+# Non-secret provenance and contract, as image labels.
+LABEL io.grubbyhacker.agent-image.type="youknowme-curator" \
+      io.grubbyhacker.agent-image.source-revision="${SOURCE_REVISION}" \
+      io.grubbyhacker.agent-image.dependency-manifest-sha256="${DEPENDENCY_MANIFEST_SHA256}" \
+      io.grubbyhacker.agent-image.runtime-base="${AGENT_RUNTIME_BASE}" \
+      io.grubbyhacker.agent-image.input-contract="/input/work-item.json" \
+      io.grubbyhacker.agent-image.output-contract="/output" \
+      io.grubbyhacker.agent-image.contract-version="1"
+
+# Run as the unprivileged base user for defence in depth. /workspace is owned by
+# the base; the platform supplies /input and /output at launch.
+WORKDIR /workspace
+
+ENTRYPOINT ["/usr/local/bin/curator-agent-entrypoint"]

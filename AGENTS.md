@@ -25,6 +25,15 @@ Place the PRD and supporting documentation in `docs/`.
 
 Prefer small, explicit documents with stable names over burying project requirements in chat history.
 
+## Agent platform
+
+The cross-repo architecture lives in `agent-infra-docs/design/agent-platform-coupling.md`
+and is authoritative. This repository's stage notes, schema specifics, and local
+validation live under `docs/agent-platform/`. A per-repo document may not
+contradict the architecture document; if implementation shows the architecture is
+wrong, the correction lands in `agent-infra-docs` first and the per-repo note
+follows.
+
 ## Tooling
 
 Use `mise` for local tool versions and `uv` for Python dependency management.

@@ -1,0 +1,6 @@
+{
+  "schema_version": "1",
+  "run_id": "curator-agent-image-smoke",
+  "mode": "dry_run",
+  "enabled_actions": []
+}
