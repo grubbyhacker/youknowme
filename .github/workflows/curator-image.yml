@@ -1,0 +1,187 @@
+name: Curator agent image
+
+# Stage 2 of the agent platform coupling work: build the dedicated Curator agent
+# image and produce a single-image Docker archive plus non-secret provenance.
+#
+# This workflow deliberately does NOT publish to a registry, promote, deploy, or
+# touch any secret beyond the built-in GITHUB_TOKEN used only to pull the shared
+# runtime base from GHCR. Promotion and acquisition are broker-owned operations
+# defined by the promotion contract and are out of scope here.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/curator-image.yml"
+      - "Dockerfile.curator"
+      - "scripts/curator-agent-entrypoint.sh"
+      - "scripts/curator-image-provenance.py"
+      - "scripts/validate-curator-image-contract.py"
+      - "fixtures/curator-agent/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "src/curator/**"
+      - "src/ykm/**"
+      - "tests/test_curator_image_contract.py"
+      - "tests/test_curator_image_smoke.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/curator-image.yml"
+      - "Dockerfile.curator"
+      - "scripts/curator-agent-entrypoint.sh"
+      - "scripts/curator-image-provenance.py"
+      - "scripts/validate-curator-image-contract.py"
+      - "fixtures/curator-agent/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "src/curator/**"
+      - "src/ykm/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ykm-curator-image-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-archive:
+    name: build dedicated Curator image archive
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    env:
+      PLATFORM: linux/amd64
+      AGENT_RUNTIME_BASE: >-
+        ${{ vars.AGENT_RUNTIME_BASE
+          || format('ghcr.io/{0}/agent-runtime-base:main', github.repository_owner) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate the Curator image contract (offline)
+        run: python3 scripts/validate-curator-image-contract.py
+
+      - name: Compute non-secret provenance
+        id: provenance
+        run: |
+          set -euo pipefail
+          provenance="$(python3 scripts/curator-image-provenance.py \
+            --source-revision "${GITHUB_SHA}" \
+            --platform "${PLATFORM}")"
+          printf '%s\n' "$provenance" > curator-image-provenance.json
+          dep_sha="$(python3 -c 'import json,sys;print(json.load(open("curator-image-provenance.json"))["dependency_manifest_sha256"])')"
+          printf 'dependency_manifest_sha256=%s\n' "$dep_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR (read-only, to pull the runtime base)
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build dedicated Curator image and export a single-image Docker archive
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.curator
+          platforms: ${{ env.PLATFORM }}
+          push: false
+          provenance: false
+          sbom: false
+          build-args: |
+            AGENT_RUNTIME_BASE=${{ env.AGENT_RUNTIME_BASE }}
+            SOURCE_REVISION=${{ github.sha }}
+            DEPENDENCY_MANIFEST_SHA256=${{ steps.provenance.outputs.dependency_manifest_sha256 }}
+          tags: youknowme-curator:${{ github.sha }}
+          outputs: type=docker,dest=curator-image.tar
+
+      - name: Derive archive and image identity
+        id: identity
+        run: |
+          set -euo pipefail
+          # A single-image archive: exactly one manifest, one repo tag.
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import hashlib
+          import json
+          import tarfile
+
+          archive = "curator-image.tar"
+          with open(archive, "rb") as handle:
+              archive_sha = hashlib.sha256(handle.read()).hexdigest()
+
+          with tarfile.open(archive) as tar:
+              manifest_member = tar.extractfile("manifest.json")
+              assert manifest_member is not None
+              manifest = json.load(manifest_member)
+
+          assert len(manifest) == 1, f"expected a single-image archive, found {len(manifest)}"
+          entry = manifest[0]
+          config_name = entry["Config"]  # e.g. blobs/sha256/<hex>.json or <hex>.json
+          image_id = config_name.rsplit("/", 1)[-1].split(".")[0]
+          repo_tags = entry.get("RepoTags") or []
+          assert len(repo_tags) == 1, f"expected a single repo tag, found {repo_tags}"
+
+          print(f"archive_sha256={archive_sha}")
+          print(f"image_id=sha256:{image_id}")
+          print(f"repo_tag={repo_tags[0]}")
+          PY
+
+      - name: Finalize provenance with archive and image identity
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+
+          with open("curator-image-provenance.json", encoding="utf-8") as handle:
+              provenance = json.load(handle)
+
+          provenance["archive"] = {
+              "filename": "curator-image.tar",
+              "sha256": "${{ steps.identity.outputs.archive_sha256 }}",
+              "format": "docker-archive",
+          }
+          provenance["image"] = {
+              "id": "${{ steps.identity.outputs.image_id }}",
+              "repo_tag": "${{ steps.identity.outputs.repo_tag }}",
+          }
+          provenance["runtime_base"] = "${{ env.AGENT_RUNTIME_BASE }}"
+
+          with open("curator-image-provenance.json", "w", encoding="utf-8") as handle:
+              json.dump(provenance, handle, indent=2, sort_keys=True)
+              handle.write("\n")
+
+          print(json.dumps(provenance, indent=2, sort_keys=True))
+          PY
+
+      - name: Summarize
+        run: |
+          {
+            printf '### Dedicated Curator image built\n\n'
+            printf '```json\n'
+            cat curator-image-provenance.json
+            printf '\n```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload single-image Docker archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: curator-image-archive
+          path: curator-image.tar
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload non-secret provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: curator-image-provenance
+          path: curator-image-provenance.json
+          if-no-files-found: error
+          retention-days: 7
