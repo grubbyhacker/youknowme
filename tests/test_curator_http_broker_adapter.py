@@ -146,6 +146,7 @@ def test_http_broker_adapter_creates_pull_with_curator_metadata() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         captured["path"] = request.url.path
         captured["auth"] = request.headers.get("authorization")
+        captured["capability"] = request.headers.get("x-agent-capability")
         captured["body"] = json.loads(request.content.decode("utf-8"))
         return httpx.Response(
             201,
@@ -172,6 +173,7 @@ def test_http_broker_adapter_creates_pull_with_curator_metadata() -> None:
         client=client,
         agent_id="ykm-curator",
         agent_secret="secret",
+        capability_token="opaque-run-capability",
     ).create_pull(intent)
 
     assert result.status == "executed"
@@ -179,6 +181,7 @@ def test_http_broker_adapter_creates_pull_with_curator_metadata() -> None:
     assert result.url == "https://github.invalid/grubbyhacker/ykmcorpus/pull/12"
     assert captured["path"] == "/v1/repos/grubbyhacker/ykmcorpus/pulls"
     assert captured["auth"] is not None
+    assert captured["capability"] == "opaque-run-capability"
     body = captured["body"]
     assert isinstance(body, dict)
     assert body["head"] == "curator/run-upload/upload-upl-1-abc123"
@@ -803,3 +806,32 @@ def test_runner_skips_missing_issue_snapshot_and_continues_reconciliation(
     assert report.reconciliation["upload_transition_previews"][0]["upload_id"] == "upl_blocked"
 
 
+
+
+def test_http_broker_adapter_pull_create_requires_run_capability() -> None:
+    called = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        return httpx.Response(201, json={"number": 1})
+
+    intent = ExecutionIntent(
+        action_id="upl_act_missing_capability",
+        operation="pull.create",
+        idempotency_key="upload:missing-capability",
+        target_repo="grubbyhacker/ykmcorpus",
+        branch="curator/run-upload/missing-capability",
+        evidence=ActionEvidence(upload_ids=["upl_1"]),
+    )
+    result = HttpBrokerAdapter(
+        "http://broker:8080",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        agent_id="ykm-curator",
+        agent_secret="secret",
+        capability_token="",
+    ).create_pull(intent)
+
+    assert result.status == "failed"
+    assert "capability" in result.message
+    assert called is False
