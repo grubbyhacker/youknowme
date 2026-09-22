@@ -157,9 +157,31 @@ class ShadowWorkItemMirror:
                 sock.shutdown(socket.SHUT_WR)
             except OSError:
                 pass
-            # Read (and discard) a bounded reply so a well-behaved server sees
-            # the frame consumed; content is intentionally never inspected.
-            sock.recv(_MAX_REPLY_BYTES)
+            # Read one bounded JSON reply and verify that shadow admission
+            # actually matched and recorded evidence. Reply content is never
+            # logged, but arbitrary/rejected bytes must not be reported as a
+            # successful mirror.
+            raw = bytearray()
+            while b"\n" not in raw:
+                chunk = sock.recv(min(4096, _MAX_REPLY_BYTES + 1 - len(raw)))
+                if not chunk:
+                    break
+                raw.extend(chunk)
+                if len(raw) > _MAX_REPLY_BYTES:
+                    raise ValueError("shadow reply exceeds bound")
+            line, separator, trailing = bytes(raw).partition(b"\n")
+            if not separator or trailing.strip():
+                raise ValueError("shadow reply is not one JSON frame")
+            reply = json.loads(line)
+            if (
+                not isinstance(reply, dict)
+                or reply.get("matched") is not True
+                or reply.get("launched") is not False
+                or not reply.get("work_item_id")
+                or not reply.get("event_id")
+                or "error" in reply
+            ):
+                raise ValueError("shadow admission did not accept the envelope")
 
 
 def _env_float(name: str, default: float) -> float:

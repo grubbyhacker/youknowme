@@ -54,9 +54,13 @@ def _trigger(launched: list[tuple[str, str]]) -> CuratorUploadTrigger:
 class _OneFrameServer:
     """Accepts one connection, records one framed envelope, replies once."""
 
-    def __init__(self, socket_path: str) -> None:
+    def __init__(self, socket_path: str, reply: bytes | None = None) -> None:
         self.frames: list[bytes] = []
         self.connections = 0
+        self.reply = reply or (
+            b'{"matched":true,"work_item_id":"work-1",'
+            b'"event_id":"event-1","duplicate":false,"launched":false}\n'
+        )
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._sock.bind(socket_path)
         self._sock.listen(4)
@@ -79,7 +83,7 @@ class _OneFrameServer:
                         break
                     data += chunk
                 self.frames.append(data)
-                conn.sendall(b'{"matched":true,"launched":false}\n')
+                conn.sendall(self.reply)
 
     def close(self) -> None:
         self._sock.close()
@@ -130,6 +134,21 @@ def test_build_envelope_is_deterministic_and_matches_route_tuple() -> None:
     }
     assert build_envelope("upl_abc") == envelope
 
+
+
+
+def test_mirror_rejected_reply_is_not_success() -> None:
+    socket_path = _short_socket_path()
+    server = _OneFrameServer(
+        socket_path,
+        b'{"matched":false,"work_item_id":"","event_id":"",'
+        b'"duplicate":false,"launched":false}\n',
+    )
+    try:
+        mirror = ShadowWorkItemMirror(ShadowMirrorConfig(socket_path=socket_path))
+        assert mirror.mirror_upload("upl_unmatched") is False
+    finally:
+        server.close()
 
 def test_mirror_sends_exactly_one_valid_frame(tmp_path: Path) -> None:
     socket_path = _short_socket_path()
