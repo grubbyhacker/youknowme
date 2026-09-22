@@ -26,6 +26,10 @@ run = "uv run scripts/curator-image-provenance.py"
 description = "Offline: validate the Curator release publish/promote workflow"
 run = "uv run scripts/validate-curator-release-workflow.py"
 
+[tasks.deploy-production-workflow]
+description = "Offline: validate the YouKnowMe production deploy workflow has no broker coupling"
+run = "uv run scripts/validate-deploy-production-workflow.py"
+
 [tasks.demo]
 description = "Build the synthetic corpus and run local CLI demo queries"
 run = "scripts/local-demo.sh"
