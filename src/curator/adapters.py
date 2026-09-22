@@ -311,6 +311,7 @@ class HttpBrokerAdapter:
         timeout_seconds: float = 5,
         agent_id: str | None = None,
         agent_secret: str | None = None,
+        capability_token: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self._client = client
@@ -318,6 +319,11 @@ class HttpBrokerAdapter:
         self.agent_id = agent_id if agent_id is not None else os.getenv("BROKER_AGENT_ID")
         self.agent_secret = (
             agent_secret if agent_secret is not None else os.getenv("BROKER_AGENT_SECRET")
+        )
+        self.capability_token = (
+            capability_token
+            if capability_token is not None
+            else os.getenv("AGENT_CAPABILITY_TOKEN")
         )
 
     def probe(self, *, required: bool) -> CuratorProbe:
@@ -633,6 +639,7 @@ class HttpBrokerAdapter:
                 "POST",
                 f"/v1/repos/{intent.target_repo}/pulls",
                 authenticated=True,
+                capability_required=True,
                 idempotency_key=intent.idempotency_key,
                 json_body={
                     "title": intent.title or "YouKnowMe Curator upload review",
@@ -1087,6 +1094,7 @@ class HttpBrokerAdapter:
         params: dict[str, str] | None = None,
         json_body: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
+        capability_required: bool = False,
     ) -> httpx.Response:
         url = f"{self.base_url}{path}"
         kwargs: dict[str, Any] = {"timeout": self.timeout_seconds}
@@ -1097,6 +1105,10 @@ class HttpBrokerAdapter:
             kwargs["json"] = json_body
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
+        if capability_required:
+            if not self.capability_token:
+                raise ValueError("broker-issued run capability is required for pull.create")
+            headers["X-Agent-Capability"] = self.capability_token
         if headers:
             kwargs["headers"] = headers
         if authenticated:
