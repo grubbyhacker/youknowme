@@ -22,6 +22,10 @@ run = "uv run scripts/validate-curator-image-contract.py"
 description = "Offline: print non-secret provenance for the Curator agent image"
 run = "uv run scripts/curator-image-provenance.py"
 
+[tasks.curator-release-workflow]
+description = "Offline: validate the Curator release publish/promote workflow"
+run = "uv run scripts/validate-curator-release-workflow.py"
+
 [tasks.demo]
 description = "Build the synthetic corpus and run local CLI demo queries"
 run = "scripts/local-demo.sh"
