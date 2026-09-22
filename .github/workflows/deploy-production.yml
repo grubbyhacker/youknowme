@@ -35,14 +35,14 @@ jobs:
 
     steps:
       - name: Checkout vps-ops
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: grubbyhacker/vps-ops
           token: ${{ secrets.VPS_OPS_READ_TOKEN }}
           path: vps-ops
 
       - name: Checkout youknowme (scripts synced by the Ansible role)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: youknowme
           ref: ${{ github.event.workflow_run.head_sha }}
