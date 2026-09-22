@@ -38,6 +38,7 @@ from ykm.contracts import (
 )
 from ykm.curator_trigger import CuratorUploadTrigger, CuratorUploadTriggerConfig
 from ykm.embeddings import provider_from_env
+from ykm.shadow_workitem_mirror import ShadowMirrorConfig, ShadowWorkItemMirror
 from ykm.index import YkmIndex
 from ykm.intake import IntakeStore
 from ykm.logging import JsonlLogger, now_utc
@@ -166,9 +167,14 @@ def stage_upload_for_mcp(
     *,
     build_id: str | None,
     trigger: CuratorUploadTrigger,
+    mirror: ShadowWorkItemMirror | None = None,
 ) -> UploadResponse:
     response = intake.stage_upload(request, build_id=build_id, auth_path="mcp")
     trigger.record_upload(response.upload_id)
+    if mirror is not None:
+        # Best-effort shadow mirror of the successful upload. It never raises,
+        # never launches, and never affects the trigger or this response.
+        mirror.mirror_upload(response.upload_id)
     return response
 
 
@@ -189,6 +195,7 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
     provider = provider_from_env()
     intake = IntakeStore(Path(os.getenv("YKM_INTAKE_PATH", "/data/intake")))
     curator_upload_trigger = CuratorUploadTrigger(CuratorUploadTriggerConfig.from_env())
+    shadow_upload_mirror = ShadowWorkItemMirror(ShadowMirrorConfig.from_env())
     query_logger = JsonlLogger(
         Path(os.getenv("YKM_LOG_PATH")) if os.getenv("YKM_LOG_PATH") else None,
         int(os.getenv("YKM_LOG_RETENTION_DAYS", "90")),
@@ -379,6 +386,7 @@ def create_app(index_path: Path, mode: str = "local") -> Starlette:
             ),
             build_id=index.manifest.build_id,
             trigger=curator_upload_trigger,
+            mirror=shadow_upload_mirror,
         )
         return response.model_dump(mode="json")
 
