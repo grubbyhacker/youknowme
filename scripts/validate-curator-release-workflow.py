@@ -25,6 +25,13 @@ Invariants asserted:
      Docker archive and the provenance flags.
   7. Generation-only promotion: the promote step passes the broker-assigned
      generation from publish and never an image reference/digest/tag.
+  8. Release endpoint on the Tailnet AgentRelease port: the BROKER_URL default
+     targets the sandbox-broker private AgentRelease API on port 8091, never the
+     broker's 8080 deploy/dispatch listener (which returns 404 for the release
+     API — proven by run 35699348779).
+  9. Summary is option-safe: every `printf` whose format string begins with '-'
+     uses `printf --`, so the always-run summary can never fail with
+     "printf: -: invalid option".
 """
 
 from __future__ import annotations
@@ -181,6 +188,54 @@ def check_generation_only_promotion(text: str, errors: list[str]) -> None:
         errors.append("promote step must NOT pass an image reference; generation only.")
 
 
+# The release publish/promote API is served on the Tailnet AgentRelease port
+# 8091. Port 8080 is the broker's deploy/dispatch listener and returns 404 for
+# the release API (proven by run 35699348779).
+RELEASE_API_PORT = "8091"
+FORBIDDEN_ENDPOINT_PORT = "8080"
+
+
+def check_release_endpoint_port(text: str, errors: list[str]) -> None:
+    default = re.search(
+        r"BROKER_URL:\s*\$\{\{[^}]*\|\|\s*'([^']+)'\s*\}\}",
+        text,
+    )
+    if not default:
+        errors.append("workflow must define a default BROKER_URL endpoint.")
+        return
+    url = default.group(1)
+    port = re.search(r":(\d+)(?:/|$)", url)
+    if port is None:
+        errors.append(f"BROKER_URL default {url!r} must name an explicit port.")
+        return
+    if port.group(1) == FORBIDDEN_ENDPOINT_PORT:
+        errors.append(
+            f"BROKER_URL default targets the broker deploy/dispatch port "
+            f"{FORBIDDEN_ENDPOINT_PORT}, which does not serve the release API "
+            f"(404). The release endpoint must be Tailnet port {RELEASE_API_PORT}."
+        )
+    elif port.group(1) != RELEASE_API_PORT:
+        errors.append(
+            f"BROKER_URL default port {port.group(1)} is not the release API "
+            f"port {RELEASE_API_PORT}."
+        )
+
+
+def check_summary_printf_is_option_safe(text: str, errors: list[str]) -> None:
+    """Any printf whose format string starts with '-' must use `printf --`.
+
+    Otherwise the leading '-' is parsed as an option and the always-run summary
+    step aborts with "printf: -: invalid option".
+    """
+    for match in re.finditer(r"printf(\s+--)?\s+'(-[^']*)'", text):
+        if match.group(1) is None:
+            fmt = match.group(2)
+            errors.append(
+                f"printf format {fmt!r} begins with '-' but does not use "
+                "`printf --`; the summary step could fail on an option-like format."
+            )
+
+
 def main() -> int:
     errors: list[str] = []
     if not WORKFLOW.is_file():
@@ -195,6 +250,8 @@ def main() -> int:
     check_tailscale_before_call(text, errors)
     check_archive_and_provenance_binding(text, errors)
     check_generation_only_promotion(text, errors)
+    check_release_endpoint_port(text, errors)
+    check_summary_printf_is_option_safe(text, errors)
 
     if errors:
         print("Curator release workflow check failed:", file=sys.stderr)
@@ -203,7 +260,8 @@ def main() -> int:
         return 1
     print(
         "Curator release workflow check passed (manual-only, token separation, "
-        "tailscale-before-call, archive/provenance binding, generation-only promotion)."
+        "tailscale-before-call, archive/provenance binding, generation-only "
+        "promotion, release endpoint on Tailnet port 8091, option-safe summary)."
     )
     return 0
 

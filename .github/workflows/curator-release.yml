@@ -47,10 +47,14 @@ env:
   # gh-agent-broker origin/main @ "cli: deterministic release publish/promote
   # commands (#177)". Exact reviewed commit, never a moving ref.
   BROKER_COMMIT: 23709f88bf840bf5bdc35fb5c45a94d9512cb61b
-  # Non-secret broker base URL on the tailnet. Overridable via repo variable; the
-  # default is the VPS tailnet address used by every deploy in this repo. The
-  # caller cannot influence which image or generation this selects.
-  BROKER_URL: ${{ vars.CURATOR_RELEASE_BROKER_URL || 'http://100.66.40.39:8080' }}
+  # Non-secret base URL of the sandbox-broker private AgentRelease API on the
+  # tailnet. This is the release publish/promote endpoint (Tailnet port 8091),
+  # NOT the broker's 8080 deploy/dispatch listener — run 35699348779 hit 8080 and
+  # got 404 because 8080 does not serve the release API. Overridable via repo
+  # variable (none is currently set, so the default is used); the default is the
+  # VPS tailnet address. The caller cannot influence which image or generation
+  # this selects.
+  BROKER_URL: ${{ vars.CURATOR_RELEASE_BROKER_URL || 'http://100.66.40.39:8091' }}
   AGENT_RUNTIME_BASE: >-
     ${{ vars.AGENT_RUNTIME_BASE
       || format('ghcr.io/{0}/agent-runtime-base:main', github.repository_owner) }}
@@ -189,12 +193,16 @@ jobs:
       - name: Summarize
         if: always()
         run: |
+          # Every list line's format string begins with '-', which printf would
+          # otherwise parse as an option flag ("printf: -: invalid option") and
+          # fail this always-run step. `printf --` ends option parsing so the
+          # format string is taken literally.
           {
             printf '### Curator release\n\n'
-            printf '- agent type: `%s`\n' "${AGENT_TYPE}"
-            printf '- source revision: `%s`\n' "${GITHUB_SHA}"
-            printf '- platform: `%s`\n' "${PLATFORM}"
-            printf '- broker generation: `%s`\n' "${{ steps.publish.outputs.generation }}"
-            printf '- publish ready: `%s`\n' "${{ steps.publish.outputs.ready }}"
-            printf '- promoted: `%s`\n' "${{ inputs.promote }}"
+            printf -- '- agent type: `%s`\n' "${AGENT_TYPE}"
+            printf -- '- source revision: `%s`\n' "${GITHUB_SHA}"
+            printf -- '- platform: `%s`\n' "${PLATFORM}"
+            printf -- '- broker generation: `%s`\n' "${{ steps.publish.outputs.generation }}"
+            printf -- '- publish ready: `%s`\n' "${{ steps.publish.outputs.ready }}"
+            printf -- '- promoted: `%s`\n' "${{ inputs.promote }}"
           } >> "$GITHUB_STEP_SUMMARY"

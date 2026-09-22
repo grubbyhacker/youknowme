@@ -131,3 +131,46 @@ def test_promote_with_image_reference_is_rejected(validator: ModuleType, workflo
     errors: list[str] = []
     validator.check_generation_only_promotion(mutated, errors)
     assert any("image reference" in e for e in errors)
+
+
+def test_release_endpoint_port_is_8091(validator: ModuleType, workflow_text: str) -> None:
+    errors: list[str] = []
+    validator.check_release_endpoint_port(workflow_text, errors)
+    assert errors == []
+
+
+def test_release_endpoint_on_8080_is_rejected(validator: ModuleType, workflow_text: str) -> None:
+    mutated = workflow_text.replace("100.66.40.39:8091", "100.66.40.39:8080")
+    errors: list[str] = []
+    validator.check_release_endpoint_port(mutated, errors)
+    assert any("8080" in e and "release API" in e for e in errors)
+
+
+def test_release_endpoint_on_other_port_is_rejected(validator: ModuleType, workflow_text: str) -> None:
+    mutated = workflow_text.replace("100.66.40.39:8091", "100.66.40.39:9999")
+    errors: list[str] = []
+    validator.check_release_endpoint_port(mutated, errors)
+    assert any("8091" in e for e in errors)
+
+
+def test_summary_printf_is_option_safe(validator: ModuleType, workflow_text: str) -> None:
+    errors: list[str] = []
+    validator.check_summary_printf_is_option_safe(workflow_text, errors)
+    assert errors == []
+
+
+def test_summary_printf_without_double_dash_is_rejected(validator: ModuleType, workflow_text: str) -> None:
+    mutated = workflow_text.replace(
+        "printf -- '- agent type: `%s`\\n'",
+        "printf '- agent type: `%s`\\n'",
+    )
+    errors: list[str] = []
+    validator.check_summary_printf_is_option_safe(mutated, errors)
+    assert any("option-like format" in e for e in errors)
+
+
+def test_workflow_remains_dispatch_only(validator: ModuleType, workflow_text: str) -> None:
+    on = validator._on_block(workflow_text)
+    assert "workflow_dispatch:" in on
+    for trigger in validator.FORBIDDEN_TRIGGERS:
+        assert f"\n  {trigger}:" not in on, f"unexpected trigger {trigger} present"
