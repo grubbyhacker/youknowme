@@ -1,0 +1,200 @@
+name: Curator release publish
+
+# Stage 3 (youknowme side) of the agent platform coupling work: publish the
+# dedicated Curator image as an AgentRelease to the broker and promote the
+# broker-assigned generation.
+#
+# SAFETY POSTURE (deliberate, do not relax without the design):
+#   * workflow_dispatch ONLY. There is no push/workflow_run trigger, so merging
+#     to main can never call the (not-yet-deployed) broker release API or require
+#     a publisher/promoter secret. The broker release store is inert in
+#     production until vps-ops lands the backup contract; until then this
+#     workflow is run manually and intentionally.
+#   * The caller NEVER selects an image or a generation. The image is built from
+#     this repo's own Dockerfile.curator at the checked-out commit; the
+#     generation is broker-assigned by publish and passed to promote. There is no
+#     image/generation/ref input on the dispatch.
+#   * Publisher and promoter are separate action-scoped operator tokens
+#     (VPS_OPS_GH_BROKER_RELEASE_PUBLISHER_OPERATOR_TOKEN and
+#     VPS_OPS_GH_BROKER_RELEASE_PROMOTER_OPERATOR_TOKEN). Neither can launch.
+#   * The broker is reachable only over Tailscale; the tailnet is joined BEFORE
+#     any broker call.
+#   * This does NOT replace the existing broker deploy path
+#     (deploy-production.yml); both coexist during migration.
+#
+# Cross-repo pin: the gh-agent-broker CLI is built from an exact reviewed commit,
+# never a moving ref.
+
+on:
+  workflow_dispatch:
+    inputs:
+      promote:
+        description: "After publish+verify, promote the broker-assigned generation."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize release publishing so two runs cannot race the registry.
+  group: ykm-curator-release-publish
+  cancel-in-progress: false
+
+env:
+  AGENT_TYPE: youknowme-curator
+  PLATFORM: linux/amd64
+  # gh-agent-broker origin/main @ "cli: deterministic release publish/promote
+  # commands (#177)". Exact reviewed commit, never a moving ref.
+  BROKER_COMMIT: 23709f88bf840bf5bdc35fb5c45a94d9512cb61b
+  # Non-secret broker base URL on the tailnet. Overridable via repo variable; the
+  # default is the VPS tailnet address used by every deploy in this repo. The
+  # caller cannot influence which image or generation this selects.
+  BROKER_URL: ${{ vars.CURATOR_RELEASE_BROKER_URL || 'http://100.66.40.39:8080' }}
+  AGENT_RUNTIME_BASE: >-
+    ${{ vars.AGENT_RUNTIME_BASE
+      || format('ghcr.io/{0}/agent-runtime-base:main', github.repository_owner) }}
+
+jobs:
+  publish:
+    name: Publish Curator release to the broker
+    runs-on: ubuntu-latest
+    # Manual-only run still targets the production Environment so its secrets are
+    # scoped there; the Environment declares no reviewer (consistent with the
+    # rest of the estate), so this does not add a human gate.
+    environment: production
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Check out youknowme (this repo, at the dispatched ref)
+        uses: actions/checkout@v4
+
+      - name: Check out gh-agent-broker at the pinned reviewed commit
+        uses: actions/checkout@v4
+        with:
+          repository: grubbyhacker/gh-agent-broker
+          ref: ${{ env.BROKER_COMMIT }}
+          token: ${{ secrets.VPS_OPS_READ_TOKEN }}
+          path: gh-agent-broker
+
+      - name: Verify the pinned broker commit
+        working-directory: gh-agent-broker
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [[ "$actual" != "${BROKER_COMMIT}" ]]; then
+            printf 'ERROR: broker checkout is %s, expected pinned %s\n' "$actual" "${BROKER_COMMIT}" >&2
+            exit 1
+          fi
+
+      - name: Validate this workflow offline before doing anything
+        run: python3 scripts/validate-curator-release-workflow.py
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: gh-agent-broker/go.mod
+
+      - name: Build the pinned gh-agent-broker CLI
+        working-directory: gh-agent-broker
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 go build -o "${RUNNER_TEMP}/gh-agent-broker" ./cmd/gh-agent-broker
+          "${RUNNER_TEMP}/gh-agent-broker" --help >/dev/null 2>&1 || true
+
+      - name: Compute non-secret provenance
+        id: provenance
+        run: |
+          set -euo pipefail
+          python3 scripts/curator-image-provenance.py \
+            --source-revision "${GITHUB_SHA}" \
+            --platform "${PLATFORM}" > "${RUNNER_TEMP}/provenance.json"
+          dep_sha="$(python3 -c 'import json;print(json.load(open("'"${RUNNER_TEMP}"'/provenance.json"))["dependency_manifest_sha256"])')"
+          printf 'dependency_manifest_sha256=%s\n' "$dep_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR (read-only, to pull the runtime base)
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build the dedicated Curator image and export a single-image Docker archive
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.curator
+          platforms: ${{ env.PLATFORM }}
+          push: false
+          provenance: false
+          sbom: false
+          build-args: |
+            AGENT_RUNTIME_BASE=${{ env.AGENT_RUNTIME_BASE }}
+            SOURCE_REVISION=${{ github.sha }}
+            DEPENDENCY_MANIFEST_SHA256=${{ steps.provenance.outputs.dependency_manifest_sha256 }}
+          tags: youknowme-curator:${{ github.sha }}
+          outputs: type=docker,dest=${{ runner.temp }}/curator-image.tar
+
+      - name: Join the tailnet (required before any broker call)
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:github-actions-deploy
+
+      - name: Publish the release to the broker (publisher token)
+        id: publish
+        env:
+          # Publisher-only, action-scoped operator token. Cannot promote or launch.
+          BROKER_PUBLISHER_TOKEN: ${{ secrets.VPS_OPS_GH_BROKER_RELEASE_PUBLISHER_OPERATOR_TOKEN }}
+        run: |
+          set -euo pipefail
+          "${RUNNER_TEMP}/gh-agent-broker" release-publish \
+            -broker "${BROKER_URL}" \
+            -agent-type "${AGENT_TYPE}" \
+            -archive "${RUNNER_TEMP}/curator-image.tar" \
+            -source-revision "${GITHUB_SHA}" \
+            -platform "${PLATFORM}" \
+            -dependency-manifest-sha256 "${{ steps.provenance.outputs.dependency_manifest_sha256 }}" \
+            -github-output
+
+      - name: Guard the publish result
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.publish.outputs.ready }}" != "true" ]]; then
+            printf 'Release is not ready to promote (state=%s). Not promoting.\n' "${{ steps.publish.outputs.state }}" >&2
+            exit 1
+          fi
+          gen="${{ steps.publish.outputs.generation }}"
+          [[ "$gen" =~ ^[1-9][0-9]*$ ]] || { printf 'ERROR: broker returned no positive generation (%s)\n' "$gen" >&2; exit 1; }
+
+      - name: Promote the broker-assigned generation (promoter token)
+        if: ${{ inputs.promote }}
+        env:
+          # Promoter-only, action-scoped operator token. Cannot publish or launch.
+          BROKER_PROMOTER_TOKEN: ${{ secrets.VPS_OPS_GH_BROKER_RELEASE_PROMOTER_OPERATOR_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The generation is the broker-assigned value from publish. The caller
+          # never supplies a generation or an image.
+          "${RUNNER_TEMP}/gh-agent-broker" release-promote \
+            -broker "${BROKER_URL}" \
+            -generation "${{ steps.publish.outputs.generation }}"
+
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            printf '### Curator release\n\n'
+            printf '- agent type: `%s`\n' "${AGENT_TYPE}"
+            printf '- source revision: `%s`\n' "${GITHUB_SHA}"
+            printf '- platform: `%s`\n' "${PLATFORM}"
+            printf '- broker generation: `%s`\n' "${{ steps.publish.outputs.generation }}"
+            printf '- publish ready: `%s`\n' "${{ steps.publish.outputs.ready }}"
+            printf '- promoted: `%s`\n' "${{ inputs.promote }}"
+          } >> "$GITHUB_STEP_SUMMARY"
