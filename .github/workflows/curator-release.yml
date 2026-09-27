@@ -73,10 +73,10 @@ jobs:
       packages: read
     steps:
       - name: Check out youknowme (this repo, at the dispatched ref)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Check out gh-agent-broker at the pinned reviewed commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: grubbyhacker/gh-agent-broker
           ref: ${{ env.BROKER_COMMIT }}
@@ -97,7 +97,7 @@ jobs:
         run: python3 scripts/validate-curator-release-workflow.py
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: gh-agent-broker/go.mod
 
@@ -129,7 +129,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build the dedicated Curator image and export a single-image Docker archive
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile.curator

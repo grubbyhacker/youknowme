@@ -61,7 +61,7 @@ jobs:
           || format('ghcr.io/{0}/agent-runtime-base:main', github.repository_owner) }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Validate the Curator image contract (offline)
         run: python3 scripts/validate-curator-image-contract.py
@@ -88,7 +88,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build dedicated Curator image and export a single-image Docker archive
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile.curator
@@ -171,7 +171,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload single-image Docker archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: curator-image-archive
           path: curator-image.tar
@@ -179,7 +179,7 @@ jobs:
           retention-days: 7
 
       - name: Upload non-secret provenance
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: curator-image-provenance
           path: curator-image-provenance.json
