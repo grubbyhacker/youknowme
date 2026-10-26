@@ -8,6 +8,12 @@ name: Deploy Production
 # - TS_OAUTH_SECRET: OAuth client secret for tailscale/github-action@v4
 
 on:
+  workflow_dispatch:
+    inputs:
+      image_sha:
+        description: Full SHA of an already-published YouKnowMe image to deploy
+        required: true
+        type: string
   workflow_run:
     workflows: ["YKM CI"]
     types: [completed]
@@ -25,13 +31,38 @@ jobs:
       contents: read
       issues: write
     if: >
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.event == 'push'
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.event == 'push') ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == 'refs/heads/main')
     env:
       DEPLOY_PORT: "22"
 
     steps:
+      - name: Resolve deployment SHA
+        id: resolve-deploy-sha
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_IMAGE_SHA: ${{ inputs.image_sha }}
+          WORKFLOW_RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            deploy_sha="$MANUAL_IMAGE_SHA"
+          else
+            deploy_sha="$WORKFLOW_RUN_SHA"
+          fi
+
+          if [[ ! "$deploy_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Deployment SHA must be a full lowercase Git commit SHA"
+            exit 1
+          fi
+
+          printf 'sha=%s\n' "$deploy_sha" >> "$GITHUB_OUTPUT"
+
       - name: Checkout vps-ops
         uses: actions/checkout@v4
         with:
@@ -43,7 +74,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: youknowme
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ steps.resolve-deploy-sha.outputs.sha }}
 
       - name: Install Ansible
         run: |
@@ -81,7 +112,7 @@ jobs:
           VPS_OPS_YKM_CURATOR_TRIGGER_TOKEN: ${{ secrets.VPS_OPS_YKM_CURATOR_TRIGGER_TOKEN }}
           VPS_OPS_YKM_LOCAL_AUTH_SECRET: ${{ secrets.VPS_OPS_YKM_LOCAL_AUTH_SECRET }}
         run: |
-          ykm_image="ghcr.io/grubbyhacker/youknowme:sha-${{ github.event.workflow_run.head_sha }}"
+          ykm_image="ghcr.io/grubbyhacker/youknowme:sha-${{ steps.resolve-deploy-sha.outputs.sha }}"
 
           scripts/run-ansible-playbook.sh -i inventory/production.yml playbooks/deploy-youknowme.yml \
             -e "ykm_image=${ykm_image}" \

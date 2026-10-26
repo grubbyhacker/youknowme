@@ -26,6 +26,10 @@ Invariants asserted:
      `packages: read`, which existed solely for the broker GHCR pull.
   6. YouKnowMe's own deploy is preserved: the deploy-youknowme playbook is still
      invoked and the youknowme runtime secret exports (VPS_OPS_YKM_*) remain.
+  7. Deployment source is explicit and consistent: automatic deployment remains
+     limited to successful CI push runs on main; manual deployment is available
+     only from main with a full SHA for a previously published image, and that
+     one resolved SHA drives both the image and synced scripts checkout.
 """
 
 from __future__ import annotations
@@ -136,6 +140,33 @@ def check_youknowme_deploy_preserved(text: str, errors: list[str]) -> None:
         )
 
 
+def check_deploy_trigger_and_sha_routing(text: str, errors: list[str]) -> None:
+    if not re.search(r"(?m)^  workflow_dispatch:\s*$", text):
+        errors.append("deploy must support an explicit workflow_dispatch trigger.")
+    if not re.search(r"(?m)^      image_sha:\s*$", text):
+        errors.append("manual deploy must require an image_sha input.")
+    if not re.search(r"(?m)^        required:\s*true\s*$", text):
+        errors.append("manual deploy image_sha input must be required.")
+    if "github.ref == 'refs/heads/main'" not in text:
+        errors.append("manual deploy must be restricted to dispatches from main.")
+    if "github.event.workflow_run.conclusion == 'success'" not in text:
+        errors.append("automatic deploy must remain limited to successful CI runs.")
+    if "github.event.workflow_run.head_branch == 'main'" not in text:
+        errors.append("automatic deploy must remain limited to CI runs on main.")
+    if "github.event.workflow_run.event == 'push'" not in text:
+        errors.append("automatic deploy must remain limited to CI runs triggered by push.")
+    if "^[0-9a-f]{40}$" not in text:
+        errors.append("deployment SHA must be validated as a full lowercase Git SHA.")
+    resolved_sha = "${{ steps.resolve-deploy-sha.outputs.sha }}"
+    if text.count(resolved_sha) != 2:
+        errors.append(
+            "the resolved deployment SHA must be used exactly for both the scripts checkout "
+            "and the application image."
+        )
+    if "github.event.workflow_run.head_sha" in _deploy_step(text):
+        errors.append("deploy step must use the resolved deployment SHA, not workflow_run fields.")
+
+
 def main() -> int:
     errors: list[str] = []
     if not WORKFLOW.is_file():
@@ -149,6 +180,7 @@ def main() -> int:
     check_no_broker_secret_exports(text, errors)
     check_no_broker_packages_permission(text, errors)
     check_youknowme_deploy_preserved(text, errors)
+    check_deploy_trigger_and_sha_routing(text, errors)
 
     if errors:
         print("Production deploy workflow check failed:", file=sys.stderr)
@@ -158,7 +190,8 @@ def main() -> int:
     print(
         "Production deploy workflow check passed (no broker playbook, single "
         "youknowme playbook, youknowme-only Doppler roles, no broker secret "
-        "exports, no broker GHCR permission, youknowme deploy preserved)."
+        "exports, no broker GHCR permission, youknowme deploy preserved, and safe "
+        "manual/automatic deployment SHA routing)."
     )
     return 0
 
