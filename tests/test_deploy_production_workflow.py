@@ -159,3 +159,38 @@ def test_missing_youknowme_secrets_is_rejected(validator: ModuleType, workflow_t
     errors: list[str] = []
     validator.check_youknowme_deploy_preserved(mutated, errors)
     assert any("VPS_OPS_YKM_*" in e for e in errors)
+
+
+def test_deploy_trigger_and_sha_routing(validator: ModuleType, workflow_text: str) -> None:
+    errors: list[str] = []
+    validator.check_deploy_trigger_and_sha_routing(workflow_text, errors)
+    assert errors == []
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected"),
+    [
+        (
+            "  workflow_dispatch:\n",
+            "",
+            "workflow_dispatch",
+        ),
+        (
+            "github.ref == 'refs/heads/main'",
+            "github.ref == 'refs/heads/feature'",
+            "restricted to dispatches from main",
+        ),
+        (
+            "${{ steps.resolve-deploy-sha.outputs.sha }}",
+            "${{ github.event.workflow_run.head_sha }}",
+            "resolved deployment SHA",
+        ),
+    ],
+)
+def test_unsafe_deploy_trigger_or_sha_routing_is_rejected(
+    validator: ModuleType, workflow_text: str, old: str, new: str, expected: str
+) -> None:
+    mutated = workflow_text.replace(old, new, 1)
+    errors: list[str] = []
+    validator.check_deploy_trigger_and_sha_routing(mutated, errors)
+    assert any(expected in error for error in errors)
